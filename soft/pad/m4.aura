@@ -1,0 +1,507 @@
+;; aura-pad M4 -- two named pads, find / replace, record / play macros.
+;; A pad state (ms) is (bufs cur needle rec macro law):
+;;   bufs    ((name edit-state) ...) -- "story" and "scratch" (edit.aura states)
+;;   cur     name of the pad the keys go to
+;;   needle  last found word as char codes, () = none
+;;   rec     0 / 1, recording a macro
+;;   macro   recorded tokens (accepted keys only, at most *macro-max*)
+;;   law     buffer law (wrap max): wrap 1 = find starts again at the top,
+;;           max = most spots replace-all may change at once
+;; New tokens: "find:WORD" "find-next" "replace:NEW" "replace-all:OLD=NEW"
+;; "switch:NAME" "rec" "stop" "play". Every M3.5 token still works on the
+;; current pad. The kill text travels with you when you switch pads.
+;; A REJECT never changes the state. Pure -- fiber-safe.
+;; Needs buffer.aura, lines.aura, edit.aura. M0-M3.5 do not load this file.
+;; Soft reserved: never bind the identifier quote.
+
+(define *macro-max* 12)
+(define *m4-base* 60)
+(define *law-main* (list 0 3))
+(define *law-wrap* (list 1 3))
+(define *law-big* (list 1 9))
+(define *mean-words* (list "stupid" "dumb" "hate" "idiot" "shut up"))
+
+(define (pad:codes s) (map char->integer (string->list s)))
+
+(define *story0* (list (pad:codes "a cat") (pad:codes "the cat ran")))
+(define *scratch0* (list (pad:codes "my notes") (pad:codes "they had fun")))
+(define *goal-story* (list (pad:codes "a dog") (pad:codes "the dog ran")
+                           (pad:codes "they had fun")))
+(define *goal-scratch* (list (pad:codes "my notes") (pad:codes "they had fun")))
+
+;; Kid words for the M4 reasons (appended to lines.aura *kid-says*).
+(set! *kid-says*
+      (append *kid-says*
+              (list (list "empty-needle" "tell me a word to find first")
+                    (list "not-found" "could not find that word")
+                    (list "too-many" "that word is in too many spots")
+                    (list "not-kind" "let us use kind words")
+                    (list "no-buffer" "there is no pad with that name")
+                    (list "busy-recording" "stop the recording first")
+                    (list "not-recording" "you are not recording")
+                    (list "empty-macro" "record some keys first")
+                    (list "no-macro" "record a macro first")
+                    (list "macro-full" "the macro is full"))))
+
+;; --- state ---
+(define (pad:ms bufs cur needle rec macro law) (list bufs cur needle rec macro law))
+(define (pad:ms-bufs m) (pad:nth m 0))
+(define (pad:ms-cur m) (pad:nth m 1))
+(define (pad:ms-needle m) (pad:nth m 2))
+(define (pad:ms-rec m) (pad:nth m 3))
+(define (pad:ms-macro m) (pad:nth m 4))
+(define (pad:ms-law m) (pad:nth m 5))
+
+(define (pad:mstart law)
+  (pad:ms (list (list "story" (pad:es-at *story0* 0 0))
+                (list "scratch" (pad:es-at *scratch0* 0 0)))
+          "story" (list) 0 (list) law))
+
+(define (pad:buf-get bufs name)
+  (cond
+    ((null? bufs) #f)
+    ((string=? (car (car bufs)) name) (car (cdr (car bufs))))
+    (#t (pad:buf-get (cdr bufs) name))))
+
+(define (pad:buf-put bufs name st)
+  (cond
+    ((null? bufs) (list))
+    ((string=? (car (car bufs)) name) (cons (list name st) (cdr bufs)))
+    (#t (cons (car bufs) (pad:buf-put (cdr bufs) name st)))))
+
+(define (pad:ms-st m) (pad:buf-get (pad:ms-bufs m) (pad:ms-cur m)))
+
+(define (pad:ms-other m)
+  (let loop ((bs (pad:ms-bufs m)))
+    (cond
+      ((null? bs) "none")
+      ((string=? (car (car bs)) (pad:ms-cur m)) (loop (cdr bs)))
+      (#t (car (car bs))))))
+
+(define (pad:ms-with m st)
+  (pad:ms (pad:buf-put (pad:ms-bufs m) (pad:ms-cur m) st)
+          (pad:ms-cur m) (pad:ms-needle m) (pad:ms-rec m) (pad:ms-macro m) (pad:ms-law m)))
+
+(define (pad:ms-set-needle m nd)
+  (pad:ms (pad:ms-bufs m) (pad:ms-cur m) nd (pad:ms-rec m) (pad:ms-macro m) (pad:ms-law m)))
+
+;; --- text helpers on char-code lists ---
+(define (pad:printable? cs)
+  (cond
+    ((null? cs) #t)
+    ((or (= (car cs) 32) (and (>= (car cs) 97) (<= (car cs) 122)))
+     (pad:printable? (cdr cs)))
+    (#t #f)))
+
+(define (pad:mean-word s)
+  (let loop ((ws *mean-words*))
+    (cond
+      ((null? ws) "")
+      ((string-contains? s (car ws)) (car ws))
+      (#t (loop (cdr ws))))))
+
+;; Does t sit in ln at index j?
+(define (pad:match-at? ln tw j)
+  (let loop ((a (pad:drop j ln)) (b tw) (k (length ln)) (need (+ j (length tw))))
+    (cond
+      ((> need k) #f)
+      ((null? b) #t)
+      ((= (car a) (car b)) (loop (cdr a) (cdr b) k need))
+      (#t #f))))
+
+;; First index >= from where t sits in ln, or -1.
+(define (pad:find-in ln tw from)
+  (let loop ((j from))
+    (cond
+      ((> (+ j (length tw)) (length ln)) -1)
+      ((pad:match-at? ln tw j) j)
+      (#t (loop (+ j 1))))))
+
+;; (line col) of the next t at or after (l col); with wrap, again from the top.
+(define (pad:search L tw l col wrap)
+  (let loop ((i l) (xs (pad:drop l L)))
+    (if (null? xs)
+        (if (= wrap 1)
+            (let loop2 ((i2 0) (ys L))
+              (cond
+                ((null? ys) (list))
+                ((>= (pad:find-in (car ys) tw 0) 0) (list i2 (pad:find-in (car ys) tw 0)))
+                (#t (loop2 (+ i2 1) (cdr ys)))))
+            (list))
+        (let ((j (pad:find-in (car xs) tw (if (= i l) col 0))))
+          (if (>= j 0)
+              (list i j)
+              (loop (+ i 1) (cdr xs)))))))
+
+;; Non-overlapping spots of t in ln, left to right.
+(define (pad:count-in ln tw)
+  (let loop ((j 0) (n 0))
+    (let ((k (pad:find-in ln tw j)))
+      (if (< k 0) n (loop (+ k (length tw)) (+ n 1))))))
+
+(define (pad:count-all L tw)
+  (if (null? L) 0 (+ (pad:count-in (car L) tw) (pad:count-all (cdr L) tw))))
+
+(define (pad:replace-in ln old new)
+  (let ((k (pad:find-in ln old 0)))
+    (if (< k 0)
+        ln
+        (append (pad:take k ln) new
+                (pad:replace-in (pad:drop (+ k (length old)) ln) old new)))))
+
+(define (pad:fits-col? L)
+  (cond
+    ((null? L) #t)
+    ((> (length (car L)) *max-col*) #f)
+    (#t (pad:fits-col? (cdr L)))))
+
+;; --- tokens ---
+(define (pad:tok-arg c pre)
+  (substring c (string-length pre) (string-length c)))
+
+(define (pad:tok? c pre) (and (string? c) (string-prefix? c pre)))
+
+;; "OLD=NEW" -> (old-codes new-codes new-string), or () without "=".
+(define (pad:split-rep s)
+  (let* ((cs (pad:codes s))
+         (k (pad:find-in cs (list 61) 0)))
+    (if (< k 0)
+        (list)
+        (list (pad:take k cs)
+              (pad:drop (+ k 1) cs)
+              (substring s (+ k 1) (string-length s))))))
+
+(define (pad:macro-word? c)
+  (and (string? c)
+       (or (string=? c "rec") (string=? c "stop") (string=? c "play"))))
+
+;; --- Soft gate. "ok" or a kid reason. ---
+(define (pad:mgate-own c m)
+  (let* ((st (pad:ms-st m))
+         (L (pad:es-L st))
+         (l (pad:es-l st))
+         (col (pad:es-col st))
+         (nd (pad:ms-needle m))
+         (law (pad:ms-law m))
+         (wrap (car law)))
+    (cond
+      ((pad:tok? c "find:")
+       (let ((tw (pad:codes (pad:tok-arg c "find:"))))
+         (cond
+           ((null? tw) "empty-needle")
+           ((not (pad:printable? tw)) "not-print")
+           ((null? (pad:search L tw l col wrap)) "not-found")
+           (#t "ok"))))
+      ((and (string? c) (string=? c "find-next"))
+       (cond
+         ((null? nd) "empty-needle")
+         ((null? (pad:search L nd l (+ col 1) wrap)) "not-found")
+         (#t "ok")))
+      ((pad:tok? c "replace:")
+       (let* ((s (pad:tok-arg c "replace:"))
+              (new (pad:codes s))
+              (ln (pad:nth L l)))
+         (cond
+           ((null? nd) "empty-needle")
+           ((not (pad:printable? new)) "not-print")
+           ((> (string-length (pad:mean-word s)) 0) "not-kind")
+           ((not (pad:match-at? ln nd col)) "not-found")
+           ((> (+ (- (length ln) (length nd)) (length new)) *max-col*) "need-space")
+           (#t "ok"))))
+      ((pad:tok? c "replace-all:")
+       (let ((pr (pad:split-rep (pad:tok-arg c "replace-all:"))))
+         (if (null? pr)
+             "not-a-key"
+             (let ((old (car pr))
+                   (new (car (cdr pr)))
+                   (s (car (cdr (cdr pr)))))
+               (cond
+                 ((null? old) "empty-needle")
+                 ((not (and (pad:printable? old) (pad:printable? new))) "not-print")
+                 ((> (string-length (pad:mean-word s)) 0) "not-kind")
+                 ((= (pad:count-all L old) 0) "not-found")
+                 ((> (pad:count-all L old) (car (cdr law))) "too-many")
+                 ((not (pad:fits-col? (map (lambda (x) (pad:replace-in x old new)) L)))
+                  "need-space")
+                 (#t "ok"))))))
+      ((pad:tok? c "switch:")
+       (let ((name (pad:tok-arg c "switch:")))
+         (cond
+           ((not (pad:buf-get (pad:ms-bufs m) name)) "no-buffer")
+           ((string=? name (pad:ms-cur m)) "already-there")
+           (#t "ok"))))
+      ((and (string? c) (string=? c "rec"))
+       (if (= (pad:ms-rec m) 1) "busy-recording" "ok"))
+      ((and (string? c) (string=? c "stop"))
+       (cond
+         ((= (pad:ms-rec m) 0) "not-recording")
+         ((null? (pad:ms-macro m)) "empty-macro")
+         (#t "ok")))
+      ((and (string? c) (string=? c "play"))
+       (cond
+         ((= (pad:ms-rec m) 1) "busy-recording")
+         ((null? (pad:ms-macro m)) "no-macro")
+         (#t "ok")))
+      (#t (pad:egate c st)))))
+
+(define (pad:mgate c m)
+  (let ((why (pad:mgate-own c m)))
+    (cond
+      ((not (string=? why "ok")) why)
+      ((and (= (pad:ms-rec m) 1)
+            (not (pad:macro-word? c))
+            (>= (length (pad:ms-macro m)) *macro-max*))
+       "macro-full")
+      (#t "ok"))))
+
+;; --- apply one accepted token (not play). Returns the new pad state. ---
+(define (pad:mapply c m)
+  (let* ((st (pad:ms-st m))
+         (L (pad:es-L st))
+         (l (pad:es-l st))
+         (col (pad:es-col st))
+         (nd (pad:ms-needle m))
+         (wrap (car (pad:ms-law m))))
+    (cond
+      ((pad:tok? c "find:")
+       (let* ((tw (pad:codes (pad:tok-arg c "find:")))
+              (p (pad:search L tw l col wrap)))
+         (pad:ms-set-needle (pad:ms-with m (pad:es-move st (car p) (car (cdr p)))) tw)))
+      ((and (string? c) (string=? c "find-next"))
+       (let ((p (pad:search L nd l (+ col 1) wrap)))
+         (pad:ms-with m (pad:es-move st (car p) (car (cdr p))))))
+      ((pad:tok? c "replace:")
+       (let* ((new (pad:codes (pad:tok-arg c "replace:")))
+              (ln (pad:nth L l))
+              (fresh (append (pad:take col ln) new (pad:drop (+ col (length nd)) ln))))
+         (pad:ms-with m (pad:es-edit st (list (pad:put-nth L l fresh) l (+ col (length new)))
+                                     (pad:es-kill st)))))
+      ((pad:tok? c "replace-all:")
+       (let* ((pr (pad:split-rep (pad:tok-arg c "replace-all:")))
+              (L2 (map (lambda (x) (pad:replace-in x (car pr) (car (cdr pr)))) L))
+              (n2 (length (pad:nth L2 l))))
+         (pad:ms-with m (pad:es-edit st (list L2 l (if (< col n2) col n2))
+                                     (pad:es-kill st)))))
+      ((pad:tok? c "switch:")
+       (let* ((name (pad:tok-arg c "switch:"))
+              (tw (pad:buf-get (pad:ms-bufs m) name))
+              (tb (pad:es (pad:es-L tw) (pad:es-l tw) (pad:es-col tw)
+                          (pad:es-kill st) (pad:es-mark tw) (pad:es-undo tw))))
+         (pad:ms (pad:buf-put (pad:ms-bufs m) name tb) name nd
+                 (pad:ms-rec m) (pad:ms-macro m) (pad:ms-law m))))
+      ((and (string? c) (string=? c "rec"))
+       (pad:ms (pad:ms-bufs m) (pad:ms-cur m) nd 1 (list) (pad:ms-law m)))
+      ((and (string? c) (string=? c "stop"))
+       (pad:ms (pad:ms-bufs m) (pad:ms-cur m) nd 0 (pad:ms-macro m) (pad:ms-law m)))
+      (#t (pad:ms-with m (pad:eapply c st))))))
+
+(define (pad:ms-record m c)
+  (pad:ms (pad:ms-bufs m) (pad:ms-cur m) (pad:ms-needle m) (pad:ms-rec m)
+          (append (pad:ms-macro m) (list c)) (pad:ms-law m)))
+
+;; One token. Returns (state keys rejects reason inner):
+;; a refused token is (same 0 1 reason ""); play costs one key, replays the
+;; macro (each step gated) and inner is the first refusal inside, or "".
+(define (pad:mstep c m)
+  (let ((why (pad:mgate c m)))
+    (cond
+      ((not (string=? why "ok")) (list m 0 1 why ""))
+      ((and (string? c) (string=? c "play"))
+       (let loop ((xs (pad:ms-macro m)) (s m) (rej 0) (inner ""))
+         (if (null? xs)
+             (list s 1 rej "ok" inner)
+             (let ((r (pad:mstep (car xs) s)))
+               (loop (cdr xs) (car r) (+ rej (pad:nth r 2))
+                     (if (and (string=? inner "") (not (string=? (pad:nth r 3) "ok")))
+                         (pad:nth r 3)
+                         inner))))))
+      (#t
+       (let ((m2 (pad:mapply c m)))
+         (list (if (and (= (pad:ms-rec m) 1) (not (pad:macro-word? c)))
+                   (pad:ms-record m2 c)
+                   m2)
+               1 0 "ok" ""))))))
+
+;; Gate then apply one token: the new state, or the reason string.
+(define (pad:mop c m)
+  (let ((r (pad:mstep c m)))
+    (if (string=? (pad:nth r 3) "ok") (car r) (pad:nth r 3))))
+
+;; Play tokens from a state. Returns (state keys rejects).
+(define (pad:mplay-from m plan)
+  (let loop ((cs (pad:expand plan)) (s m) (keys 0) (rej 0))
+    (if (null? cs)
+        (list s keys rej)
+        (let ((r (pad:mstep (car cs) s)))
+          (loop (cdr cs) (car r) (+ keys (pad:nth r 1)) (+ rej (pad:nth r 2)))))))
+
+;; --- views ---
+(define (pad:needle-str nd) (if (null? nd) "none" (pad:dot-line nd)))
+
+;; Compact view for tests (same text as scripts/m4_model.py Ms.view).
+(define (pad:ms-view m)
+  (let ((o (pad:ms-other m)))
+    (string-append (pad:ms-cur m) ":" (pad:es-view (pad:ms-st m))
+                   " " o "=" (pad:dot-text (pad:es-L (pad:buf-get (pad:ms-bufs m) o)))
+                   " find=" (pad:needle-str (pad:ms-needle m))
+                   " rec=" (if (= (pad:ms-rec m) 1) "on" "off")
+                   " macro=" (number->string (length (pad:ms-macro m))))))
+
+(define (pad:law-str law)
+  (string-append (if (= (car law) 1) "wrap" "stop") "-" (number->string (car (cdr law)))))
+
+(define (pad:mreject! step c reason pad tag)
+  (display "REJECT mid=4 reason=")
+  (display reason)
+  (display " cmd=")
+  (display (pad:cmd-str c))
+  (display " step=")
+  (display (number->string step))
+  (display " pad=")
+  (display pad)
+  (display " slot=")
+  (display tag)
+  (display " say=\"")
+  (display (pad:kid-say reason))
+  (display "\"")
+  (newline)
+  0)
+
+;; --- the story goal ---
+(define (pad:mdist m)
+  (+ (pad:dist-lines (pad:es-L (pad:buf-get (pad:ms-bufs m) "story")) *goal-story*)
+     (pad:dist-lines (pad:es-L (pad:buf-get (pad:ms-bufs m) "scratch")) *goal-scratch*)))
+
+;; Pure play from the start pads. print=1 shows up to 4 REJECT lines.
+;; Returns (score keys rejects dist state).
+(define (pad:msim plan law tag print)
+  (let loop ((cs (pad:expand plan)) (i 0) (m (pad:mstart law)) (keys 0) (rej 0) (shown 0))
+    (if (null? cs)
+        (let ((d (pad:mdist m)))
+          (list (- *m4-base* (+ keys (* 2 rej) (* 3 d))) keys rej d m))
+        (let* ((c (car cs))
+               (r (pad:mstep c m))
+               (why (pad:nth r 3))
+               (inner (pad:nth r 4))
+               (bad (if (string=? why "ok") inner why)))
+          (if (and (= print 1) (< shown 4) (> (string-length bad) 0))
+              (pad:mreject! (+ i 1) c bad (pad:ms-cur m) tag))
+          (loop (cdr cs) (+ i 1) (car r)
+                (+ keys (pad:nth r 1)) (+ rej (pad:nth r 2))
+                (if (> (string-length bad) 0) (+ shown 1) shown))))))
+
+(define (pad:m-score r) (pad:nth r 0))
+(define (pad:m-keys r) (pad:nth r 1))
+(define (pad:m-rej r) (pad:nth r 2))
+(define (pad:m-dist r) (pad:nth r 3))
+(define (pad:m-state r) (pad:nth r 4))
+
+;; Main M4 world. Only pad:mstamp! / pad:law-race! write these.
+(define *m4-law* *law-main*)
+(define *m4-state* (pad:mstart *law-main*))
+(define *m4-keys* 0)
+(define *m4-rej* 0)
+(define *m4-dist* 0)
+(define *m4-score* 0)
+(define *m4-tag* "none")
+
+(define (pad:mscore-plan plan)
+  (if (pad:plan-ok? plan)
+      (pad:m-score (pad:msim plan *m4-law* "race" 0))
+      -999))
+
+(define (pad:mtape-pad! m name tag)
+  (let* ((st (pad:buf-get (pad:ms-bufs m) name))
+         (L (pad:es-L st)))
+    (display "TAPE pad=")
+    (display name)
+    (display (if (string=? name (pad:ms-cur m)) "*" ""))
+    (display " lines=")
+    (display (number->string (length L)))
+    (display " text=")
+    (display (pad:dot-text L))
+    (display " view=")
+    (display (pad:caret-text L (pad:es-l st) (pad:es-col st)))
+    (display " undo=")
+    (display (number->string (length (pad:es-undo st))))
+    (display " slot=")
+    (display tag)
+    (newline)))
+
+(define (pad:mtape! tag)
+  (pad:mtape-pad! *m4-state* "story" tag)
+  (pad:mtape-pad! *m4-state* "scratch" tag)
+  (display "TAPE law=")
+  (display (pad:law-str *m4-law*))
+  (display " find=")
+  (display (pad:needle-str (pad:ms-needle *m4-state*)))
+  (display " macro=")
+  (display (number->string (length (pad:ms-macro *m4-state*))))
+  (display " kill=")
+  (display (pad:kill-str (pad:es-kill (pad:ms-st *m4-state*))))
+  (newline)
+  (pad:score-line! *m4-base* *m4-keys* *m4-rej* *m4-dist* *m4-score*)
+  *m4-score*)
+
+(define (pad:mstamp! plan tag)
+  (let ((r (pad:msim plan *m4-law* tag 0)))
+    (set! *m4-tag* tag)
+    (set! *m4-state* (pad:m-state r))
+    (set! *m4-keys* (pad:m-keys r))
+    (set! *m4-rej* (pad:m-rej r))
+    (set! *m4-dist* (pad:m-dist r))
+    (set! *m4-score* (pad:m-score r))
+    (pad:mtape! tag)))
+
+;; --- buffer-law race: two laws, the SAME keys, one fiber each. ---
+;; Strictly higher score KEEPs the trial law into *m4-law* and stamps it;
+;; otherwise DROP and the main law stays. Returns (tag base trial).
+(define *law-keeps* 0)
+(define *law-drops* 0)
+
+(define (pad:law-race! trial keys)
+  (let* ((base-law *m4-law*)
+         (pair (pad:race-thunks!
+                (lambda () (pad:m-score (pad:msim keys base-law "race" 0)))
+                (lambda () (pad:m-score (pad:msim keys trial "race" 0)))))
+         (base (car pair))
+         (got (car (cdr pair))))
+    (pad:msim keys trial (string-append "law-" (pad:law-str trial)) 1)
+    (display "RACE law base=")
+    (display (pad:law-str base-law))
+    (display ":")
+    (display (pad:nstr base))
+    (display " trial=")
+    (display (pad:law-str trial))
+    (display ":")
+    (display (pad:nstr got))
+    (newline)
+    (if (> got base)
+        (begin
+          (set! *m4-law* trial)
+          (set! *law-keeps* (+ *law-keeps* 1))
+          (display "KEEP kind=law law=")
+          (display (pad:law-str trial))
+          (display " reason=higher-score-stamp score=")
+          (display (pad:nstr got))
+          (display " say=\"the new rule wins, ")
+          (display (pad:nstr got))
+          (display " beats ")
+          (display (pad:nstr base))
+          (display "\"")
+          (newline)
+          (pad:mstamp! keys (string-append "law-" (pad:law-str trial)))
+          (list "law_keep" base got))
+        (begin
+          (set! *law-drops* (+ *law-drops* 1))
+          (display "DROP kind=law law=")
+          (display (pad:law-str trial))
+          (display " reason=")
+          (display (if (= got base) "tie-is-not-better-rollback" "lower-score-rollback"))
+          (display " score=")
+          (display (pad:nstr got))
+          (display " say=\"we keep the old rule, ")
+          (display (pad:nstr base))
+          (display " is not beaten\"")
+          (newline)
+          (list "law_drop" base got)))))

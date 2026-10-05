@@ -1,0 +1,242 @@
+;; aura-pad M4 -- macro propose. A macro is a Soft lambda in a
+;; std/hot-strategy slot that returns a recorded list of keys for the two
+;; pads (story / scratch):
+;;   (lambda () (list "replace-all:cat=dog" "switch:scratch" ... "yank"))
+;; pd:macro is the trial slot, pd:mshadow the current main macro.
+;; Soft gates the body (code words from hot.aura + helper.aura + below, and
+;; kid-unkind words), probes the shape, races trial vs main on the story
+;; goal (one fiber each), KEEPs only a strictly better score, else heal! +
+;; DROP. pd:macro-undo! takes back the last KEEP with an honest re-score.
+;; Needs buffer.aura, rules.aura, lines.aura, helper.aura, edit.aura, m4.aura.
+;; Soft does not speak HTTP.
+
+(define *macro-main-body* "")
+(define *macro-seeded* 0)
+(define *macro-base* 0)
+(define *macro-trial* 0)
+(define *macro-tag* "boot")
+(define *macro-word* "")
+(define *macro-why* "")
+(define *macro-keeps* 0)
+(define *macro-drops* 0)
+(define *macro-history* (list))
+(define *macro-undos* 0)
+
+(define *macro-banned*
+  (list "pd:macro" "pd:mshadow" "pad:mstamp" "pad:msim" "pad:law-race" "*m4-"))
+
+;; First banned code word, or "".
+(define (pd:macro-bad-word s)
+  (let ((w (pd:helper-bad-word s)))
+    (if (> (string-length w) 0)
+        w
+        (let loop ((ws *macro-banned*))
+          (cond
+            ((null? ws) "")
+            ((string-contains? s (car ws)) (car ws))
+            (#t (loop (cdr ws))))))))
+
+;; Why a body is refused before any slot is touched: "" ok, "gate", "kind".
+(define (pd:macro-body-why body)
+  (cond
+    ((not (string? body)) "gate")
+    ((< (string-length body) 11) "gate")
+    ((> (string-length body) 1999) "gate")
+    ((not (string-prefix? body "(lambda")) "gate")
+    ((> (string-length (pd:macro-bad-word body)) 0) "gate")
+    ((> (string-length (pad:mean-word body)) 0) "kind")
+    (#t "")))
+
+(define (pd:macro-seed! body)
+  (if (= *macro-seeded* 1)
+      (list #t "seed")
+      (let* ((src (string-append
+                   "(define pd:macro " body ")\n"
+                   "(define pd:mshadow " body ")\n"))
+             (sc (try (set-code src) (catch (e) e))))
+        (if (not (equal? sc #t))
+            (list #f "seed")
+            (begin
+              (eval-current)
+              (hot-strategy:register! "pd:macro" body)
+              (set! *macro-main-body* body)
+              (set! *macro-seeded* 1)
+              (let ((p (try (pd:mshadow) (catch (e) #f))))
+                (if (and (pad:plan-ok? p)
+                         (pad:plan-ok? (try (pd:macro) (catch (e) #f))))
+                    (begin
+                      (set! *main-name* "pd:mshadow")
+                      (set! *main-score* (pad:mscore-plan p))
+                      (display "MAIN macro start=")
+                      (display (pad:nstr *main-score*))
+                      (display " law=")
+                      (display (pad:law-str *m4-law*))
+                      (newline)
+                      (pad:mstamp! p "pd:mshadow")
+                      (list #t "seed"))
+                    (list #f "probe"))))))))
+
+(define (pd:macro-sync!)
+  (hot-strategy:swap! "pd:mshadow" *macro-main-body* "macro-shadow")
+  (hot-strategy:swap! "pd:macro" *macro-main-body* "macro-choose")
+  *macro-main-body*)
+
+(define (pd:macro-out! tag)
+  (set! *macro-tag* tag)
+  (display "PROPOSE kind=macro tag=")
+  (display tag)
+  (newline)
+  (list (string=? tag "macro_keep") tag))
+
+(define (pd:macro-race! clean)
+  (let* ((base-plan (pd:mshadow))
+         (trial-plan (pd:macro))
+         (pair (pad:race-thunks!
+                (lambda () (pad:mscore-plan base-plan))
+                (lambda () (pad:mscore-plan trial-plan))))
+         (base (car pair))
+         (trial (car (cdr pair))))
+    (set! *macro-base* base)
+    (set! *macro-trial* trial)
+    (let ((audit (pad:msim trial-plan *m4-law* "pd:macro" 1)))
+      (if (> (pad:m-rej audit) 4)
+          (begin
+            (display "REJECTS kind=macro total=")
+            (display (number->string (pad:m-rej audit)))
+            (display " shown=4")
+            (newline))))
+    (display "RACE macro base=")
+    (display (pad:nstr base))
+    (display " trial=")
+    (display (pad:nstr trial))
+    (newline)
+    (if (> trial base)
+        (begin
+          (set! *macro-history*
+                (pad:take *history-max*
+                          (cons (list *macro-main-body* base) *macro-history*)))
+          (set! *macro-main-body* clean)
+          (set! *main-score* trial)
+          (set! *main-name* "pd:macro")
+          (set! *keep-reason* "higher-score-stamp")
+          (set! *macro-keeps* (+ *macro-keeps* 1))
+          (display "KEEP kind=macro reason=higher-score-stamp score=")
+          (display (pad:nstr trial))
+          (display " say=\"the new macro wins, ")
+          (display (pad:nstr trial))
+          (display " beats ")
+          (display (pad:nstr base))
+          (display "\"")
+          (newline)
+          (pad:mstamp! trial-plan "pd:macro")
+          (pd:macro-out! "macro_keep"))
+        (begin
+          (hot-strategy:heal!)
+          (set! *drop-reason* (if (= trial base)
+                                  "tie-is-not-better-rollback"
+                                  "lower-score-rollback"))
+          (set! *macro-drops* (+ *macro-drops* 1))
+          (display "HEAL name=pd:macro reason=score")
+          (newline)
+          (display "DROP kind=macro reason=")
+          (display *drop-reason*)
+          (display " score=")
+          (display (pad:nstr trial))
+          (display (if (= trial base)
+                       " say=\"same score, we keep the old macro\""
+                       " say=\"the old macro is better, we keep it\""))
+          (newline)
+          (pd:macro-out! "macro_drop")))))
+
+(define (pd:macro-propose-body! body)
+  (let* ((clean (pd:clean body))
+         (why (pd:macro-body-why clean)))
+    (set! *macro-word* "")
+    (set! *macro-why* "")
+    (cond
+      ((string=? why "gate")
+       (set! *macro-word* (pd:macro-bad-word clean))
+       (pd:gate-reject! "gate" *macro-word*)
+       (pd:macro-out! "macro_reject"))
+      ((string=? why "kind")
+       (set! *macro-word* (pad:mean-word clean))
+       (display "GATE reject reason=kind word=")
+       (display *macro-word*)
+       (display " say=\"")
+       (display (pad:kid-say "not-kind"))
+       (display "\"")
+       (newline)
+       (pd:macro-out! "macro_reject"))
+      (#t
+       (let ((sw (hot-strategy:swap! "pd:macro" clean "macro-propose")))
+         (if (not (and (pair? sw) (equal? (car sw) #t)))
+             (begin
+               (pd:gate-reject! "swap" "")
+               (pd:macro-out! "macro_reject"))
+             (let ((pwhy (pad:plan-check (try (pd:macro) (catch (e) #f)))))
+               (if (not (string=? pwhy "ok"))
+                   (begin
+                     (set! *macro-why* pwhy)
+                     (hot-strategy:heal!)
+                     (display "HEAL name=pd:macro reason=probe why=")
+                     (display pwhy)
+                     (newline)
+                     (pd:macro-out! "macro_heal"))
+                   (begin
+                     (display "SWAP name=pd:macro reason=propose")
+                     (newline)
+                     (pd:macro-race! clean))))))))))
+
+(define (pd:macro-propose-file! path)
+  (pd:macro-sync!)
+  (display "PROPOSE kind=macro file=")
+  (display path)
+  (newline)
+  (let ((body (try (read-file path) (catch (e) #f))))
+    (if (not (string? body))
+        (begin
+          (pd:gate-reject! "read" "")
+          (pd:macro-out! "macro_reject"))
+        (pd:macro-propose-body! body))))
+
+;; Take back the last KEEP: the replaced main macro comes back, both slots
+;; point at it, it is re-played and re-scored (must equal the recorded
+;; score, else UNDO_FAIL). Nothing kept -> REJECT nothing-to-undo.
+(define (pd:macro-undo!)
+  (if (null? *macro-history*)
+      (begin
+        (display "REJECT mid=4 reason=nothing-to-undo cmd=macro-undo slot=")
+        (display *main-name*)
+        (display " say=\"")
+        (display (pad:kid-say "nothing-to-undo"))
+        (display "\"")
+        (newline)
+        (list #f "macro_undo_reject"))
+      (let* ((top (car *macro-history*))
+             (body (car top))
+             (want (car (cdr top)))
+             (from *main-score*))
+        (set! *macro-history* (cdr *macro-history*))
+        (set! *macro-main-body* body)
+        (pd:macro-sync!)
+        (let* ((p (try (pd:mshadow) (catch (e) #f)))
+               (got (pad:mscore-plan p)))
+          (set! *main-score* got)
+          (set! *main-name* "pd:mshadow")
+          (set! *macro-undos* (+ *macro-undos* 1))
+          (display "UNDO kind=macro from=")
+          (display (pad:nstr from))
+          (display " to=")
+          (display (pad:nstr got))
+          (display " want=")
+          (display (pad:nstr want))
+          (display " left=")
+          (display (number->string (length *macro-history*)))
+          (display " say=\"took back the last keep\"")
+          (newline)
+          (pad:mstamp! p "pd:mshadow")
+          (if (= got want)
+              (list #t "macro_undo")
+              (begin
+                (display "UNDO_FAIL rescore\n")
+                (list #f "macro_undo_fail")))))))
