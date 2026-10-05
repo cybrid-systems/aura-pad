@@ -13,6 +13,11 @@ Emacs clone. Soft owns:
 
 Kids see short REJECT reasons, not scary jargon. Chinese + English README.
 
+From M6 a **thin C viewport** draws the pad. It is only a blitter: Soft
+packs its decisions (text, HL letters, def/use marks, cursor, kid words)
+into a `SNAP v1 pad` block and C maps letters to colors. C never owns
+edit logic, HL, the keymap or any word a kid reads. See [`m6.md`](m6.md).
+
 ## Aura loop (M0)
 
 1. Build an isomorphic empty buffer for each keymap.
@@ -68,6 +73,12 @@ Never use `quote` as an identifier. Prefer `qf`, `mid`, `tag`.
   `nothing-to-back`, and an honest Soft bridge to tip
   `query:*` / `mutate:*` (`soft/pad/query.aura`). Gaps documented
   and filed as Aura issues from aura-pad. See [`m5.md`](m5.md).
+- **M6** — thin C viewport ("加c"). Soft `view.aura` packs editor lines,
+  the M5 HL tape, def/use marks and the cursor into a `SNAP v1 pad` block
+  (file via `write-file` or stdout stream); Soft `keys.aura` / `play.aura`
+  own the keymap and play loop. C (`c/pad_view`, `c/pad_play`) reads,
+  checks (fail closed), and blits ANSI/plain; `pad_play` forwards raw key
+  bytes. Guarded by `PAD_C_THIN_OK`. See [`m6.md`](m6.md).
 
 ## M3 layering
 
@@ -89,7 +100,18 @@ macro.aura    M4 pd:macro / pd:mshadow propose → gate (code + kind words) →
 hl.aura       M5 Soft Aura tokenize + kid HL color tape (no C viewport)
 jump.aura     M5 Soft LSP-lite goto-def / find-refs / jump-back
 query.aura    M5 Soft bridge to tip query:* / mutate:* (honest gaps listed)
+view.aura     M6 SNAP v1 pad packer: lines + HL tape + def/use marks + cursor
+keys.aura     M6 Soft keymap (raw bytes -> commands), play gate, play state
+play.aura     M6 Soft play loop: IN/KEY lines in, SNAP blocks out
+-- C side (no edit logic) --
+c/snap.c      M6 SNAP reader (fail closed, last block wins) + ANSI/plain blit
+c/pad_view.c  M6 blit one snapshot (file or stdin stream)
+c/pad_play.c  M6 raw-key forwarder + live blit of the Soft play child
 ```
+
+Viewport rule (M6): if C would need to know what a key, a word or a
+character means, that logic goes in Soft. C may parse the wire shape,
+map a letter to a color, and forward bytes — nothing else.
 
 Honesty rules (M3.5): a REJECT never mutates and never pushes undo; undo
 restores a recorded snapshot, never a guess; world undo re-plays and

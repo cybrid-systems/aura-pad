@@ -5,12 +5,13 @@ Aura Pad is a kid-friendly, AI-native Soft editor. Soft owns the buffer
 table, and a seeded key sequence. Two keymap worldlines — gentle and
 bold — race the same keys. A Soft gate rejects bad commands with short
 friendly reasons. The better score is stamped KEEP; the other is DROP.
-There is no C viewport in this tree.
+From M6 a thin C viewport draws the pad: Soft owns the editor and the
+HL/marks/kid words, C only blits Soft's `SNAP v1 pad` blocks.
 
 Design: [`docs/DESIGN.md`](docs/DESIGN.md).
 Milestones: [`docs/m0.md`](docs/m0.md), [`docs/m1.md`](docs/m1.md),
 [`docs/m2.md`](docs/m2.md), [`docs/m3.md`](docs/m3.md), [`docs/m35.md`](docs/m35.md),
-[`docs/m4.md`](docs/m4.md), [`docs/m5.md`](docs/m5.md).
+[`docs/m4.md`](docs/m4.md), [`docs/m5.md`](docs/m5.md), [`docs/m6.md`](docs/m6.md).
 Repo: https://github.com/cybrid-systems/aura-pad
 
 中文简介：Aura Pad 是给小朋友也能玩的 Soft 小编辑器。缓冲区、光标、按键
@@ -29,6 +30,9 @@ Soft 把关后严格更高分才 KEEP（30 → 44 → 51），可撤销；293 �
 M5 加上 Soft 侧 Aura 语法高亮（HL 色带）、跳转/引用（goto-def /
 find-refs / jump-back，小朋友拒绝理由），以及 tip 上真实可用的
 query:* / mutate:* Soft 桥；没有的原语记成 GAPS 并向 Aura 提 issue。
+M6 “加c”：一个很薄的 C 画面。编辑、高亮、跳转标记、按键表和所有给
+小朋友看的话都在 Soft；Soft 把它们打包成 `SNAP v1 pad` 块，C 只负责
+把字母换成颜色画到终端（以及把原始按键字节转发给 Soft）。
 
 - **M0** races `map-gentle` (mid 1) and `map-bold` (mid 2) on 24 seeded
   key steps toward the goal fixture `"hi aura"`. Score is
@@ -87,6 +91,17 @@ query:* / mutate:* Soft 桥；没有的原语记成 GAPS 并向 Aura 提 issue�
   and filed as Aura issues from aura-pad — no fake Soft APIs.
   Tests: Python model, Soft checks, `PAD_M5_OK`. See
   [`docs/m5.md`](docs/m5.md).
+- **M6** adds a **thin C viewport** ("加c"). Soft (`view.aura`) packs the
+  editor lines, the M5 HL tape, def/use marks of the name under the
+  cursor, the cursor and the kid SAY/LEGEND words into a `SNAP v1 pad`
+  block (file or stdout stream — same `SNAP v1 … END` family as
+  aura-parkour / aura-tetris). C (`c/pad_view`, `c/pad_play`) checks the
+  shape (fail closed, last complete block wins) and blits ANSI or plain
+  text; `pad_play` forwards raw key bytes and Soft's keymap (`keys.aura`)
+  decides what they mean. **C never owns edit logic** — enforced by
+  `PAD_C_THIN_OK`. Tests: 61 Soft checks, host model byte-for-byte,
+  golden blits, fail-closed fixtures, soft_play → C → `PAD_C_OK`. See
+  [`docs/m6.md`](docs/m6.md).
 
 ## Soft smoke
 
@@ -97,7 +112,7 @@ Soft runs natively in that container (no nested docker). Never
 `build_soft4132`. Needs `AURA_SANDBOX=off`.
 
 ```bash
-bash scripts/smoke.sh         # M0+M1+M2+burn+M3+M3.5+M4+M5 (+ live MiniMax if keyed) → PAD_SMOKE_OK
+bash scripts/smoke.sh         # M0+M1+M2+burn+M3+M3.5+M4+M5+M6 (+ live MiniMax if keyed) → PAD_SMOKE_OK
 bash scripts/smoke_soft.sh    # M0 → PAD_M0_OK
 bash scripts/smoke_m1.sh      # M1 → PAD_M1_OK
 bash scripts/smoke_m2.sh      # M2 fixtures → PAD_M2_PROPOSE_OK
@@ -106,6 +121,7 @@ bash scripts/smoke_m3.sh      # M3 multi-line + helper → PAD_M3_OK (+ live if 
 bash scripts/smoke_m35.sh     # M3.5 PAREN_OK, PAD_MODEL_OK, PAD_TEST_OK, PAD_M35_OK (+ live if keyed)
 bash scripts/smoke_m4.sh      # M4 PAREN_OK, PAD_M4_MODEL_OK, PAD_M4_TEST_OK, PAD_M4_OK (+ live if keyed)
 bash scripts/smoke_m5.sh      # M5 PAREN_OK, PAD_M5_MODEL_OK, PAD_M5_TEST_OK, PAD_M5_OK
+bash scripts/smoke_c.sh       # M6 Soft dump → thin C blit … PAD_C_OK (PAD_C_DOCKER=1 builds C in the image)
 PAD_LIVE=0 bash scripts/smoke.sh     # skip live MiniMax
 ```
 
@@ -134,6 +150,19 @@ commands (`too-far`, `not-print`, …) and 1 bold command (`empty-line`).
 On the tip binary that race is `WORLD line=fiber_live backend=2 joins=2/2`
 (`backend=2` is CLI thread fallback). If the joins do not land, the line
 is `host-sequential` and `fiber_live` is not printed.
+
+## Thin C viewport (M6)
+
+```bash
+bash scripts/build_c.sh                       # out/c/pad_view, out/c/pad_play (host cc, -Werror)
+./out/c/pad_view out/m6.snap                  # blit the snapshot Soft wrote (after smoke_c.sh)
+bash scripts/run_soft.sh /workspace/aura-pad/soft/pad/m6_smoke.aura | ./out/c/pad_view   # stream
+./out/c/pad_play                              # interactive: Soft play child in docker, C blits
+```
+
+In `pad_play`: type, arrows move, ctrl-g finds where a name is born,
+ctrl-r counts uses, ctrl-b jumps back, ctrl-q says bye — all decided by
+Soft (`soft/pad/keys.aura`). C forwards bytes and paints.
 
 ## License
 
