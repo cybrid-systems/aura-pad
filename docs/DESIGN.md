@@ -17,32 +17,32 @@ keywords, kid words and key-byte comparisons).
 
 ```
                  host (python3, no Soft HTTP)
-   propose_minimax.py ── lambda text ──┐      *_model.py ── byte-for-byte oracles
+   propose_minimax.py -- lambda text --+      *_model.py -- byte-for-byte oracles
                                        v
- ┌──────────────────────────── Aura Soft (tip binary) ─────────────────────────────┐
- │ world     rules.aura  race-thunks!, WORLD line, KEEP/DROP stamp       (M0)       │
- │           hot.aura    std/hot-strategy slots + gate words              (M1/M2)   │
- │           pack.aura / helper.aura / macro.aura  Propose → gate →       (M1–M4)   │
- │                       probe → race → KEEP | heal!+DROP, undo re-score            │
- │ model     buffer.aura chars, gate, sim                                 (M0)       │
- │           lines.aura  (line col), line ops, pure lsim                  (M3)       │
- │           edit.aura   undo/kill/mark/indent, egate/eapply, goal3       (M3.5)     │
- │           m4.aura     story/scratch pads, find/replace, rec/play, law  (M4)       │
- │ analysis  hl.aura     tokenizer + HL tape  P K S T C Q M N .           (M5)       │
- │           jump.aura   goto-def / find-refs / jump-back (token based)   (M5)       │
- │           query.aura  tip query:* / mutate:* bridge, GAPS list         (M5)       │
- │ view      view.aura   SNAP v1 pad packer (whole page)                  (M6)       │
- │           lc.aura     line cache: per-line toks/tape/marks, DIRTY      (M7)       │
- │           keys.aura   keymap bytes→commands, play gate, play state     (M6/M7)    │
- │           play.aura   loop: IN/KEY lines in, SNAP blocks out           (M6)       │
- └─────────────────────────────────────┬─────────────────────────────────────────┘
-                                       │ SNAP v1 pad … END (stdout / file)
- ┌──────────────────────── C (thin viewport, no logic) ───────────────────────────┐
- │ snap.c  reader: fail closed, last complete block wins; ANSI/plain blit;        │
- │         pad_blit_dirty repaints DIRTY rows + any row whose text differs         │
- │ pad_view.c  blit one snapshot (file / stream)                                    │
- │ pad_play.c  raw terminal, forwards every byte as "IN <n>", blits Soft frames    │
- └─────────────────────────────────────────────────────────────────────────────┘
+ [ Aura Soft (tip binary) ]
+   world     rules.aura  race-thunks!, WORLD line, KEEP/DROP stamp       (M0)
+             hot.aura    std/hot-strategy slots + gate words              (M1/M2)
+             pack.aura / helper.aura / macro.aura  Propose → gate →       (M1–M4)
+                         probe → race → KEEP | heal!+DROP, undo re-score
+   model     buffer.aura chars, gate, sim                                 (M0)
+             lines.aura  (line col), line ops, pure lsim                  (M3)
+             edit.aura   undo/kill/mark/indent, egate/eapply, goal3       (M3.5)
+             m4.aura     story/scratch pads, find/replace, rec/play, law  (M4)
+   analysis  hl.aura     tokenizer + HL tape  P K S T C Q M N .           (M5)
+             jump.aura   goto-def / find-refs / jump-back (token based)   (M5)
+             query.aura  tip query:* / mutate:* bridge, GAPS list         (M5)
+   view      view.aura   SNAP v1 pad packer (whole page)                  (M6)
+             lc.aura     line cache: per-line toks/tape/marks, DIRTY      (M7)
+             keys.aura   keymap bytes→commands, play gate, play state     (M6/M7)
+             play.aura   loop: IN/KEY lines in, SNAP blocks out           (M6)
+                                       |
+                                       | SNAP v1 pad … END (stdout / file)
+                                       v
+ [ C (thin viewport, no logic) ]
+   snap.c  reader: fail closed, last complete block wins; ANSI/plain blit;
+           pad_blit_dirty repaints DIRTY rows + any row whose text differs
+   pad_view.c  blit one snapshot (file / stream)
+   pad_play.c  raw terminal, forwards every byte as "IN <n>", blits Soft frames
 ```
 
 All model step functions are pure on their state lists (fiber-safe); only
