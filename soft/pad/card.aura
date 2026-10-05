@@ -1,0 +1,65 @@
+;; aura-pad M8 -- kid onboarding card + CARD line for SNAP SAY.
+;; Soft owns the words; C prints SAY / Soft log lines verbatim and never
+;; picks a winner. play.aura loads only this file for the welcome frame
+;; and the thin goal: command (empty reject). The full intent race lives
+;; in goal.aura (smoke / propose path) so the M7 key path stays light.
+;; Soft reserved: never bind quote.
+
+(define *card-welcome* "welcome to aura pad")
+(define *card-tip* "type goal:hi aura to try")
+(define *card-sep* " - ")
+
+;; First-frame SAY: two-line welcome card packed into one Soft string.
+(define (pad:card-welcome-say)
+  (string-append *card-welcome* *card-sep* *card-tip*))
+
+;; Does s carry both welcome card words? (for T CARD_FIRST)
+(define (pad:card-welcome? s)
+  (and (string? s)
+       (string-contains? s *card-welcome*)
+       (string-contains? s *card-tip*)))
+
+;; CARD a=<base> b=<trial> KEEP=<a|b|none> say="..."
+(define (pad:card-line a b keep say)
+  (string-append "CARD a=" (pad:nstr a)
+                 " b=" (pad:nstr b)
+                 " KEEP=" keep
+                 " say=\"" say "\""))
+
+(define (pad:card-emit! a b keep say)
+  (display (pad:card-line a b keep say))
+  (newline)
+  (pad:card-line a b keep say))
+
+;; Kid reasons for the goal: command (play path).
+(define *card-kid-says*
+  (list (list "no-goal" "tell me what the page should say")
+        (list "not-allowed" "that power is not allowed")
+        (list "tie" "same score, keeping yours")))
+
+(define (pad:card-kid reason)
+  (let loop ((xs *card-kid-says*))
+    (cond
+      ((null? xs) (pad:kid-say reason))
+      ((string=? reason (car (car xs))) (car (cdr (car xs))))
+      (#t (loop (cdr xs))))))
+
+;; Thin goal: handler for the play keymap. Empty text -> REJECT no-goal,
+;; page / undo untouched. Non-empty text records the goal string and
+;; updates SAY; the full helper race is goal.aura (fixtures / smoke).
+(define *pl-goal* "")
+(define *pl-goal-depth* 0)
+
+(define (pad:card-goal-text cmd)
+  (if (and (string? cmd) (string-prefix? cmd "goal:"))
+      (substring cmd 5 (string-length cmd))
+      ""))
+
+(define (pad:card-goal! cmd)
+  (let ((text (pad:card-goal-text cmd)))
+    (if (> (string-length text) 0)
+        (begin
+          (set! *pl-goal* text)
+          (set! *pl-goal-depth* (+ *pl-goal-depth* 1))
+          (list #t "goal-set" (string-append "goal set: " text)))
+        (list #f "no-goal" (pad:card-kid "no-goal")))))
