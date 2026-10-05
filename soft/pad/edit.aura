@@ -1,0 +1,359 @@
+;; aura-pad M3.5 -- finer editor commands on the M3 multi-line buffer.
+;; An edit state is (L line col kill mark undo):
+;;   L     lines (each a list of char codes, the M3 shape)
+;;   kill  last killed / copied text as segments (list of lines), or ()
+;;   mark  () or (mark-line mark-col)
+;;   undo  snapshots (L line col), newest first, at most *undo-max*
+;; New commands: undo yank indent dedent bob eob set-mark kill-region
+;; copy-region. Every M3 command still works (pad:lgate / pad:lapply).
+;; A REJECT never changes the state, never pushes undo. Pure -- fiber-safe.
+;; Needs buffer.aura + lines.aura. M0-M3 do not load this file.
+;; Soft reserved: never bind the identifier quote.
+
+(define *undo-max* 8)
+(define *indent-w* 2)
+;; Second goal fixture: three lines "hi" / "  aura" / "pad".
+(define *goal3* (list (list 104 105)
+                      (list 32 32 97 117 114 97)
+                      (list 112 97 100)))
+(define *e-base* 60)
+
+(define *edit-cmds*
+  (list "undo" "yank" "indent" "dedent" "bob" "eob"
+        "set-mark" "kill-region" "copy-region"))
+
+;; Commands that change text: they push one undo snapshot and clear the mark.
+(define *text-cmds* (list "back" "kill-line" "open-line"))
+
+;; --- state ---
+(define (pad:es L l col kill mark undo) (list L l col kill mark undo))
+(define (pad:es-L st) (pad:nth st 0))
+(define (pad:es-l st) (pad:nth st 1))
+(define (pad:es-col st) (pad:nth st 2))
+(define (pad:es-kill st) (pad:nth st 3))
+(define (pad:es-mark st) (pad:nth st 4))
+(define (pad:es-undo st) (pad:nth st 5))
+
+(define (pad:estart)
+  (pad:es (pad:start-lines) 0 0 (list) (list) (list)))
+
+(define (pad:es-at L l col)
+  (pad:es L l col (list) (list) (list)))
+
+;; --- pure helpers ---
+(define (pad:sublist xs a b) (pad:take (- b a) (pad:drop a xs)))
+
+(define (pad:mark-at? mark l col)
+  (and (pair? mark) (= (car mark) l) (= (car (cdr mark)) col)))
+
+(define (pad:pos<=? l1 c1 l2 c2)
+  (or (< l1 l2) (and (= l1 l2) (<= c1 c2))))
+
+(define (pad:fits? L)
+  (and (<= (length L) *max-lines*)
+       (let loop ((xs L))
+         (cond
+           ((null? xs) #t)
+           ((> (length (car xs)) *max-col*) #f)
+           (#t (loop (cdr xs)))))))
+
+(define (pad:push-undo U snap)
+  (pad:take *undo-max* (cons snap U)))
+
+;; Text between two ordered points, as segments.
+(define (pad:region-text L l1 c1 l2 c2)
+  (if (= l1 l2)
+      (list (pad:sublist (pad:nth L l1) c1 c2))
+      (append (list (pad:drop c1 (pad:nth L l1)))
+              (pad:sublist L (+ l1 1) l2)
+              (list (pad:take c2 (pad:nth L l2))))))
+
+(define (pad:region-delete L l1 c1 l2 c2)
+  (append (pad:take l1 L)
+          (list (append (pad:take c1 (pad:nth L l1))
+                        (pad:drop c2 (pad:nth L l2))))
+          (pad:drop (+ l2 1) L)))
+
+;; Region bounds (l1 c1 l2 c2) between mark and point, ordered.
+(define (pad:region-bounds mark l col)
+  (let ((ml (car mark))
+        (mc (car (cdr mark))))
+    (if (pad:pos<=? ml mc l col)
+        (list ml mc l col)
+        (list l col ml mc))))
+
+;; Insert segments at point. Returns (L line col); point ends after the text.
+(define (pad:insert-segs L l col S)
+  (let* ((ln (pad:nth L l))
+         (pre (pad:take col ln))
+         (post (pad:drop col ln))
+         (k (length S)))
+    (if (= k 1)
+        (list (pad:put-nth L l (append pre (car S) post))
+              l
+              (+ col (length (car S))))
+        (let* ((tl (pad:nth S (- k 1)))
+               (body (pad:sublist S 1 (- k 1)))
+               (fresh (append (list (append pre (car S)))
+                              body
+                              (list (append tl post)))))
+          (list (append (pad:take l L) fresh (pad:drop (+ l 1) L))
+                (+ l (- k 1))
+                (length tl))))))
+
+;; Text kill-line would take: rest of line, or a newline at end of line.
+(define (pad:kill-text L l col)
+  (let ((ln (pad:nth L l)))
+    (if (< col (length ln))
+        (list (pad:drop col ln))
+        (list (list) (list)))))
+
+(define (pad:lead-spaces ln)
+  (cond
+    ((and (pair? ln) (= (car ln) 32) (pair? (cdr ln)) (= (car (cdr ln)) 32)) 2)
+    ((and (pair? ln) (= (car ln) 32)) 1)
+    (#t 0)))
+
+;; --- Soft gate. "ok" or a kid reason. ---
+(define (pad:egate c st)
+  (let* ((L (pad:es-L st))
+         (l (pad:es-l st))
+         (col (pad:es-col st))
+         (n (length L))
+         (ln (pad:nth L l))
+         (len (length ln))
+         (kill (pad:es-kill st))
+         (mark (pad:es-mark st)))
+    (cond
+      ((not (string? c)) (pad:lgate c L l col))
+      ((string=? c "undo")
+       (if (null? (pad:es-undo st)) "nothing-to-undo" "ok"))
+      ((string=? c "yank")
+       (cond
+         ((null? kill) "nothing-to-yank")
+         ((not (pad:fits? (car (pad:insert-segs L l col kill)))) "need-space")
+         (#t "ok")))
+      ((string=? c "indent")
+       (if (> (+ len *indent-w*) *max-col*) "need-space" "ok"))
+      ((string=? c "dedent")
+       (if (= (pad:lead-spaces ln) 0) "no-indent" "ok"))
+      ((string=? c "bob")
+       (if (and (= l 0) (= col 0)) "already-there" "ok"))
+      ((string=? c "eob")
+       (if (and (= l (- n 1)) (= col len)) "already-there" "ok"))
+      ((string=? c "set-mark")
+       (if (pad:mark-at? mark l col) "already-there" "ok"))
+      ((or (string=? c "kill-region") (string=? c "copy-region"))
+       (cond
+         ((null? mark) "no-mark")
+         ((pad:mark-at? mark l col) "empty-region")
+         (#t "ok")))
+      (#t (pad:lgate c L l col)))))
+
+;; A text change: push the old (L line col), clear the mark.
+(define (pad:es-edit st r kill)
+  (pad:es (car r) (car (cdr r)) (car (cdr (cdr r)))
+          kill
+          (list)
+          (pad:push-undo (pad:es-undo st)
+                         (list (pad:es-L st) (pad:es-l st) (pad:es-col st)))))
+
+(define (pad:es-move st l col)
+  (pad:es (pad:es-L st) l col (pad:es-kill st) (pad:es-mark st) (pad:es-undo st)))
+
+;; --- apply one accepted command. Returns the new state. ---
+(define (pad:eapply c st)
+  (let* ((L (pad:es-L st))
+         (l (pad:es-l st))
+         (col (pad:es-col st))
+         (n (length L))
+         (ln (pad:nth L l))
+         (kill (pad:es-kill st))
+         (mark (pad:es-mark st))
+         (U (pad:es-undo st)))
+    (cond
+      ((number? c) (pad:es-edit st (pad:lapply c L l col) kill))
+      ((string=? c "undo")
+       (let ((snap (car U)))
+         (pad:es (pad:nth snap 0) (pad:nth snap 1) (pad:nth snap 2)
+                 kill (list) (cdr U))))
+      ((string=? c "yank")
+       (pad:es-edit st (pad:insert-segs L l col kill) kill))
+      ((string=? c "indent")
+       (pad:es-edit st
+                    (list (pad:put-nth L l (append (list 32 32) ln)) l (+ col *indent-w*))
+                    kill))
+      ((string=? c "dedent")
+       (let* ((k (pad:lead-spaces ln))
+              (nc (if (> col k) (- col k) 0)))
+         (pad:es-edit st (list (pad:put-nth L l (pad:drop k ln)) l nc) kill)))
+      ((string=? c "bob") (pad:es-move st 0 0))
+      ((string=? c "eob") (pad:es-move st (- n 1) (length (pad:nth L (- n 1)))))
+      ((string=? c "set-mark")
+       (pad:es L l col kill (list l col) U))
+      ((string=? c "kill-region")
+       (let* ((b (pad:region-bounds mark l col))
+              (l1 (pad:nth b 0)) (c1 (pad:nth b 1))
+              (l2 (pad:nth b 2)) (c2 (pad:nth b 3)))
+         (pad:es-edit st
+                      (list (pad:region-delete L l1 c1 l2 c2) l1 c1)
+                      (pad:region-text L l1 c1 l2 c2))))
+      ((string=? c "copy-region")
+       (let ((b (pad:region-bounds mark l col)))
+         (pad:es L l col
+                 (pad:region-text L (pad:nth b 0) (pad:nth b 1) (pad:nth b 2) (pad:nth b 3))
+                 (list) U)))
+      ((string=? c "kill-line")
+       (pad:es-edit st (pad:lapply c L l col) (pad:kill-text L l col)))
+      ((pad:str-in? c *text-cmds*)
+       (pad:es-edit st (pad:lapply c L l col) kill))
+      (#t
+       (let ((r (pad:lapply c L l col)))
+         (pad:es-move st (car (cdr r)) (car (cdr (cdr r)))))))))
+
+;; Gate then apply: the new state, or the reason string.
+(define (pad:eop c st)
+  (let ((reason (pad:egate c st)))
+    (if (string=? reason "ok") (pad:eapply c st) reason)))
+
+;; Play tokens from a state. Returns (state keys rejects).
+(define (pad:eplay-from st plan)
+  (let loop ((cs (pad:expand plan)) (s st) (keys 0) (rej 0))
+    (if (null? cs)
+        (list s keys rej)
+        (let ((reason (pad:egate (car cs) s)))
+          (if (string=? reason "ok")
+              (loop (cdr cs) (pad:eapply (car cs) s) (+ keys 1) rej)
+              (loop (cdr cs) s keys (+ rej 1)))))))
+
+;; --- kid-clear lines ---
+;; Text with spaces shown as "." so a TAPE field never splits.
+(define (pad:dot-line ln)
+  (list->string (map (lambda (c) (if (= c 32) #\. (integer->char c))) ln)))
+
+(define (pad:dot-text L)
+  (string-join (map pad:dot-line L) "|"))
+
+;; Same text with "^" at the point.
+(define (pad:caret-text L l col)
+  (let loop ((i 0) (xs L) (acc (list)))
+    (if (null? xs)
+        (string-join (reverse acc) "|")
+        (loop (+ i 1)
+              (cdr xs)
+              (cons (if (= i l)
+                        (string-append (pad:dot-line (pad:take col (car xs)))
+                                       "^"
+                                       (pad:dot-line (pad:drop col (car xs))))
+                        (pad:dot-line (car xs)))
+                    acc)))))
+
+(define (pad:kill-str kill)
+  (if (null? kill) "none" (pad:dot-text kill)))
+
+(define (pad:mark-str mark)
+  (if (pair? mark)
+      (string-append (number->string (car mark)) "," (number->string (car (cdr mark))))
+      "none"))
+
+;; Compact state view for tests: text@line,col kill=.. mark=.. undo=N
+(define (pad:es-view st)
+  (string-append (pad:dot-text (pad:es-L st))
+                 "@" (number->string (pad:es-l st))
+                 "," (number->string (pad:es-col st))
+                 " kill=" (pad:kill-str (pad:es-kill st))
+                 " mark=" (pad:mark-str (pad:es-mark st))
+                 " undo=" (number->string (length (pad:es-undo st)))))
+
+(define (pad:ereject! step c reason tag)
+  (display "REJECT mid=35 reason=")
+  (display reason)
+  (display " cmd=")
+  (display (pad:cmd-str c))
+  (display " step=")
+  (display (number->string step))
+  (display " slot=")
+  (display tag)
+  (display " say=\"")
+  (display (pad:kid-say reason))
+  (display "\"")
+  (newline)
+  0)
+
+;; --- plans on the 3-line goal ---
+;; Pure play from the seeded start. print=1 shows up to 4 REJECT lines.
+;; Returns (score keys rejects dist state).
+(define (pad:esim plan goal base tag print)
+  (let loop ((cs (pad:expand plan)) (i 0) (st (pad:estart)) (keys 0) (rej 0))
+    (if (null? cs)
+        (let ((d (pad:dist-lines (pad:es-L st) goal)))
+          (list (- base (+ keys (* 2 rej) (* 3 d))) keys rej d st))
+        (let* ((c (car cs))
+               (reason (pad:egate c st)))
+          (if (string=? reason "ok")
+              (loop (cdr cs) (+ i 1) (pad:eapply c st) (+ keys 1) rej)
+              (begin
+                (if (and (= print 1) (< rej 4))
+                    (pad:ereject! (+ i 1) c reason tag))
+                (loop (cdr cs) (+ i 1) st keys (+ rej 1))))))))
+
+(define (pad:e-score r) (pad:nth r 0))
+(define (pad:e-keys r) (pad:nth r 1))
+(define (pad:e-rej r) (pad:nth r 2))
+(define (pad:e-dist r) (pad:nth r 3))
+(define (pad:e-state r) (pad:nth r 4))
+
+(define (pad:escore-plan plan)
+  (if (pad:plan-ok? plan)
+      (pad:e-score (pad:esim plan *goal3* *e-base* "race" 0))
+      -999))
+
+;; Main M3.5 world. Only pad:estamp! writes these.
+(define *e-state* (pad:estart))
+(define *e-keys* 0)
+(define *e-rej* 0)
+(define *e-dist* 0)
+(define *e-score* 0)
+(define *e-tag* "none")
+
+(define (pad:etape! tag)
+  (let ((L (pad:es-L *e-state*))
+        (l (pad:es-l *e-state*))
+        (col (pad:es-col *e-state*)))
+    (display "TAPE lines=")
+    (display (number->string (length L)))
+    (display " line=")
+    (display (number->string l))
+    (display " col=")
+    (display (number->string col))
+    (display " text=")
+    (display (pad:dot-text L))
+    (display " view=")
+    (display (pad:caret-text L l col))
+    (display " kill=")
+    (display (pad:kill-str (pad:es-kill *e-state*)))
+    (display " undo=")
+    (display (number->string (length (pad:es-undo *e-state*))))
+    (display " slot=")
+    (display tag)
+    (newline)
+    (pad:score-line! *e-base* *e-keys* *e-rej* *e-dist* *e-score*)
+    *e-score*))
+
+(define (pad:estamp! plan tag)
+  (let ((r (pad:esim plan *goal3* *e-base* tag 0)))
+    (set! *e-tag* tag)
+    (set! *e-state* (pad:e-state r))
+    (set! *e-keys* (pad:e-keys r))
+    (set! *e-rej* (pad:e-rej r))
+    (set! *e-dist* (pad:e-dist r))
+    (set! *e-score* (pad:e-score r))
+    (pad:etape! tag)))
+
+;; Point the M3 helper hooks at the 3-line goal (helper.aura).
+(define (pad:helper-use-goal3!)
+  (set! *helper-score-fn* (lambda (p) (pad:escore-plan p)))
+  (set! *helper-audit-fn* (lambda (p tag) (pad:esim p *goal3* *e-base* tag 1)))
+  (set! *helper-stamp-fn* (lambda (p tag) (pad:estamp! p tag)))
+  (set! *helper-goal* "goal3")
+  *helper-goal*)

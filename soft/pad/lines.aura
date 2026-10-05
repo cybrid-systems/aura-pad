@@ -197,6 +197,50 @@
     ((string? c) c)
     (#t "?")))
 
+;; Kid words for every gate reason (M3 + M3.5). Shown as say="..".
+(define *kid-says*
+  (list (list "too-far" "cannot move past the edge")
+        (list "no-line" "there is no line there")
+        (list "empty-buf" "the page is empty")
+        (list "need-space" "no more room")
+        (list "not-print" "that key is not a letter")
+        (list "not-a-key" "that is not a command")
+        (list "nothing-to-undo" "nothing to take back yet")
+        (list "nothing-to-yank" "nothing cut yet to paste")
+        (list "already-there" "you are already there")
+        (list "no-mark" "set a mark first")
+        (list "empty-region" "mark and cursor are on the same spot")
+        (list "no-indent" "no spaces to remove")))
+
+(define (pad:kid-say reason)
+  (let loop ((xs *kid-says*))
+    (cond
+      ((null? xs) "the gate said no")
+      ((string=? reason (car (car xs))) (car (cdr (car xs))))
+      (#t (loop (cdr xs))))))
+
+;; SCORE line: where the points went, in kid words.
+(define (pad:score-line! base keys rej dist score)
+  (display "SCORE total=")
+  (display (pad:nstr score))
+  (display " start=")
+  (display (number->string base))
+  (display " keys=-")
+  (display (number->string keys))
+  (display " rejects=-")
+  (display (number->string (* 2 rej)))
+  (display " dist=-")
+  (display (number->string (* 3 dist)))
+  (display " say=\"")
+  (display (number->string keys))
+  (display " keys, ")
+  (display (number->string rej))
+  (display " oops, ")
+  (display (number->string dist))
+  (display " letters off\"")
+  (newline)
+  score)
+
 (define (pad:lreject! step c reason tag)
   (display "REJECT mid=3 reason=")
   (display reason)
@@ -206,6 +250,9 @@
   (display (number->string step))
   (display " slot=")
   (display tag)
+  (display " say=\"")
+  (display (pad:kid-say reason))
+  (display "\"")
   (newline)
   0)
 
@@ -269,6 +316,7 @@
   (display " slot=")
   (display tag)
   (newline)
+  (pad:score-line! *plan-base* *ln-keys* *ln-rej* *ln-dist* *ln-score*)
   *ln-score*)
 
 ;; Stamp a plan into the main multi-line world. The only writer of *lines*.

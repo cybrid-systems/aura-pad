@@ -20,6 +20,18 @@
 (define *helper-why* "")
 (define *helper-keeps* 0)
 (define *helper-drops* 0)
+;; M3.5 world undo: each KEEP pushes the main it replaced (body score).
+(define *helper-history* (list))
+(define *helper-undos* 0)
+(define *history-max* 8)
+
+;; Scoring hooks. M3 plays the 2-line goal; edit.aura can point these at
+;; the 3-line goal (pad:helper-use-goal3!). Plain closures: fiber-safe.
+(define *helper-goal* "goal2")
+(define *helper-score-fn* (lambda (p) (pad:score-plan p)))
+(define *helper-audit-fn* (lambda (p tag) (pad:lsim p tag 1)))
+(define *helper-stamp-fn* (lambda (p tag) (pad:stamp-lines! p tag)))
+(define (pd:hscore p) (*helper-score-fn* p))
 
 ;; Words a helper body may not use, on top of hot.aura *banned-words*.
 (define *helper-banned*
@@ -66,11 +78,11 @@
                          (pad:plan-ok? (try (pd:helper) (catch (e) #f))))
                     (begin
                       (set! *main-name* "pd:hshadow")
-                      (set! *main-score* (pad:score-plan p))
+                      (set! *main-score* (pd:hscore p))
                       (display "MAIN helper start=")
                       (display (pad:nstr *main-score*))
                       (newline)
-                      (pad:stamp-lines! p "pd:hshadow")
+                      (*helper-stamp-fn* p "pd:hshadow")
                       (list #t "seed"))
                     (list #f "probe"))))))))
 
@@ -93,13 +105,19 @@
   (let* ((base-plan (pd:hshadow))
          (trial-plan (pd:helper))
          (pair (pad:race-thunks!
-                (lambda () (pad:score-plan base-plan))
-                (lambda () (pad:score-plan trial-plan))))
+                (lambda () (pd:hscore base-plan))
+                (lambda () (pd:hscore trial-plan))))
          (base (car pair))
          (trial (car (cdr pair))))
     (set! *helper-base* base)
     (set! *helper-trial* trial)
-    (pad:lsim trial-plan "pd:helper" 1)
+    (let ((audit (*helper-audit-fn* trial-plan "pd:helper")))
+      (if (> (pad:nth audit 2) 4)
+          (begin
+            (display "REJECTS kind=helper total=")
+            (display (number->string (pad:nth audit 2)))
+            (display " shown=4")
+            (newline))))
     (display "RACE helper base=")
     (display (pad:nstr base))
     (display " trial=")
@@ -107,6 +125,9 @@
     (newline)
     (if (> trial base)
         (begin
+          (set! *helper-history*
+                (pad:take *history-max*
+                          (cons (list *helper-main-body* base) *helper-history*)))
           (set! *helper-main-body* clean)
           (set! *main-score* trial)
           (set! *main-name* "pd:helper")
@@ -115,7 +136,7 @@
           (display "KEEP kind=helper reason=higher-score-stamp score=")
           (display (pad:nstr trial))
           (newline)
-          (pad:stamp-lines! trial-plan "pd:helper")
+          (*helper-stamp-fn* trial-plan "pd:helper")
           (pd:helper-out! "helper_keep"))
         (begin
           (hot-strategy:heal!)
@@ -172,3 +193,46 @@
           (pd:gate-reject! "read" "")
           (pd:helper-out! "helper_reject"))
         (pd:helper-propose-body! body))))
+
+;; M3.5: undo the last KEEP. The replaced main comes back, both slots are
+;; pointed at it, and its plan is re-played and re-scored (honest: the
+;; restored score must match the recorded one, else UNDO_FAIL).
+;; Nothing kept yet -> REJECT reason=nothing-to-undo, world untouched.
+(define (pd:helper-undo!)
+  (if (null? *helper-history*)
+      (begin
+        (display "REJECT mid=35 reason=nothing-to-undo cmd=helper-undo slot=")
+        (display *main-name*)
+        (display " say=\"")
+        (display (pad:kid-say "nothing-to-undo"))
+        (display "\"")
+        (newline)
+        (list #f "helper_undo_reject"))
+      (let* ((top (car *helper-history*))
+             (body (car top))
+             (want (car (cdr top)))
+             (from *main-score*))
+        (set! *helper-history* (cdr *helper-history*))
+        (set! *helper-main-body* body)
+        (pd:helper-sync!)
+        (let* ((p (try (pd:hshadow) (catch (e) #f)))
+               (got (pd:hscore p)))
+          (set! *main-score* got)
+          (set! *main-name* "pd:hshadow")
+          (set! *helper-undos* (+ *helper-undos* 1))
+          (display "UNDO kind=helper from=")
+          (display (pad:nstr from))
+          (display " to=")
+          (display (pad:nstr got))
+          (display " want=")
+          (display (pad:nstr want))
+          (display " left=")
+          (display (number->string (length *helper-history*)))
+          (display " say=\"took back the last keep\"")
+          (newline)
+          (*helper-stamp-fn* p "pd:hshadow")
+          (if (= got want)
+              (list #t "helper_undo")
+              (begin
+                (display "UNDO_FAIL rescore\n")
+                (list #f "helper_undo_fail")))))))
