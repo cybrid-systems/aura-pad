@@ -54,6 +54,14 @@ Never use `quote` as an identifier. Prefer `qf`, `mid`, `tag`.
   breakdown; three-line goal for the helper race via scoring hooks;
   `pd:helper-undo!` takes back a KEEP with an honest re-score. Tests:
   paren check, Python model, Soft unit tests. See [`m35.md`](m35.md).
+- **M4** — kid story editor (`soft/pad/m4.aura`, `soft/pad/macro.aura`):
+  two named pads (`story` / `scratch`), find / find-next / replace /
+  replace-all with kid reasons (`not-found`, `empty-needle`, `too-many`,
+  `not-kind`), `rec` / `stop` / `play` macros, a buffer-law race (two laws
+  on the same keys, KEEP stamps the law into main) and macro propose (hot
+  slot `pd:macro` vs `pd:mshadow`, kind-word gate, race on the story goal,
+  KEEP only strictly better, `heal!` on DROP, `pd:macro-undo!`). Tests:
+  Python model, 293 Soft checks. See [`m4.md`](m4.md).
 
 ## M3 layering
 
@@ -67,8 +75,18 @@ helper.aura   M3 pd:helper / pd:hshadow propose → gate → race → KEEP/DROP
               (M3.5: scoring hooks, KEEP history, pd:helper-undo!)
 edit.aura     M3.5 edit state (kill, mark, undo), finer commands, esim,
               goal3, TAPE view / SCORE, pad:helper-use-goal3!
+m4.aura       M4 pad state (story / scratch, needle, recorder, law), find /
+              replace / switch / rec / stop / play, pure msim, story goal,
+              two-pad TAPE, pad:law-race!
+macro.aura    M4 pd:macro / pd:mshadow propose → gate (code + kind words) →
+              probe → race → KEEP/DROP, KEEP history, pd:macro-undo!
 ```
 
 Honesty rules (M3.5): a REJECT never mutates and never pushes undo; undo
 restores a recorded snapshot, never a guess; world undo re-plays and
 re-scores the restored helper and fails loudly on a mismatch.
+
+Honesty rules (M4): a refused token never mutates (also inside `play`,
+where each step is gated again and refusals count); a law is stamped into
+main only after a strictly better race; a macro body with an unkind word
+never reaches a slot; `fiber_live` only when every join lands.
