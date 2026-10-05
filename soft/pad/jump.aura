@@ -1,1 +1,194 @@
-PLACEHOLDER
+;; aura-pad M5 -- Soft LSP-lite: goto-def, find-refs, jump-back.
+;; Works on a Soft Aura source string + integer point (byte/char offset).
+;; Jump state js = (src point stack) where stack is prior points.
+;; Kid REJECT reasons: no-symbol, no-def, no-ref, nothing-to-back.
+;; Uses hl.aura tokens so strings/comments are skipped for refs.
+;; Hot path: find-defs / find-refs / sym-at walk a token list once
+;; (no O(n^2) list-ref via pad:hl-nth + length). Soft reserved: never
+;; bind quote. Needs buffer.aura + hl.aura.
+
+(define (pad:js src point stack) (list src point stack))
+(define (pad:js-src j) (car j))
+(define (pad:js-point j) (cadr j))
+(define (pad:js-stack j) (caddr j))
+
+(define (pad:js-at src point) (pad:js src point (list)))
+
+(define (pad:js-set-point j p)
+  (pad:js (pad:js-src j) p (pad:js-stack j)))
+
+(define (pad:js-push j p)
+  (pad:js (pad:js-src j) p (cons (pad:js-point j) (pad:js-stack j))))
+
+;; Symbol token covering point from toks, or #f. Single walk.
+(define (pad:sym-tok-in toks point)
+  (let loop ((ts toks))
+    (cond
+      ((null? ts) #f)
+      (#t
+       (let* ((t (car ts))
+              (k (car t))
+              (a (cadr t))
+              (b (caddr t)))
+         (if (and (or (string=? k "S") (string=? k "K")
+                      (string=? k "Q") (string=? k "M"))
+                  (>= point a) (< point b))
+             t
+             (loop (cdr ts))))))))
+
+(define (pad:sym-tok-at src point)
+  (pad:sym-tok-in (pad:hl-tokens src) point))
+
+(define (pad:sym-at-in toks point)
+  (let ((t (pad:sym-tok-in toks point)))
+    (if t (car (cdr (cdr (cdr t)))) "")))
+
+(define (pad:sym-at src point)
+  (pad:sym-at-in (pad:hl-tokens src) point))
+
+;; Single-pass defs: track prev / prev2 while walking toks.
+;; Patterns: (define NAME ...) or (define (NAME ...) ...)
+(define (pad:find-defs-in toks name)
+  (let loop ((xs toks) (prev #f) (prev2 #f) (acc (list)))
+    (if (null? xs)
+        (reverse acc)
+        (let* ((t (car xs))
+               (txt (car (cdr (cdr (cdr t)))))
+               (hit
+                (and (string=? txt name)
+                     (or (and prev
+                              (string=? (car prev) "K")
+                              (string=? (car (cdr (cdr (cdr prev))))
+                                        "define"))
+                         (and prev (string=? (car prev) "P")
+                              prev2 (string=? (car prev2) "K")
+                              (string=? (car (cdr (cdr (cdr prev2))))
+                                        "define"))))))
+          (loop (cdr xs) t prev
+                (if hit (cons (cadr t) acc) acc))))))
+
+(define (pad:find-defs src name)
+  (pad:find-defs-in (pad:hl-tokens src) name))
+
+;; Kept for m5 tests that may probe the old helper shape via is-def.
+(define (pad:tok-before tokens idx)
+  (if (<= idx 0) #f (pad:hl-nth tokens (- idx 1))))
+
+(define (pad:is-def-name? tokens idx name)
+  (let* ((t (pad:hl-nth tokens idx))
+         (txt (car (cdr (cdr (cdr t))))))
+    (if (not (string=? txt name))
+        #f
+        (let ((prev (pad:tok-before tokens idx)))
+          (cond
+            ((not prev) #f)
+            ((and (string=? (car prev) "K")
+                  (string=? (car (cdr (cdr (cdr prev)))) "define"))
+             #t)
+            ((string=? (car prev) "P")
+             (let ((prev2 (pad:tok-before tokens (- idx 1))))
+               (and prev2
+                    (string=? (car prev2) "K")
+                    (string=? (car (cdr (cdr (cdr prev2)))) "define"))))
+            (#t #f))))))
+
+;; All non-comment/string token starts matching name exactly.
+(define (pad:find-refs-in toks name)
+  (let loop ((ts toks) (acc (list)))
+    (cond
+      ((null? ts) (reverse acc))
+      (#t
+       (let* ((t (car ts))
+              (k (car t))
+              (txt (car (cdr (cdr (cdr t))))))
+         (if (and (string=? txt name)
+                  (or (string=? k "S") (string=? k "K")
+                      (string=? k "Q") (string=? k "M")))
+             (loop (cdr ts) (cons (cadr t) acc))
+             (loop (cdr ts) acc)))))))
+
+(define (pad:find-refs src name)
+  (pad:find-refs-in (pad:hl-tokens src) name))
+
+;; Result shape: (reason point stack refs) where reason "ok" or kid tag.
+(define (pad:goto-def j)
+  (let* ((src (pad:js-src j))
+         (pt (pad:js-point j))
+         (toks (pad:hl-tokens src))
+         (name (pad:sym-at-in toks pt)))
+    (cond
+      ((string=? name "")
+       (list "no-symbol" pt (pad:js-stack j) (list)))
+      (#t
+       (let ((defs (pad:find-defs-in toks name)))
+         (if (null? defs)
+             (list "no-def" pt (pad:js-stack j) (list))
+             (let ((dest (car defs)))
+               (if (= dest pt)
+                   (if (null? (cdr defs))
+                       (list "ok" dest (pad:js-stack j) defs)
+                       (list "ok" (car (cdr defs))
+                             (cons pt (pad:js-stack j)) defs))
+                   (list "ok" dest (cons pt (pad:js-stack j)) defs)))))))))
+
+(define (pad:find-refs-cmd j)
+  (let* ((src (pad:js-src j))
+         (pt (pad:js-point j))
+         (toks (pad:hl-tokens src))
+         (name (pad:sym-at-in toks pt)))
+    (cond
+      ((string=? name "")
+       (list "no-symbol" pt (pad:js-stack j) (list)))
+      (#t
+       (let ((refs (pad:find-refs-in toks name)))
+         (if (null? refs)
+             (list "no-ref" pt (pad:js-stack j) (list))
+             (list "ok" pt (pad:js-stack j) refs)))))))
+
+(define (pad:jump-back j)
+  (let ((st (pad:js-stack j)))
+    (if (null? st)
+        (list "nothing-to-back" (pad:js-point j) st (list))
+        (list "ok" (car st) (cdr st) (list)))))
+
+(define (pad:jump-apply j r)
+  (pad:js (pad:js-src j) (cadr r) (caddr r)))
+
+(define (pad:kid-say-jump reason)
+  (cond
+    ((string=? reason "no-symbol") "put the cursor on a name first")
+    ((string=? reason "no-def") "could not find where that name is born")
+    ((string=? reason "no-ref") "that name is not used anywhere else")
+    ((string=? reason "nothing-to-back") "nowhere to jump back to")
+    (#t "the gate said no")))
+
+(define (pad:jump-reject! mid reason cmd)
+  (display "REJECT mid=")
+  (display (number->string mid))
+  (display " reason=")
+  (display reason)
+  (display " cmd=")
+  (display cmd)
+  (display " say=\"")
+  (display (pad:kid-say-jump reason))
+  (display "\"")
+  (newline)
+  0)
+
+(define (pad:jump-ok! cmd point nrefs)
+  (display "JUMP cmd=")
+  (display cmd)
+  (display " point=")
+  (display (number->string point))
+  (display " refs=")
+  (display (number->string nrefs))
+  (newline)
+  0)
+
+;; Offsets list as dotted string "1.4.9"
+(define (pad:offs-str xs)
+  (cond
+    ((null? xs) "none")
+    ((null? (cdr xs)) (number->string (car xs)))
+    (#t (string-append (number->string (car xs)) "."
+                       (pad:offs-str (cdr xs))))))
