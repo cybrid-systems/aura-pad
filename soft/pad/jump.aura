@@ -111,10 +111,10 @@
   (pad:find-refs-in (pad:hl-tokens src) name))
 
 ;; Result shape: (reason point stack refs) where reason "ok" or kid tag.
-(define (pad:goto-def j)
-  (let* ((src (pad:js-src j))
-         (pt (pad:js-point j))
-         (toks (pad:hl-tokens src))
+;; The -in forms take whole-page toks (M7 line cache hands them over so a
+;; jump key does not re-tokenize); the plain forms tokenize src.
+(define (pad:goto-def-in j toks)
+  (let* ((pt (pad:js-point j))
          (name (pad:sym-at-in toks pt)))
     (cond
       ((string=? name "")
@@ -131,10 +131,11 @@
                              (cons pt (pad:js-stack j)) defs))
                    (list "ok" dest (cons pt (pad:js-stack j)) defs)))))))))
 
-(define (pad:find-refs-cmd j)
-  (let* ((src (pad:js-src j))
-         (pt (pad:js-point j))
-         (toks (pad:hl-tokens src))
+(define (pad:goto-def j)
+  (pad:goto-def-in j (pad:hl-tokens (pad:js-src j))))
+
+(define (pad:find-refs-cmd-in j toks)
+  (let* ((pt (pad:js-point j))
          (name (pad:sym-at-in toks pt)))
     (cond
       ((string=? name "")
@@ -144,6 +145,9 @@
          (if (null? refs)
              (list "no-ref" pt (pad:js-stack j) (list))
              (list "ok" pt (pad:js-stack j) refs)))))))
+
+(define (pad:find-refs-cmd j)
+  (pad:find-refs-cmd-in j (pad:hl-tokens (pad:js-src j))))
 
 (define (pad:jump-back j)
   (let ((st (pad:js-stack j)))

@@ -38,15 +38,23 @@
 (define (pad:key-arg k) (quotient k 6))
 
 ;; List helpers (FlatAST-friendly char-code vectors as lists).
+;; take / drop on builtins (length, reverse, list-tail): same results as
+;; the recursive forms, but one Soft call instead of n (M7 key latency;
+;; every Soft call pays Aura #4343). Lists are never mutated in place, so
+;; sharing a tail is safe.
 (define (pad:take n xs)
-  (if (or (<= n 0) (null? xs))
-      (list)
-      (cons (car xs) (pad:take (- n 1) (cdr xs)))))
+  (let ((k (length xs)))
+    (cond
+      ((<= n 0) (list))
+      ((>= n k) xs)
+      (#t (reverse (list-tail (reverse xs) (- k n)))))))
 
 (define (pad:drop n xs)
-  (if (or (<= n 0) (null? xs))
-      xs
-      (pad:drop (- n 1) (cdr xs))))
+  (let ((k (length xs)))
+    (cond
+      ((<= n 0) xs)
+      ((>= n k) (list))
+      (#t (list-tail xs n)))))
 
 (define (pad:insert buf point ch)
   (append (pad:take point buf) (cons ch (pad:drop point buf))))

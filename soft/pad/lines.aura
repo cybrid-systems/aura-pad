@@ -32,8 +32,8 @@
         "open-line" "kill-line" "next-line" "prev-line"))
 
 ;; --- pure list helpers ---
-(define (pad:nth xs i)
-  (if (= i 0) (car xs) (pad:nth (cdr xs) (- i 1))))
+;; list-ref builtin (M7 key latency): one Soft call instead of i.
+(define (pad:nth xs i) (list-ref xs i))
 
 (define (pad:put-nth xs i v)
   (if (= i 0)
