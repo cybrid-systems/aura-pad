@@ -69,7 +69,7 @@ Latency: [`perf.md`](perf.md) · Engine gaps: [`ISSUES.md`](ISSUES.md).
 ## 5. Success metrics
 
 ### Correctness (gated in CI-style smoke)
-- `PAD_LIVE=0 bash scripts/smoke.sh` → `PAD_SMOKE_OK` (M0–M7) on the
+- `PAD_LIVE=0 bash scripts/smoke.sh` → `PAD_SMOKE_OK` (M0–M8) on the
   pinned image + tip binary.
 - Host models byte-match Soft (`PAD_*_MODEL_OK`); C goldens + fail-closed
   fixtures; `PAD_C_THIN_OK`.
