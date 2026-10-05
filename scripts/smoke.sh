@@ -19,6 +19,9 @@
 # → M7 snappy pad: line-incremental Soft key path (Soft tests
 # PAD_M7_TEST_OK, DIRTY audit PAD_M7_DIRTY_OK, key-path latency
 # PAD_PERF_OK + PAD_M7_PERF_OK; PAD_M7_OK). C unchanged.
+# → M8 kid onboarding card + intent worldline (welcome CARD,
+# goal: command, pd:goal race, gate/capability, undo KEEP;
+# PAD_M8_OK). Soft owns cards; C unchanged.
 # Ends with PAD_SMOKE_OK.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -81,5 +84,8 @@ bash "$ROOT/scripts/smoke_c.sh"
 
 echo "smoke: m7 snappy pad (line-incremental Soft key path + perf)"
 bash "$ROOT/scripts/smoke_m7.sh"
+
+echo "smoke: m8 kid card + intent worldline"
+bash "$ROOT/scripts/smoke_m8.sh"
 
 echo "smoke: PAD_SMOKE_OK"
