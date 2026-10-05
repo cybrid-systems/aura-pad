@@ -1,0 +1,1 @@
+(lambda () (list "kill-line" "kill-line" "left" "next-line" "prev-line" "type:hi"))

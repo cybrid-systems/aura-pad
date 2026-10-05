@@ -1,0 +1,36 @@
+;; M3 live: one host-written helper lambda (MiniMax via
+;; scripts/propose_minimax.py --helper). Any honest gate result is success;
+;; a missing file or a Soft error is not. HTTP stays in the host script.
+(load "/workspace/aura-pad/soft/pad/buffer.aura")
+(load "/workspace/aura-pad/soft/pad/rules.aura")
+(load "/workspace/aura-pad/soft/pad/lines.aura")
+(load "/workspace/aura-pad/soft/pad/helper.aura")
+
+(define (live-tag? s)
+  (or (string=? s "helper_keep")
+      (string=? s "helper_drop")
+      (string=? s "helper_heal")
+      (string=? s "helper_reject")))
+
+(define (main)
+  (display "DIALECT=live-soft-editor-pad-m3")
+  (newline)
+  (let ((seeded (pd:helper-seed! *helper-main-body*)))
+    (if (not (and (pair? seeded) (equal? (car seeded) #t)))
+        (display "PAD_M3_LIVE_FAIL seed\n")
+        (let ((path (getenv "PAD_PROPOSE_FILE")))
+          (if (not (and (string? path) (> (string-length path) 0)))
+              (display "PAD_M3_LIVE_FAIL path\n")
+              (let ((r (pd:helper-propose-file! path)))
+                (pad:stamp-world!)
+                (display "MAIN helper score=")
+                (display (pad:nstr *main-score*))
+                (display " body=")
+                (display *helper-main-body*)
+                (newline)
+                (pad:ltape! "main")
+                (if (and (pair? r) (pair? (cdr r)) (live-tag? (car (cdr r))))
+                    (display "PAD_M3_LIVE_OK\n")
+                    (display "PAD_M3_LIVE_FAIL\n"))))))))
+
+(main)

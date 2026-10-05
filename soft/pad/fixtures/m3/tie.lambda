@@ -1,0 +1,1 @@
+(lambda () (list "kill-line" 104 105 "open-line" "next-line" "type:au"))
