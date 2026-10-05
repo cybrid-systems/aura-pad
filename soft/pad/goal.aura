@@ -1,1 +1,4 @@
-@/tmp/push_goal_full.json
+;; aura-pad M8 -- intent worldline: kid goal + pd:goal helper race.
+;; Body split across goal_p1.aura + goal_p2.aura for MCP push size.
+(load "/workspace/aura-pad/soft/pad/goal_p1.aura")
+(load "/workspace/aura-pad/soft/pad/goal_p2.aura")
