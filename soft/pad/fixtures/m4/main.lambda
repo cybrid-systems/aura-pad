@@ -1,0 +1,1 @@
+(lambda () (list "right" "right" "kill-line" "type:dog" "next-line" "left" "kill-line" "type:dog ran" "open-line" "next-line" "type:they had fun"))

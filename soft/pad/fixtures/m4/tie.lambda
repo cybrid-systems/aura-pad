@@ -1,0 +1,1 @@
+(lambda () (list "replace-all:cat=dog" "switch:scratch" "eob" "set-mark" "prev-line" "copy-region" "switch:story" "eob" "yank"))

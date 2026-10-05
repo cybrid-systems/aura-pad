@@ -1,0 +1,1 @@
+(lambda () (begin (set! x 1) (list "replace-all:cat=dog")))

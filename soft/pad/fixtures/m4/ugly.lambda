@@ -1,0 +1,1 @@
+(lambda () (list "find:cat" #t "play"))

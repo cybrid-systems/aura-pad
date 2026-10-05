@@ -1,0 +1,1 @@
+(lambda () (list "find:cat" "rec" "replace:dog" "find-next" "stop" "play" "switch:scratch" "end" "set-mark" "eob" "copy-region" "switch:story" "eob" "yank"))

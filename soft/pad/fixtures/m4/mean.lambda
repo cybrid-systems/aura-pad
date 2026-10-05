@@ -1,0 +1,1 @@
+(lambda () (list "eob" "open-line" "next-line" "type:you are stupid"))
