@@ -1,0 +1,142 @@
+;; aura-pad M5 -- Soft pad bridge to landed Aura query:* / mutate:* surfaces.
+;; Honest tip APIs only (probed on /workspace/aura-grok Soft tip). No fake Soft
+;; APIs. Gaps (define-lookup unbound, query:ref-counts exported-but-unbound,
+;; query:code unbound) are documented in docs/m5.md and filed as Aura issues
+;; from aura-pad.
+;; Needs buffer.aura. Soft reserved: never bind quote.
+
+(require "std/query" all:)
+(require "std/mutate" all:)
+
+;; --- query discovery (stdlib wrappers, always safe) ---
+(define (pad:q-categories) (query:list-categories))
+(define (pad:q-help key) (query:help key))
+
+;; --- workspace load into Soft tip for AST queries ---
+;; set-code + eval-current. Returns "ok" or a kid reason string.
+(define (pad:q-load! src)
+  (try
+    (begin
+      (set-code src)
+      (eval-current)
+      "ok")
+    (catch (e) "load-fail")))
+
+(define (pad:q-find name)
+  (try
+    (query :find name)
+    (catch (e) (list))))
+
+(define (pad:q-defuse name)
+  (try
+    (query :def-use name)
+    (catch (e) (list))))
+
+(define (pad:q-defines)
+  (try
+    (query:defines)
+    (catch (e) (list))))
+
+(define (pad:q-find-by-name name)
+  (try
+    (query:find-by-name name)
+    (catch (e) (list))))
+
+;; --- mutate observability (safe defaults on empty workspace) ---
+(define (pad:m-summary) (mutate:summary))
+(define (pad:m-safe?) (mutate:boundary-safe?))
+(define (pad:m-depth) (mutate:boundary-depth))
+(define (pad:m-quota?) (mutate:quota-ok?))
+(define (pad:m-snapshot) (mutate:safety-snapshot))
+(define (pad:m-rolled?) (mutate:rolled-back?))
+(define (pad:m-rate) (mutate:rollback-rate))
+
+;; Honest mutation: name + new lambda source string.
+;; Returns #t / #f / or kid reason on catch.
+(define (pad:m-rebind! name code reason)
+  (try
+    (mutate:rebind name code reason)
+    (catch (e) #f)))
+
+;; alist helper: get value for key string like ":total"
+(define (pad:alist-get alist key)
+  (cond
+    ((null? alist) #f)
+    ((and (pair? (car alist)) (string=? (car (car alist)) key))
+     (cdr (car alist)))
+    (#t (pad:alist-get (cdr alist) key))))
+
+(define (pad:q-cats-str)
+  (let loop ((xs (pad:q-categories)) (out ""))
+    (cond
+      ((null? xs) out)
+      ((string=? out "") (loop (cdr xs) (car xs)))
+      (#t (loop (cdr xs) (string-append out "." (car xs)))))))
+
+(define (pad:query-tape! src)
+  (let ((load-r (pad:q-load! src)))
+    (display "QUERY load=")
+    (display load-r)
+    (display " cats=")
+    (display (pad:q-cats-str))
+    (display " help_find=")
+    (display (pad:q-help "find"))
+    (display " defs=")
+    (display (length (pad:q-defines)))
+    (display " safe=")
+    (display (if (pad:m-safe?) "yes" "no"))
+    (display " total=")
+    (display (pad:nstr (pad:alist-get (pad:m-summary) ":total")))
+    (newline)
+    load-r))
+
+(define (pad:query-find-line! name)
+  (let* ((ids (pad:q-find name))
+         (du (pad:q-defuse name)))
+    (display "QUERY find=")
+    (display name)
+    (display " nodes=")
+    (display (length ids))
+    (display " defuse_len=")
+    (display (length du))
+    (newline)
+    ids))
+
+(define (pad:mutate-line!)
+  (let ((s (pad:m-summary)))
+    (display "MUTATE total=")
+    (display (pad:nstr (pad:alist-get s ":total")))
+    (display " committed=")
+    (display (pad:nstr (pad:alist-get s ":committed")))
+    (display " rolled=")
+    (display (pad:nstr (pad:alist-get s ":rolled-back")))
+    (display " safe=")
+    (display (if (pad:m-safe?) "yes" "no"))
+    (display " depth=")
+    (display (pad:nstr (pad:m-depth)))
+    (display " quota=")
+    (display (if (pad:m-quota?) "yes" "no"))
+    (newline)
+    s))
+
+;; Gap markers Soft cannot honestly call on tip (for smoke asserts).
+(define *pad-q-gaps*
+  (list "define-lookup" "query:code" "query:ref-counts" "query:node-types"))
+
+(define (pad:q-gap? name)
+  (let loop ((xs *pad-q-gaps*))
+    (cond
+      ((null? xs) #f)
+      ((string=? name (car xs)) #t)
+      (#t (loop (cdr xs))))))
+
+(define (pad:gaps-line!)
+  (display "GAPS ")
+  (let loop ((xs *pad-q-gaps*) (first 1))
+    (if (null? xs)
+        (newline)
+        (begin
+          (if (= first 0) (display "."))
+          (display (car xs))
+          (loop (cdr xs) 0))))
+  0)
