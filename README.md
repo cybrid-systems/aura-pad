@@ -8,12 +8,15 @@ friendly reasons. The better score is stamped KEEP; the other is DROP.
 There is no C viewport in this tree.
 
 Design: [`docs/DESIGN.md`](docs/DESIGN.md).
-Milestones: [`docs/m0.md`](docs/m0.md).
+Milestones: [`docs/m0.md`](docs/m0.md), [`docs/m1.md`](docs/m1.md),
+[`docs/m2.md`](docs/m2.md).
 Repo: https://github.com/cybrid-systems/aura-pad
 
 中文简介：Aura Pad 是给小朋友也能玩的 Soft 小编辑器。缓冲区、光标、按键
 表都在 Soft 里。两种键位策略（温柔 / 大胆）赛跑同一串按键；Soft 门卫用
 简短理由拒绝坏命令；分数高的 KEEP，另一条 DROP。M0 没有 C 画面。
+M1 在运行中热换/自愈键位参数包；M2 让 MiniMax 提议参数包，Soft 门卫
+把关，严格更高分才 KEEP。
 
 - **M0** races `map-gentle` (mid 1) and `map-bold` (mid 2) on 24 seeded
   key steps toward the goal fixture `"hi aura"`. Score is
@@ -22,9 +25,18 @@ Repo: https://github.com/cybrid-systems/aura-pad
   `empty-line`, `need-space`, `not-print`). `fiber_live` only when both
   fiber joins return scores (`joins` equals spawned, backend > 0).
   Otherwise `host-sequential`. No C viewport. No `hot-strategy`.
-- **M1** (next) will hot-swap keymap packs mid-run.
-- **Propose** (later) will gate an AI-proposed keymap and KEEP only on a
-  strictly better score.
+- **M1** puts the keymap pack `(step room strict)` in a real
+  `std/hot-strategy` slot `pd:law`. Mid-run on the live buffer it
+  gate-rejects a `set!` body, `SWAP`s to `(2 12 0)` at key 10, `HEAL`s an
+  ugly two-field pack at key 15, and prints `MUTATE key=8 room-boost=2`.
+  Then the honest gentle vs bold race: bold 9 `KEEP`, gentle -2 `DROP`.
+  `PAD_M1_OK`. See [`docs/m1.md`](docs/m1.md).
+- **M2** lets MiniMax (host `scripts/propose_minimax.py`, api.minimax.cn)
+  propose a pack lambda. Soft gates it (no `set!`/`display`/`eval`/`load`/
+  `shell`/`http`), races it vs main (bold, 9) and `KEEP`s only on a
+  strictly better score; otherwise `DROP` + `heal!`. Fixtures: worse -2
+  DROP, better `(1 12 0)` 10 KEEP → `PAD_M2_PROPOSE_OK`; fixture burn
+  `PAD_BURN_OK`. See [`docs/m2.md`](docs/m2.md).
 
 ## Soft smoke
 
@@ -35,8 +47,12 @@ Soft runs natively in that container (no nested docker). Never
 `build_soft4132`. Needs `AURA_SANDBOX=off`.
 
 ```bash
+bash scripts/smoke.sh         # M0+M1+M2 fixtures (+ live MiniMax if keyed) → PAD_SMOKE_OK
 bash scripts/smoke_soft.sh    # M0 → PAD_M0_OK
-bash scripts/smoke.sh         # same entry for M0
+bash scripts/smoke_m1.sh      # M1 → PAD_M1_OK
+bash scripts/smoke_m2.sh      # M2 fixtures → PAD_M2_PROPOSE_OK
+PAD_PROPOSE=0 bash scripts/burn.sh   # fixture burn → PAD_BURN_OK
+PAD_LIVE=0 bash scripts/smoke.sh     # skip live MiniMax
 ```
 
 Scripts may be mode `100644` in git. Always invoke them with `bash`.
