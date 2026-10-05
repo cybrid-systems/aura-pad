@@ -25,7 +25,7 @@ Shipped as a Soft-side latency increment ([`m7.md`](m7.md)). The earlier
 - M7.3 Twelve-row insert < 50 ms and ≥ 2× vs M6; small page < 50 ms (`PAD_PERF_OK`, `PAD_M7_PERF_OK`). Soft floor published.
 - M7.4 `PAD_M7_OK`. M0–M6 markers still print.
 
-## M8 — intent worldline
+## M8 — intent worldline (done)
 
 No new Aura issue. Uses hot-strategy + fibers already on tip.
 
