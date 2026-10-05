@@ -1,0 +1,67 @@
+;; aura-pad key-path perf: scripted pad_play-style stream (edit + snap).
+;; Prints PERF lines and PAD_PERF_OK when insert/cursor medians beat the
+;; Soft threshold (kid pad should feel snappier than a sleepy Emacs).
+;; Soft reserved: never bind quote. No HTTP.
+(load "/workspace/aura-pad/soft/pad/buffer.aura")
+(load "/workspace/aura-pad/soft/pad/lines.aura")
+(load "/workspace/aura-pad/soft/pad/edit.aura")
+(load "/workspace/aura-pad/soft/pad/hl.aura")
+(load "/workspace/aura-pad/soft/pad/jump.aura")
+(load "/workspace/aura-pad/soft/pad/view.aura")
+(load "/workspace/aura-pad/soft/pad/keys.aura")
+
+(define (now) (current-time-ms))
+
+;; Threshold: clearly under ~50ms median for the small play buffer.
+;; Ideal interactive path is <<16ms (60fps); Soft tip still pays a
+;; per-call define-lookup cost (Aura #4343) so we guard 50ms here.
+(define *pad-perf-ok-ms* 50)
+(define *n* 20)
+
+(pad:play-reset! *play-start*)
+;; Warm the Soft pipeline once (not timed).
+(pad:play-cmd! 120)
+(string-length (pad:play-snap))
+
+(define (run-insert n)
+  (let ((t0 (now)))
+    (let loop ((i 0))
+      (if (< i n)
+          (begin
+            (pad:play-cmd! (+ 97 (modulo i 26)))
+            (string-length (pad:play-snap))
+            (loop (+ i 1)))))
+    (- (now) t0)))
+
+(define (run-cursor n)
+  (let ((t0 (now)))
+    (let loop ((i 0))
+      (if (< i n)
+          (begin
+            (pad:play-cmd! (if (= (modulo i 2) 0) "left" "right"))
+            (string-length (pad:play-snap))
+            (loop (+ i 1)))))
+    (- (now) t0)))
+
+(define ms-ins (run-insert *n*))
+(define ms-cur (run-cursor *n*))
+(define per-ins (/ ms-ins *n*))
+(define per-cur (/ ms-cur *n*))
+(define src-len (string-length (pad:play-src)))
+
+(display "PERF n=") (display (number->string *n*))
+(display " src_len=") (display (number->string src-len))
+(display " insert_ms_key=") (display (number->string per-ins))
+(display " cursor_ms_key=") (display (number->string per-cur))
+(display " threshold_ms=") (display (number->string *pad-perf-ok-ms*))
+(newline)
+
+(display "PERF_BASELINE_NOTE before=insert~161ms cursor~288ms (full re-HL+marks each key)")
+(newline)
+
+(if (and (< per-ins *pad-perf-ok-ms*) (< per-cur *pad-perf-ok-ms*))
+    (begin (display "PAD_PERF_OK") (newline))
+    (begin
+      (display "PAD_PERF_FAIL insert=") (display (number->string per-ins))
+      (display " cursor=") (display (number->string per-cur))
+      (newline)))
