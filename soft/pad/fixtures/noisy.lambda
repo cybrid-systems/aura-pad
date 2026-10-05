@@ -1,0 +1,1 @@
+(lambda () (begin (display "hi") (list 1 12 0)))
