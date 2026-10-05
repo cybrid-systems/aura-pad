@@ -8,10 +8,13 @@ friendly reasons. The better score is stamped KEEP; the other is DROP.
 From M6 a thin C viewport draws the pad: Soft owns the editor and the
 HL/marks/kid words, C only blits Soft's `SNAP v1 pad` blocks.
 
+Requirements: [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md).
 Design: [`docs/DESIGN.md`](docs/DESIGN.md).
+Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 Milestones: [`docs/m0.md`](docs/m0.md), [`docs/m1.md`](docs/m1.md),
 [`docs/m2.md`](docs/m2.md), [`docs/m3.md`](docs/m3.md), [`docs/m35.md`](docs/m35.md),
-[`docs/m4.md`](docs/m4.md), [`docs/m5.md`](docs/m5.md), [`docs/m6.md`](docs/m6.md).
+[`docs/m4.md`](docs/m4.md), [`docs/m5.md`](docs/m5.md), [`docs/m6.md`](docs/m6.md),
+[`docs/m7.md`](docs/m7.md).
 Repo: https://github.com/cybrid-systems/aura-pad
 
 中文简介：Aura Pad 是给小朋友也能玩的 Soft 小编辑器。缓冲区、光标、按键
@@ -33,8 +36,8 @@ query:* / mutate:* Soft 桥；没有的原语记成 GAPS 并向 Aura 提 issue�
 M6 “加c”：一个很薄的 C 画面。编辑、高亮、跳转标记、按键表和所有给
 小朋友看的话都在 Soft；Soft 把它们打包成 `SNAP v1 pad` 块，C 只负责
 把字母换成颜色画到终端（以及把原始按键字节转发给 Soft）。
-按键延迟：Soft 侧增量/缓存高亮 + DIRTY 行，插入/光标从约 161/288 ms
-降到约 36/18 ms（见 docs/perf.md）。
+按键延迟：M6 缓存后小页面约 49/29 ms；M7 行级缓存后约 23/12 ms，
+12 行页面插入约 230→26–30 ms（见 docs/perf.md）。不声称比 vi/Emacs 快。
 
 - **M0** races `map-gentle` (mid 1) and `map-bold` (mid 2) on 24 seeded
   key steps toward the goal fixture `"hi aura"`. Score is
@@ -104,11 +107,21 @@ M6 “加c”：一个很薄的 C 画面。编辑、高亮、跳转标记、按�
   `PAD_C_THIN_OK`. Tests: 61 Soft checks, host model byte-for-byte,
   golden blits, fail-closed fixtures, soft_play → C → `PAD_C_OK`. See
   [`docs/m6.md`](docs/m6.md).
-- **Key latency** — Soft no longer full-buffer re-HL on every key:
+- **Key latency (M6)** — Soft no longer full-buffer re-HL on every key:
   one tokenize per text change, play cache for cursor moves, optional
   SNAP `DIRTY` for lighter C redraw. Before ~161/288 ms/key → after
-  ~36/18 ms/key (insert/cursor); `PAD_PERF_OK` < 50 ms. Soft kernel
-  define-lookup still scales (#4343). See [`docs/perf.md`](docs/perf.md).
+  ~49/29 ms/key (insert/cursor); Soft kernel define-lookup still scales
+  (#4343). See [`docs/perf.md`](docs/perf.md).
+- **M7 snappy pad** — Soft line-incremental key path (`lc.aura`): only
+  the edited line is re-tokenized; marks rebuild only on rows that hold
+  the old/new name; DIRTY is exact (sound + tight, host-audited); list
+  helpers on builtins; jump from cache. Twelve-row insert ~230 →
+  ~26–30 ms/key (≥ 2× vs the M6 path), cursor ~13 ms; small page
+  ~23/12 ms. Every cached frame equals the whole-page oracle (147 Soft
+  checks). C unchanged. Soft floors published (#4343 + in-place
+  `vector-set!` cost). Tests: `PAD_M7_TEST_OK`, `PAD_M7_DIRTY_OK`,
+  `PAD_PERF_OK`, `PAD_M7_PERF_OK`, `PAD_M7_OK`. See
+  [`docs/m7.md`](docs/m7.md).
 
 ## Soft smoke
 
@@ -119,7 +132,7 @@ Soft runs natively in that container (no nested docker). Never
 `build_soft4132`. Needs `AURA_SANDBOX=off`.
 
 ```bash
-bash scripts/smoke.sh         # M0+M1+M2+burn+M3+M3.5+M4+M5+M6 (+ live MiniMax if keyed) → PAD_SMOKE_OK
+bash scripts/smoke.sh         # M0..M7 (+ live MiniMax if keyed) → PAD_SMOKE_OK
 bash scripts/smoke_soft.sh    # M0 → PAD_M0_OK
 bash scripts/smoke_m1.sh      # M1 → PAD_M1_OK
 bash scripts/smoke_m2.sh      # M2 fixtures → PAD_M2_PROPOSE_OK
@@ -129,8 +142,9 @@ bash scripts/smoke_m35.sh     # M3.5 PAREN_OK, PAD_MODEL_OK, PAD_TEST_OK, PAD_M3
 bash scripts/smoke_m4.sh      # M4 PAREN_OK, PAD_M4_MODEL_OK, PAD_M4_TEST_OK, PAD_M4_OK (+ live if keyed)
 bash scripts/smoke_m5.sh      # M5 PAREN_OK, PAD_M5_MODEL_OK, PAD_M5_TEST_OK, PAD_M5_OK
 bash scripts/smoke_c.sh       # M6 Soft dump → thin C blit … PAD_C_OK (PAD_C_DOCKER=1 builds C in the image)
-bash scripts/smoke_perf.sh    # key-path ms/key → PAD_PERF_OK (<50ms median)
-PAD_LIVE=0 bash scripts/smoke.sh     # skip live MiniMax (includes perf)
+bash scripts/smoke_m7.sh      # M7 Soft tests + DIRTY audit + perf → PAD_M7_OK
+bash scripts/smoke_perf.sh    # key-path ms/key → PAD_PERF_OK + PAD_M7_PERF_OK
+PAD_LIVE=0 bash scripts/smoke.sh     # skip live MiniMax (includes M7)
 ```
 
 Scripts may be mode `100644` in git. Always invoke them with `bash`.
