@@ -1,0 +1,200 @@
+;; aura-pad M0 -- Soft FlatAST text buffer (char-code list), point, Soft gate.
+;; No C viewport. Goal fixture is the char codes for "hi aura".
+;; Commands pass the gate before apply. Rejected commands never mutate.
+;; Soft reserved: never bind the identifier quote; use qf / mid / tag.
+
+(define *steps* 24)
+(define *seed* 20261005)
+(define *max-gentle* 8)
+(define *max-bold* 20)
+
+;; Goal: "hi aura"
+(define *goal* (list 104 105 32 97 117 114 97))
+
+;; Main-world buffer state. Only the stamp writes it.
+(define *buf* (list))
+(define *point* 0)
+(define *edits* 0)
+(define *rejects* 0)
+(define *dist* 0)
+(define *score* 0)
+(define *slot-tag* "none")
+(define *steps-done* 0)
+
+(define (pad:dialect)
+  "live-soft-editor-pad-m0")
+
+(define (pad:nstr n)
+  (if (< n 0)
+      (string-append "-" (number->string (- 0 n)))
+      (number->string n)))
+
+(define (pad:abs n) (if (< n 0) (- 0 n) n))
+
+(define (pad:seed-step seed)
+  (modulo (+ (* seed 75) 74) 65537))
+
+(define (pad:key-op k) (modulo k 6))
+(define (pad:key-arg k) (quotient k 6))
+
+;; List helpers (FlatAST-friendly char-code vectors as lists).
+(define (pad:take n xs)
+  (if (or (<= n 0) (null? xs))
+      (list)
+      (cons (car xs) (pad:take (- n 1) (cdr xs)))))
+
+(define (pad:drop n xs)
+  (if (or (<= n 0) (null? xs))
+      xs
+      (pad:drop (- n 1) (cdr xs))))
+
+(define (pad:insert buf point ch)
+  (append (pad:take point buf) (cons ch (pad:drop point buf))))
+
+(define (pad:delete-back buf point)
+  (append (pad:take (- point 1) buf) (pad:drop point buf)))
+
+;; Distance to goal: length gap + positional mismatches.
+(define (pad:dist buf goal)
+  (let loop ((a buf) (b goal) (d 0))
+    (cond
+      ((and (null? a) (null? b)) d)
+      ((null? a) (+ d (length b)))
+      ((null? b) (+ d (length a)))
+      ((= (car a) (car b)) (loop (cdr a) (cdr b) d))
+      (#t (loop (cdr a) (cdr b) (+ d 1))))))
+
+(define (pad:score-of edits rejects dist)
+  (- edits (+ (* 2 rejects) dist)))
+
+;; Soft gate. Returns "ok" or a kid-friendly reason.
+;; map 1 = gentle, map 2 = bold.
+;; op: 0 left, 1 right, 2 insert-letter, 3 delete-back, 4 insert-space, 5 home/end.
+(define (pad:gate map op arg buf point)
+  (let ((len (length buf))
+        (mx (if (= map 1) *max-gentle* *max-bold*)))
+    (cond
+      ((and (= op 0) (= point 0) (= map 1)) "too-far")
+      ((and (= op 1) (>= point len) (= map 1)) "too-far")
+      ((and (= op 3) (= point 0)) "empty-line")
+      ((and (= op 2) (>= len mx)) "need-space")
+      ((and (= op 4) (>= len mx)) "need-space")
+      ((and (= op 2) (= map 1) (> (modulo arg 30) 25)) "not-print")
+      (#t "ok"))))
+
+(define (pad:reject! step mid reason tag)
+  (display "REJECT mid=")
+  (display (number->string mid))
+  (display " reason=")
+  (display reason)
+  (display " step=")
+  (display (number->string step))
+  (display " slot=")
+  (display tag)
+  (newline)
+  0)
+
+(define (pad:tape! step buf point tag)
+  (display "TAPE step=")
+  (display (number->string step))
+  (display " len=")
+  (display (number->string (length buf)))
+  (display " point=")
+  (display (number->string point))
+  (display " dist=")
+  (display (number->string (pad:dist buf *goal*)))
+  (display " slot=")
+  (display tag)
+  (newline)
+  0)
+
+;; Apply one accepted command. Returns (buf point).
+;; Bold clamps moves; gentle already gated too-far.
+(define (pad:apply map op arg buf point)
+  (let ((len (length buf)))
+    (cond
+      ((= op 0)
+       (let ((step (if (= map 1) 1 3)))
+         (let ((np (- point step)))
+           (list buf (if (< np 0) 0 np)))))
+      ((= op 1)
+       (let ((step (if (= map 1) 1 3)))
+         (let ((np (+ point step)))
+           (list buf (if (> np len) len np)))))
+      ((= op 2)
+       (let ((ch (+ 97 (modulo arg 26))))
+         (list (pad:insert buf point ch) (+ point 1))))
+      ((= op 3)
+       (list (pad:delete-back buf point) (- point 1)))
+      ((= op 4)
+       (list (pad:insert buf point 32) (+ point 1)))
+      ((= op 5)
+       ;; gentle: end; bold: home
+       (if (= map 1)
+           (list buf len)
+           (list buf 0)))
+      (#t (list buf point)))))
+
+;; Pure play of one keymap against the seeded key sequence.
+;; print=0 silent score, print=1 REJECT audit, print=2 TAPE stamp.
+;; Returns (score edits rejects dist buf point).
+(define (pad:sim map mid tag print)
+  (let loop ((i 0)
+             (r (pad:seed-step *seed*))
+             (buf (list))
+             (pt 0)
+             (edits 0)
+             (rejs 0))
+    (if (>= i *steps*)
+        (let ((d (pad:dist buf *goal*)))
+          (list (pad:score-of edits rejs d) edits rejs d buf pt))
+        (let* ((op (pad:key-op r))
+               (arg (pad:key-arg r))
+               (reason (pad:gate map op arg buf pt)))
+          (if (string=? reason "ok")
+              (let* ((st (pad:apply map op arg buf pt))
+                     (buf1 (car st))
+                     (pt1 (car (cdr st))))
+                (if (and (= print 2) (= (modulo (+ i 1) 8) 0))
+                    (pad:tape! (+ i 1) buf1 pt1 tag))
+                (loop (+ i 1)
+                      (pad:seed-step r)
+                      buf1
+                      pt1
+                      (+ edits 1)
+                      rejs))
+              (begin
+                (if (and (= print 1) (< rejs 3))
+                    (pad:reject! (+ i 1) mid reason tag))
+                (loop (+ i 1)
+                      (pad:seed-step r)
+                      buf
+                      pt
+                      edits
+                      (+ rejs 1))))))))
+
+(define (pad:r-score s) (car s))
+(define (pad:r-edits s) (car (cdr s)))
+(define (pad:r-rejects s) (car (cdr (cdr s))))
+(define (pad:r-dist s) (car (cdr (cdr (cdr s)))))
+(define (pad:r-buf s) (car (cdr (cdr (cdr (cdr s))))))
+(define (pad:r-point s) (car (cdr (cdr (cdr (cdr (cdr s)))))))
+
+;; Score only. No set! of world slots -- fiber-safe.
+(define (pad:score map mid)
+  (pad:r-score (pad:sim map mid "race" 0)))
+
+(define (pad:audit-run map mid tag)
+  (pad:sim map mid tag 1))
+
+(define (pad:stamp! map mid tag)
+  (let ((s (pad:sim map mid tag 2)))
+    (set! *slot-tag* tag)
+    (set! *buf* (pad:r-buf s))
+    (set! *point* (pad:r-point s))
+    (set! *edits* (pad:r-edits s))
+    (set! *rejects* (pad:r-rejects s))
+    (set! *dist* (pad:r-dist s))
+    (set! *score* (pad:r-score s))
+    (set! *steps-done* *steps*)
+    (pad:r-score s)))
