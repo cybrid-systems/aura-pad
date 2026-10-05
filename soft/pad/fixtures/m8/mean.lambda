@@ -1,2 +1,1 @@
-(lambda (s)
-  (list (list "type" "stupid")))
+(lambda () (list "kill-line" "type:you are stupid"))

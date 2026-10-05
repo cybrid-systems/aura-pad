@@ -1,2 +1,1 @@
-(lambda (s)
-  not-a-plan)
+(lambda () "kill-line")
