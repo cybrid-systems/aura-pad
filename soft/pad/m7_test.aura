@@ -1,0 +1,245 @@
+;; M7 Soft tests: line-incremental key path (lc.aura).
+;; Oracle = the M6 whole-page path (pad:hl-tokens, pad:snap-text). Every
+;; frame the cache produces must equal it byte for byte (DIRTY aside).
+;; Ends PAD_M7_TEST_OK. No HTTP, no fibers. Soft reserved: never bind quote.
+(load "/workspace/aura-pad/soft/pad/buffer.aura")
+(load "/workspace/aura-pad/soft/pad/lines.aura")
+(load "/workspace/aura-pad/soft/pad/edit.aura")
+(load "/workspace/aura-pad/soft/pad/hl.aura")
+(load "/workspace/aura-pad/soft/pad/jump.aura")
+(load "/workspace/aura-pad/soft/pad/view.aura")
+(load "/workspace/aura-pad/soft/pad/lc.aura")
+(load "/workspace/aura-pad/soft/pad/keys.aura")
+
+(define *fail* 0)
+(define *checks* 0)
+
+(define (show s)
+  (list->string (map (lambda (c) (if (= (char->integer c) 10) #\| c))
+                     (string->list s))))
+
+(define (expect tag got want)
+  (set! *checks* (+ *checks* 1))
+  (display "T ") (display tag) (display "=")
+  (display (if (number? got) (pad:nstr got) "?"))
+  (if (and (number? got) (= got want))
+      (display " OK")
+      (begin (display " WANT=") (display (pad:nstr want)) (set! *fail* (+ *fail* 1))))
+  (newline)
+  got)
+
+(define (expect-str tag got want)
+  (set! *checks* (+ *checks* 1))
+  (display "T ") (display tag) (display "=")
+  (display (if (string? got) (show got) "?"))
+  (if (and (string? got) (string=? got want))
+      (display " OK")
+      (begin (display " WANT=") (display (show want)) (set! *fail* (+ *fail* 1))))
+  (newline)
+  got)
+
+;; Quiet boolean check (frame diffs are long; print only the tag).
+(define (expect-true tag ok)
+  (set! *checks* (+ *checks* 1))
+  (display "T ") (display tag)
+  (if ok (display " OK") (begin (display " WANT=true") (set! *fail* (+ *fail* 1))))
+  (newline)
+  ok)
+
+;; --- 1. line tokenizer == M5 whole-string tokenizer on one line ---
+(define *tok-fx*
+  (list "(define (hello x) (+ x 1)) ; hi"
+        "(query:find hello) (mutate:rebind f g)"
+        "\"a \\\"b\\\" c\" 12 x1 1x (f 3)"
+        "  \"cat\"123 ;; note \"q\""
+        "set! null? string=? <= -> a.b"
+        "#t #f 'x `y ,z @w [v] {u}"
+        "\"open string"
+        "\"ends with escape\\"
+        ""
+        "   "
+        "7"
+        "(display \"λ\") ; é"))
+
+(define (tok-tests!)
+  (let loop ((xs *tok-fx*) (i 0))
+    (if (null? xs)
+        0
+        (let ((r (pad:lc-line-toks (car xs))))
+          (expect-true (string-append "TOK_EQ_" (number->string i))
+                       (equal? (car r) (pad:hl-tokens (car xs))))
+          (expect-true (string-append "COLOR_EQ_" (number->string i))
+                       (string=? (pad:lc-tape (car xs) (car r))
+                                 (pad:hl-color (car xs))))
+          (loop (cdr xs) (+ i 1)))))
+  (expect "TOK_OPEN_6" (if (cadr (pad:lc-line-toks "\"open string")) 1 0) 1)
+  (expect "TOK_OPEN_7" (if (cadr (pad:lc-line-toks "\"ends with escape\\")) 1 0) 1)
+  (expect "TOK_CLOSED_2" (if (cadr (pad:lc-line-toks "\"a\" b")) 1 0) 0)
+  (expect "TOK_CLOSED_EOL" (if (cadr (pad:lc-line-toks "x \"a\"")) 1 0) 0)
+  0)
+
+;; --- 2. every play frame == pad:snap-text oracle ---
+(define (strip-dirty s)
+  (string-join
+    (let loop ((xs (pad:v-split s)) (acc (list)))
+      (cond
+        ((null? xs) (reverse acc))
+        ((string-prefix? (car xs) "DIRTY ") (loop (cdr xs) acc))
+        (#t (loop (cdr xs) (cons (car xs) acc)))))
+    "\n"))
+
+(define (dirty-of s)
+  (let loop ((xs (pad:v-split s)))
+    (cond
+      ((null? xs) "none")
+      ((string-prefix? (car xs) "DIRTY lines=")
+       (substring (car xs) 12 (string-length (car xs))))
+      (#t (loop (cdr xs))))))
+
+(define (oracle)
+  (pad:snap-text (pad:play-title) (pad:es-L *pl-st*) (pad:es-l *pl-st*)
+                 (pad:es-col *pl-st*) *pl-say*))
+
+(define *last-snap* "")
+
+;; Feed one protocol line, snap, diff against the oracle.
+(define (step! tag line)
+  (pad:play-line! line)
+  (let ((s (pad:play-snap)))
+    (set! *last-snap* s)
+    (expect-true (string-append "FRAME_" tag) (string=? (strip-dirty s) (oracle)))
+    s))
+
+(define (keys! tag lines)
+  (let loop ((xs lines) (i 0))
+    (if (null? xs)
+        0
+        (begin (step! (string-append tag "_" (number->string i)) (car xs))
+               (loop (cdr xs) (+ i 1))))))
+
+(define (lc-str) (string-append (number->string (pad:es-l *pl-st*)) ":"
+                                (number->string (pad:es-col *pl-st*))))
+
+(define (frame-tests!)
+  ;; small M6 start page
+  (pad:play-reset! *play-start*)
+  (let ((s0 (pad:play-snap)))
+    (expect-true "FRAME_FIRST" (string=? s0 (oracle)))
+    (expect-str "FIRST_NO_DIRTY" (dirty-of s0) "none"))
+  ;; the M6 smoke key bytes: down, end, back back 4 ) home right ctrl-g ctrl-b ctrl-r tab
+  (keys! "M6" (list "IN 27" "IN 91" "IN 66" "IN 5" "IN 127" "IN 127" "IN 52"
+                    "IN 41" "IN 1" "IN 27" "IN 91" "IN 67" "IN 7" "IN 2" "IN 18" "IN 9"))
+  (expect-str "M6_TEXT" (show (pad:play-src)) "(define (hello x) (+ x 1))|(hello 4)")
+  (expect-str "M6_LC" (lc-str) "1:1")
+
+  ;; twelve-line page: type, enter, join, kill/yank, undo, jump, open string
+  (pad:play-reset! *lc-big-page*)
+  (pad:play-snap)
+  (expect "BIG_RETOK_FIRST" *lc-retok* 12)
+  (keys! "BIG_NAV" (list "KEY next-line" "KEY next-line" "KEY next-line"
+                         "KEY next-line" "KEY next-line" "KEY next-line" "KEY end"))
+  (expect "BIG_RETOK_NAV" *lc-retok* 12)
+  ;; type " ok" at the end of row 6 "(hello 3)" -> only row 6 re-tokenized
+  (step! "BIG_SP" "IN 32")
+  (expect-str "BIG_SP_DIRTY" (dirty-of *last-snap*) "6")
+  (step! "BIG_O" "IN 111")
+  (step! "BIG_K" "IN 107")
+  (expect "BIG_RETOK_TYPE" *lc-retok* 15)
+  (expect "BIG_LINE_EDITS" *lc-lines* 3)
+  (expect "BIG_MOVES" *lc-moves* 7)
+  (expect-str "BIG_ROW6" (show (list->string (map integer->char
+                                                 (pad:nth (pad:es-L *pl-st*) 6))))
+              "(hello 3) ok")
+  ;; enter on a full page (12 rows) is a kid REJECT: nothing re-tokenized
+  (step! "BIG_ENTER" "IN 13")
+  (expect "BIG_RETOK_ENTER" *lc-retok* 15)
+  (expect "BIG_ROWS_ENTER" (length (pad:es-L *pl-st*)) 12)
+  (expect-str "BIG_ENTER_SAY" *pl-say* "this line is full")
+  (keys! "BIG_BACK" (list "IN 127" "IN 127" "IN 127"))
+  (expect-str "BIG_BACK_ROW6" (show (list->string (map integer->char
+                                                      (pad:nth (pad:es-L *pl-st*) 6))))
+              "(hello 3)")
+  ;; join row 7 onto row 6 and split it again (shift -1 then +1)
+  (keys! "BIG_JOIN" (list "KEY next-line" "KEY home" "IN 127"))
+  (expect "BIG_ROWS_JOIN" (length (pad:es-L *pl-st*)) 11)
+  (let ((r0 *lc-retok*))
+    (keys! "BIG_SPLIT" (list "IN 13"))
+    ;; split = two fresh rows; the four rows below shift +1 and stay cached
+    (expect "BIG_RETOK_SPLIT" (- *lc-retok* r0) 2))
+  (expect "BIG_ROWS_SPLIT" (length (pad:es-L *pl-st*)) 12)
+  ;; kill-line / yank / undo
+  (keys! "BIG_KILL" (list "KEY bob" "IN 11" "IN 25" "IN 31" "IN 31"))
+  (expect-str "BIG_UNDO_ROW0" (show (list->string (map integer->char
+                                                      (pad:nth (pad:es-L *pl-st*) 0))))
+              "(define (hello x) (+ x 1))")
+  ;; cursor onto "hello" on row 0: marks change on other rows, all exact
+  (keys! "BIG_MARKS" (list "KEY right" "KEY right" "KEY right" "KEY right"
+                           "KEY right" "KEY right" "KEY right" "KEY right"
+                           "KEY right"))
+  (expect-str "BIG_MARKS_LC" (lc-str) "0:9")
+  ;; cursor walks onto "hello": every row that uses hello repaints
+  (expect-str "BIG_MARKS_DIRTY" (dirty-of *last-snap*) "0,1,6,10,11")
+  (step! "BIG_MARKS_IN" "KEY right")
+  ;; still on hello: marks unchanged, only the cursor row
+  (expect-str "BIG_MARKS_SAME" (dirty-of *last-snap*) "0")
+  ;; jump through cached toks == full tokenize
+  (expect-true "LC_TOKS_EQ" (equal? (pad:lc-toks (pad:es-L *pl-st*))
+                                    (pad:hl-tokens (pad:play-src))))
+  (keys! "BIG_JUMP" (list "KEY eob" "KEY home" "KEY right" "IN 7" "IN 18" "IN 2"))
+  (expect-str "BIG_JUMP_SAY" *pl-say* "jumped back")
+  ;; open a string on row 3 -> full fallback, still exact; close it -> fast
+  (keys! "BIG_OPEN" (list "KEY bob" "KEY next-line" "KEY next-line" "KEY next-line"
+                          "KEY next-line" "KEY end" "IN 34"))
+  (expect "BIG_FULL_ON" *lc-full* 1)
+  (keys! "BIG_OPEN2" (list "IN 120" "KEY next-line" "KEY prev-line"))
+  (keys! "BIG_CLOSE" (list "KEY end" "IN 34"))
+  (expect "BIG_FULL_OFF" *lc-full* 0)
+  (keys! "BIG_AFTER" (list "IN 127" "IN 127" "IN 127" "KEY next-line" "IN 32"))
+  (expect-true "LC_TOKS_EQ2" (equal? (pad:lc-toks (pad:es-L *pl-st*))
+                                     (pad:hl-tokens (pad:play-src))))
+  0)
+
+;; --- 3. DIRTY: rows whose T/H/M changed + cursor row, never fewer ---
+(define (dirty-tests!)
+  (pad:play-reset! *lc-big-page*)
+  (pad:play-snap)
+  (pad:play-line! "KEY eob")
+  (let ((s (pad:play-snap)))
+    ;; cursor 0:0 -> 11:15: row 0 loses the cursor (C repaints prev row),
+    ;; row 11 gets it; name under the cursor goes "" -> "" (end of line)
+    (expect-str "DIRTY_EOB" (dirty-of s) "11"))
+  (pad:play-line! "KEY home")
+  (pad:play-line! "KEY right")
+  (let ((s (pad:play-snap)))
+    ;; now on "hello" in (hello (bye 5)): every row with hello marks changes
+    (expect-str "DIRTY_HELLO" (dirty-of s) "0,1,6,10,11"))
+  (pad:play-line! "IN 9")
+  (let ((s (pad:play-snap)))
+    (expect-str "DIRTY_REJECT" (dirty-of s) "11")
+    (expect-str "DIRTY_REJECT_SAY" *pl-say* "that key does nothing yet"))
+  0)
+
+(tok-tests!)
+(frame-tests!)
+(dirty-tests!)
+
+;; --- 4. long line (> 64 chars) uses the per-char fallbacks, still exact ---
+(define (long-tests!)
+  (pad:play-reset! "(define (hello x) (+ x 1)) (define (bye y) (hello y)) (hello 3) ; long\n(hello 4)")
+  (set! *max-col* 200)
+  (pad:play-snap)
+  (keys! "LONG" (list "KEY right" "KEY right" "KEY right" "KEY right" "KEY right"
+                      "KEY right" "KEY right" "KEY right" "KEY right" "KEY right"
+                      "KEY eob" "IN 120" "KEY bob" "KEY end" "IN 32" "IN 104"))
+  0)
+(long-tests!)
+
+(display "M7STATS ") (display (pad:lc-stats)) (newline)
+(display "TESTS checks=")
+(display (number->string *checks*))
+(display " fail=")
+(display (number->string *fail*))
+(newline)
+(if (= *fail* 0)
+    (begin (display "PAD_M7_TEST_OK") (newline))
+    (begin (display "PAD_M7_TEST_FAIL") (newline)))

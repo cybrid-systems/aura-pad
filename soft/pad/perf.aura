@@ -1,6 +1,9 @@
 ;; aura-pad key-path perf: scripted pad_play-style stream (edit + snap).
-;; Prints PERF lines and PAD_PERF_OK when insert/cursor medians beat the
-;; Soft threshold (kid pad should feel snappier than a sleepy Emacs).
+;; M6 gate: small page insert/cursor medians < 50 ms -> PAD_PERF_OK.
+;; M7 gate: on the twelve-line page the line cache (pad:play-snap) must
+;; beat 50 ms/key AND be >= 2x faster than the M6 whole-page path
+;; (pad:play-snap-m6) on insert -> PAD_M7_PERF_OK.
+;; FLOOR prints the Soft per-call cost with the pad loaded (Aura #4343).
 ;; Soft reserved: never bind quote. No HTTP.
 (load "/workspace/aura-pad/soft/pad/buffer.aura")
 (load "/workspace/aura-pad/soft/pad/lines.aura")
@@ -8,46 +11,91 @@
 (load "/workspace/aura-pad/soft/pad/hl.aura")
 (load "/workspace/aura-pad/soft/pad/jump.aura")
 (load "/workspace/aura-pad/soft/pad/view.aura")
+(load "/workspace/aura-pad/soft/pad/lc.aura")
 (load "/workspace/aura-pad/soft/pad/keys.aura")
 
 (define (now) (current-time-ms))
 
-;; Threshold: clearly under ~50ms median for the small play buffer.
+;; Threshold: clearly under ~50ms per key on the play pages.
 ;; Ideal interactive path is <<16ms (60fps); Soft tip still pays a
-;; per-call define-lookup cost (Aura #4343) so we guard 50ms here.
+;; per-call cost (Aura #4343) so we guard 50ms here.
 (define *pad-perf-ok-ms* 50)
+(define *m7-speedup-min* 2)
 (define *n* 20)
 
-(pad:play-reset! *play-start*)
-;; Warm the Soft pipeline once (not timed).
-(pad:play-cmd! 120)
-(string-length (pad:play-snap))
+;; snapper: 1 = M7 line cache, 0 = M6 whole-page reference
+(define (snap! which)
+  (string-length (if (= which 1) (pad:play-snap) (pad:play-snap-m6))))
 
-(define (run-insert n)
+(define (setup! page row which)
+  (pad:play-reset! page)
+  (let loop ((i 0))
+    (if (< i row) (begin (pad:play-cmd! "next-line") (loop (+ i 1)))))
+  (pad:play-cmd! "end")
+  ;; warm the Soft pipeline once (not timed)
+  (pad:play-cmd! 120)
+  (snap! which))
+
+(define (run-insert n which)
   (let ((t0 (now)))
     (let loop ((i 0))
       (if (< i n)
           (begin
             (pad:play-cmd! (+ 97 (modulo i 26)))
-            (string-length (pad:play-snap))
+            (snap! which)
             (loop (+ i 1)))))
     (- (now) t0)))
 
-(define (run-cursor n)
+(define (run-cursor n which)
   (let ((t0 (now)))
     (let loop ((i 0))
       (if (< i n)
           (begin
             (pad:play-cmd! (if (= (modulo i 2) 0) "left" "right"))
-            (string-length (pad:play-snap))
+            (snap! which)
             (loop (+ i 1)))))
     (- (now) t0)))
 
-(define ms-ins (run-insert *n*))
-(define ms-cur (run-cursor *n*))
-(define per-ins (/ ms-ins *n*))
-(define per-cur (/ ms-cur *n*))
+;; edit only (gate + apply, no snap): where the rest of a key goes
+(define (run-cmd n)
+  (let ((t0 (now)))
+    (let loop ((i 0))
+      (if (< i n)
+          (begin (pad:play-cmd! (+ 97 (modulo i 26))) (loop (+ i 1)))))
+    (- (now) t0)))
+
+(define (per ms n) (quotient ms n))
+
+;; --- small M6 start page (two rows), M7 path ---
+(setup! *play-start* 1 1)
+(define ms-ins (run-insert *n* 1))
+(define ms-cur (run-cursor *n* 1))
+(define per-ins (per ms-ins *n*))
+(define per-cur (per ms-cur *n*))
 (define src-len (string-length (pad:play-src)))
+
+;; --- twelve-line page, M6 reference (before) ---
+(setup! *lc-big-page* 6 0)
+(define big-m6-ins (per (run-insert *n* 0) *n*))
+(define big-m6-cur (per (run-cursor *n* 0) *n*))
+(define big-len (string-length (pad:play-src)))
+
+;; --- twelve-line page, M7 line cache (after) ---
+(setup! *lc-big-page* 6 1)
+(define r0 *lc-retok*)
+(define big-ins (per (run-insert *n* 1) *n*))
+(define big-retok (- *lc-retok* r0))
+(define big-cur (per (run-cursor *n* 1) *n*))
+(setup! *lc-big-page* 6 1)
+(define big-cmd (per (run-cmd *n*) *n*))
+
+;; --- Soft floor: one tiny pad call with the pad loaded (#4343) ---
+(define floor-n 2000)
+(define floor-ms
+  (let ((t0 (now)))
+    (let loop ((i 0))
+      (if (< i floor-n) (begin (pad:lc-k "a" 0) (loop (+ i 1)))))
+    (- (now) t0)))
 
 (display "PERF n=") (display (number->string *n*))
 (display " src_len=") (display (number->string src-len))
@@ -55,7 +103,18 @@
 (display " cursor_ms_key=") (display (number->string per-cur))
 (display " threshold_ms=") (display (number->string *pad-perf-ok-ms*))
 (newline)
-
+(display "PERF_BIG rows=12 src_len=") (display (number->string big-len))
+(display " m6_insert_ms_key=") (display (number->string big-m6-ins))
+(display " m6_cursor_ms_key=") (display (number->string big-m6-cur))
+(display " m7_insert_ms_key=") (display (number->string big-ins))
+(display " m7_cursor_ms_key=") (display (number->string big-cur))
+(display " m7_cmd_only_ms_key=") (display (number->string big-cmd))
+(display " retok_lines_per_key=") (display (number->string (quotient big-retok *n*)))
+(newline)
+(display "PERF_FLOOR soft_call_us=")
+(display (number->string (quotient (* floor-ms 1000) floor-n)))
+(display " note=aura#4343")
+(newline)
 (display "PERF_BASELINE_NOTE before=insert~161ms cursor~288ms (full re-HL+marks each key)")
 (newline)
 
@@ -64,4 +123,13 @@
     (begin
       (display "PAD_PERF_FAIL insert=") (display (number->string per-ins))
       (display " cursor=") (display (number->string per-cur))
+      (newline)))
+
+(if (and (< big-ins *pad-perf-ok-ms*) (< big-cur *pad-perf-ok-ms*)
+         (>= big-m6-ins (* *m7-speedup-min* big-ins)))
+    (begin (display "PAD_M7_PERF_OK") (newline))
+    (begin
+      (display "PAD_M7_PERF_FAIL big_insert=") (display (number->string big-ins))
+      (display " big_cursor=") (display (number->string big-cur))
+      (display " m6_insert=") (display (number->string big-m6-ins))
       (newline)))
