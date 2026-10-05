@@ -16,7 +16,9 @@
 # → M6 thin C viewport (Soft tests PAD_M6_TEST_OK, Soft snapshot PAD_M6_OK,
 # host model PAD_M6_MODEL_OK, C thin guard, golden/fail-closed blits,
 # soft_play → C blit; PAD_C_OK). Soft owns the editor; C only blits.
-# → key-path latency (Soft HL cache + DIRTY; PAD_PERF_OK).
+# → M7 snappy pad: line-incremental Soft key path (Soft tests
+# PAD_M7_TEST_OK, DIRTY audit PAD_M7_DIRTY_OK, key-path latency
+# PAD_PERF_OK + PAD_M7_PERF_OK; PAD_M7_OK). C unchanged.
 # Ends with PAD_SMOKE_OK.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -77,7 +79,7 @@ bash "$ROOT/scripts/smoke_m5.sh"
 echo "smoke: m6 thin C viewport (Soft dump -> C blit)"
 bash "$ROOT/scripts/smoke_c.sh"
 
-echo "smoke: key-path latency (Soft cache / DIRTY)"
-bash "$ROOT/scripts/smoke_perf.sh"
+echo "smoke: m7 snappy pad (line-incremental Soft key path + perf)"
+bash "$ROOT/scripts/smoke_m7.sh"
 
 echo "smoke: PAD_SMOKE_OK"
