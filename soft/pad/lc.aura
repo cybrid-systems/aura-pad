@@ -1,0 +1,531 @@
+;; aura-pad M7 -- line-incremental Soft key path ("snappy pad").
+;; Soft still owns every decision; this file only makes the per-key cost
+;; scale with the edited LINE instead of the whole page.
+;;
+;; Per line Soft caches an entry (codes str toks tape open last1 last2
+;; syms), a record (entry mkey mrow p1 p2) and the row string. A key
+;; re-tokenizes only lines whose char codes changed (equal? on the code
+;; list), reuses the HL tape of every other line, rebuilds a mark row
+;; only when the name under the cursor or the def-carry into that line
+;; changed, and marks DIRTY exactly the rows whose T/H/M text changed
+;; (+ the cursor row).
+;;
+;; Exactness: whole-page tokenize and per-line tokenize agree whenever no
+;; token crosses a newline. Only an unclosed string can; such a line sets
+;; `open` and the frame falls back to the M6 full path (pad:hl-bundle +
+;; pad:v-marks-in). Tests diff every frame against pad:snap-text.
+;;
+;; Needs buffer/lines/edit/hl/jump/view. Soft reserved: never bind quote.
+
+;; --- char classes (built from the M5 predicates, so equal by construction)
+;; 0 other  1 space  2 digit  3 symbol  4 paren  5 semicolon  6 dquote
+;; Built with cons + list->vector: on tip, vector-set! / set-car! cost
+;; grows with workspace size (~15 ms each with the pad loaded), so this
+;; file never mutates a vector or pair in place (see docs/perf.md).
+
+(define (pad:lc-cls-of c)
+  (cond
+    ((or (= c 40) (= c 41)) 4)
+    ((= c 59) 5)
+    ((= c 34) 6)
+    ((pad:hl-space? c) 1)
+    ((pad:hl-digit? c) 2)
+    ((pad:hl-sym? c) 3)
+    (#t 0)))
+
+(define *lc-cls*
+  (list->vector
+    (let loop ((c 127) (acc (list)))
+      (if (< c 0) acc (loop (- c 1) (cons (pad:lc-cls-of c) acc))))))
+
+(define (pad:lc-k s i)
+  (let ((c (char->integer (string-ref s i))))
+    (if (< c 128) (vector-ref *lc-cls* c) 0)))
+
+(define (pad:lc-kind txt)
+  (cond
+    ((string-prefix? txt "query:") "Q")
+    ((string-prefix? txt "mutate:") "M")
+    ((member txt *hl-keywords*) "K")
+    (#t "S")))
+
+;; Tokens of ONE line (no newline inside). Mirrors pad:hl-one exactly.
+;; Returns (toks open): toks are ((kind a b text) ...) line-relative,
+;; spaces skipped; open is #t when a string runs off the line unclosed.
+(define (pad:lc-line-toks s)
+  (let ((n (string-length s)))
+    (let loop ((i 0) (acc (list)))
+      (if (>= i n)
+          (list (reverse acc) #f)
+          (let ((k (pad:lc-k s i)))
+            (cond
+              ((= k 4)
+               (loop (+ i 1) (cons (list "P" i (+ i 1) (substring s i (+ i 1))) acc)))
+              ((= k 5)
+               (list (reverse (cons (list "C" i n (substring s i n)) acc)) #f))
+              ((= k 6)
+               (let str ((j (+ i 1)))
+                 (cond
+                   ((>= j n)
+                    (list (reverse (cons (list "T" i n (substring s i n)) acc)) #t))
+                   ((= (char->integer (string-ref s j)) 92)
+                    (str (if (>= (+ j 1) n) n (+ j 2))))
+                   ((= (char->integer (string-ref s j)) 34)
+                    (loop (+ j 1)
+                          (cons (list "T" i (+ j 1) (substring s i (+ j 1))) acc)))
+                   (#t (str (+ j 1))))))
+              ((= k 1)
+               (let sp ((j (+ i 1)))
+                 (if (or (>= j n) (not (= (pad:lc-k s j) 1)))
+                     (loop j acc)
+                     (sp (+ j 1)))))
+              ((and (= k 2)
+                    (or (= i 0)
+                        (let ((p (pad:lc-k s (- i 1)))) (or (= p 1) (= p 4)))))
+               (let num ((j (+ i 1)))
+                 (if (or (>= j n) (not (= (pad:lc-k s j) 2)))
+                     (loop j (cons (list "N" i j (substring s i j)) acc))
+                     (num (+ j 1)))))
+              ((or (= k 2) (= k 3))
+               (let sy ((j (+ i 1)))
+                 (if (or (>= j n)
+                         (let ((q (pad:lc-k s j))) (not (or (= q 2) (= q 3)))))
+                     (let ((txt (substring s i j)))
+                       (loop j (cons (list (pad:lc-kind txt) i j txt) acc)))
+                     (sy (+ j 1)))))
+              (#t (loop (+ i 1) acc))))))))
+
+;; --- line entries ---
+(define (pad:lc-ref-kind? k)
+  (or (string=? k "S") (string=? k "K") (string=? k "Q") (string=? k "M")))
+
+(define (pad:lc-syms toks)
+  (let loop ((ts toks) (acc (list)))
+    (cond
+      ((null? ts) acc)
+      ((pad:lc-ref-kind? (car (car ts)))
+       (loop (cdr ts) (cons (list-ref (car ts) 3) acc)))
+      (#t (loop (cdr ts) acc)))))
+
+;; Runs of one letter, sliced per token (no per-char Soft loop).
+(define *lc-dots* "................................................................")
+(define *lc-run-max* 64)
+
+(define (pad:lc-run-of ch)
+  (list->string (let loop ((i 0) (acc (list)))
+                  (if (>= i *lc-run-max*) acc (loop (+ i 1) (cons ch acc))))))
+
+(define *lc-runs*
+  (list (list "P" (pad:lc-run-of #\P)) (list "S" (pad:lc-run-of #\S))
+        (list "K" (pad:lc-run-of #\K)) (list "N" (pad:lc-run-of #\N))
+        (list "T" (pad:lc-run-of #\T)) (list "C" (pad:lc-run-of #\C))
+        (list "Q" (pad:lc-run-of #\Q)) (list "M" (pad:lc-run-of #\M))
+        (list "d" (pad:lc-run-of #\d)) (list "r" (pad:lc-run-of #\r))))
+
+(define (pad:lc-run kind k)
+  (let loop ((xs *lc-runs*))
+    (if (string=? (car (car xs)) kind)
+        (substring (cadr (car xs)) 0 k)
+        (loop (cdr xs)))))
+
+(define (pad:lc-dots n)
+  (if (<= n *lc-run-max*)
+      (substring *lc-dots* 0 n)
+      (string-append *lc-dots* (pad:lc-dots (- n *lc-run-max*)))))
+
+;; HL tape of one line, one slice per token (== pad:hl-color-from-tokens).
+(define (pad:lc-tape s toks)
+  (let ((n (string-length s)))
+    (if (> n *lc-run-max*)
+        (pad:hl-color-from-tokens s toks)
+        (let loop ((i 0) (ts toks) (acc (list)))
+          (if (null? ts)
+              (apply string-append (reverse (cons (substring *lc-dots* 0 (- n i)) acc)))
+              (let* ((t (car ts)) (a (cadr t)) (b (caddr t)))
+                (loop b (cdr ts)
+                      (cons (pad:lc-run (car t) (- b a))
+                            (cons (substring *lc-dots* 0 (- a i)) acc)))))))))
+
+;; Entry: (codes str toks tape open last1 last2 syms)
+(define (pad:lc-entry codes)
+  (let* ((str (list->string (map integer->char codes)))
+         (r (pad:lc-line-toks str))
+         (toks (car r))
+         (rv (reverse toks)))
+    (set! *lc-retok* (+ *lc-retok* 1))
+    (list codes str toks (pad:lc-tape str toks) (cadr r)
+          (if (pair? rv) (car rv) #f)
+          (if (and (pair? rv) (pair? (cdr rv))) (cadr rv) #f)
+          (pad:lc-syms toks))))
+
+(define (pad:lc-e-codes e) (car e))
+(define (pad:lc-e-str e) (list-ref e 1))
+(define (pad:lc-e-toks e) (list-ref e 2))
+(define (pad:lc-e-tape e) (list-ref e 3))
+(define (pad:lc-e-open e) (list-ref e 4))
+
+;; --- marks (def/use of the name under the cursor) ---
+(define (pad:lc-kdef? t)
+  (and t (string=? (car t) "K") (string=? (list-ref t 3) "define")))
+
+;; def-carry key into a line: the only facts about earlier tokens that
+;; pad:find-defs-in can still use on this line's first two tokens.
+(define (pad:lc-carry-key p1 p2)
+  (list (if (pad:lc-kdef? p1) 1 0)
+        (if (and p1 (string=? (car p1) "P") (pad:lc-kdef? p2)) 1 0)))
+
+(define (pad:lc-carry-out e p1 p2)
+  (let ((a (list-ref e 5)) (b (list-ref e 6)))
+    (cond
+      ((not a) (list p1 p2))
+      ((not b) (list a p1))
+      (#t (list a b)))))
+
+;; Mark row for one line: same rule as pad:find-defs-in / pad:v-marks-in,
+;; prev/prev2 carried in from earlier lines; one slice per token.
+(define (pad:lc-mrow e name p1 p2)
+  (let* ((str (pad:lc-e-str e))
+         (n (string-length str)))
+    (cond
+      ((or (string=? name "") (not (member name (list-ref e 7))))
+       (pad:lc-dots n))
+      ((> n *lc-run-max*)
+       (pad:lc-mrow-chars e name p1 p2))
+      (#t
+       (let loop ((i 0) (ts (pad:lc-e-toks e)) (prev p1) (prev2 p2) (acc (list)))
+         (if (null? ts)
+             (apply string-append (reverse (cons (substring *lc-dots* 0 (- n i)) acc)))
+             (let* ((t (car ts)) (a (cadr t)) (b (caddr t))
+                    (ref (and (string=? (list-ref t 3) name)
+                              (pad:lc-ref-kind? (car t))))
+                    (def (and ref
+                              (or (pad:lc-kdef? prev)
+                                  (and prev (string=? (car prev) "P")
+                                       (pad:lc-kdef? prev2))))))
+               (loop b (cdr ts) t prev
+                     (cons (if ref (pad:lc-run (if def "d" "r") (- b a))
+                               (substring *lc-dots* 0 (- b a)))
+                           (cons (substring *lc-dots* 0 (- a i)) acc))))))))))
+
+;; Long-line fallback (> 64 chars): per-char walk, same rule.
+(define (pad:lc-mrow-chars e name p1 p2)
+  (let* ((str (pad:lc-e-str e)) (n (string-length str)))
+    (let loop ((i 0) (ts (pad:lc-e-toks e)) (prev p1) (prev2 p2) (acc (list)))
+      (cond
+        ((>= i n) (list->string (reverse acc)))
+        ((and (pair? ts) (= (cadr (car ts)) i))
+         (let* ((t (car ts))
+                (b (caddr t))
+                (ref (and (string=? (list-ref t 3) name) (pad:lc-ref-kind? (car t))))
+                (def (and ref (or (pad:lc-kdef? prev)
+                                  (and prev (string=? (car prev) "P")
+                                       (pad:lc-kdef? prev2)))))
+                (ch (if ref (if def #\d #\r) #\.)))
+           (let fill ((j i) (xs acc))
+             (if (>= j b) (loop b (cdr ts) t prev xs) (fill (+ j 1) (cons ch xs))))))
+        (#t (loop (+ i 1) ts prev prev2 (cons #\. acc)))))))
+
+(define (pad:lc-row str tape mrow)
+  (string-append "T " str "\nH " tape "\nM " mrow "\n"))
+
+;; --- cache state (only pad:lc-* write it) ---
+;; record = (entry mkey mrow p1 p2); mrow #f = rebuild on next fast frame.
+(define *lc-recv* (make-vector 0 0))   ; records of the last frame
+(define *lc-rowv* (make-vector 0 ""))  ; row strings of the last frame
+(define *lc-L* (list))                 ; editor lines of the last frame
+(define *lc-cur* -1)                   ; cursor row of the last frame
+(define *lc-name* "")                  ; name under the cursor, last frame
+(define *lc-full* 0)                   ; 1 when the last frame used the full path
+(define *lc-framed* 0)
+;; Observability counters (PERF / smoke lines, never on the wire).
+(define *lc-retok* 0)                  ; line tokenizes since reset
+(define *lc-frames* 0)
+(define *lc-fulls* 0)                  ; frames that fell back to full tokenize
+(define *lc-moves* 0)                  ; cursor-only frames
+(define *lc-lines* 0)                  ; one-line-edit frames
+
+(define (pad:lc-reset!)
+  (set! *lc-recv* (make-vector 0 0))
+  (set! *lc-rowv* (make-vector 0 ""))
+  (set! *lc-L* (list))
+  (set! *lc-cur* -1)
+  (set! *lc-name* "")
+  (set! *lc-full* 0)
+  (set! *lc-framed* 0)
+  (set! *lc-retok* 0)
+  (set! *lc-frames* 0)
+  (set! *lc-fulls* 0)
+  (set! *lc-moves* 0)
+  (set! *lc-lines* 0)
+  0)
+
+;; Old record at index j whose codes equal codes, or #f.
+(define (pad:lc-old-at j codes)
+  (if (and (>= j 0) (< j (vector-length *lc-recv*)))
+      (let ((r (vector-ref *lc-recv* j)))
+        (if (equal? (pad:lc-e-codes (car r)) codes) r #f))
+      #f))
+
+;; Match new line i against old rows: last shift d first, then i, i-1, i+1
+;; (one enter / one join keeps every later row cached).
+(define (pad:lc-match i d codes)
+  (let ((a (pad:lc-old-at (+ i d) codes)))
+    (if a
+        (list a d)
+        (let ((b (pad:lc-old-at i codes)))
+          (if b
+              (list b 0)
+              (let ((c (pad:lc-old-at (- i 1) codes)))
+                (if c
+                    (list c -1)
+                    (let ((x (pad:lc-old-at (+ i 1) codes)))
+                      (if x (list x 1) #f)))))))))
+
+;; Entries for L: reuse old entries (and their old record) when codes match.
+;; Returns list of (entry old-record-or-#f).
+(define (pad:lc-entries L)
+  (let loop ((xs L) (i 0) (d 0) (acc (list)))
+    (if (null? xs)
+        (reverse acc)
+        (let ((m (pad:lc-match i d (car xs))))
+          (if m
+              (loop (cdr xs) (+ i 1) (cadr m) (cons (list (car (car m)) (car m)) acc))
+              (loop (cdr xs) (+ i 1) d (cons (list (pad:lc-entry (car xs)) #f) acc)))))))
+
+(define (pad:lc-any-open? es)
+  (cond
+    ((null? es) #f)
+    ((pad:lc-e-open (car (car es))) #t)
+    (#t (pad:lc-any-open? (cdr es)))))
+
+;; Fast rows from per-line entries: list of (record row-string).
+(define (pad:lc-fast-recs es name)
+  (let loop ((xs es) (i 0) (p1 #f) (p2 #f) (acc (list)))
+    (if (null? xs)
+        (reverse acc)
+        (let* ((e (car (car xs)))
+               (old (cadr (car xs)))
+               (mkey (cons name (pad:lc-carry-key p1 p2)))
+               (keep (and old (list-ref old 2) (equal? (list-ref old 1) mkey)))
+               (mrow (if keep (list-ref old 2) (pad:lc-mrow e name p1 p2)))
+               (co (pad:lc-carry-out e p1 p2)))
+          (loop (cdr xs) (+ i 1) (car co) (cadr co)
+                (cons (list (list e mkey mrow p1 p2)
+                            (pad:lc-row (pad:lc-e-str e) (pad:lc-e-tape e) mrow))
+                      acc))))))
+
+;; Full path (an unclosed string crosses a newline): the M6 whole-page
+;; tokenize. Records keep the entry but no mark row.
+(define (pad:lc-full-recs es L l col)
+  (let* ((src (pad:v-src L))
+         (b (pad:hl-bundle src))
+         (tape (car b))
+         (marks (pad:v-marks-in src (pad:v-point L l col) (cadr b))))
+    (let loop ((xs es) (off 0) (acc (list)))
+      (if (null? xs)
+          (reverse acc)
+          (let* ((e (car (car xs)))
+                 (str (pad:lc-e-str e))
+                 (k (string-length str))
+                 (ee (+ off k)))
+            (loop (cdr xs) (+ ee 1)
+                  (cons (list (list e #f #f #f #f)
+                              (pad:lc-row str (substring tape off ee)
+                                          (substring marks off ee)))
+                        acc)))))))
+
+;; Rows that differ from the last frame (by index) plus the cursor row.
+(define (pad:lc-dirty old new l)
+  (let loop ((i 0) (a old) (b new) (acc (list)))
+    (cond
+      ((null? b) (reverse acc))
+      ((or (= i l) (null? a) (not (string=? (car a) (car b))))
+       (loop (+ i 1) (if (null? a) a (cdr a)) (cdr b) (cons i acc)))
+      (#t (loop (+ i 1) (cdr a) (cdr b) acc)))))
+
+(define (pad:lc-name-at e col) (pad:sym-at-in (pad:lc-e-toks e) col))
+
+(define (pad:lc-commit! L l name full)
+  (set! *lc-L* L)
+  (set! *lc-cur* l)
+  (set! *lc-name* name)
+  (set! *lc-full* full)
+  (set! *lc-framed* 1)
+  (set! *lc-frames* (+ *lc-frames* 1))
+  0)
+
+;; Generic frame: match every row, rebuild what changed. Returns dirty.
+(define (pad:lc-generic! L l col)
+  (let* ((es (pad:lc-entries L))
+         (full (pad:lc-any-open? es))
+         (name (if full "" (pad:lc-name-at (car (list-ref es l)) col)))
+         (rr (if full (pad:lc-full-recs es L l col) (pad:lc-fast-recs es name)))
+         (rows (map cadr rr))
+         (dirty (if (= *lc-framed* 0)
+                    (list)
+                    (pad:lc-dirty (vector->list *lc-rowv*) rows l))))
+    (set! *lc-recv* (list->vector (map car rr)))
+    (set! *lc-rowv* (list->vector rows))
+    (if full (set! *lc-fulls* (+ *lc-fulls* 1)))
+    (pad:lc-commit! L l name (if full 1 0))
+    dirty))
+
+;; xs ascending without l -> ascending with l.
+(define (pad:lc-with l xs)
+  (cond
+    ((null? xs) (list l))
+    ((= (car xs) l) xs)
+    ((< l (car xs)) (cons l xs))
+    (#t (cons (car xs) (pad:lc-with l (cdr xs))))))
+
+;; Name under the cursor changed, text did not: only rows that hold the
+;; old or the new name can change their mark row. Each record keeps its
+;; def-carry (p1 p2), so no other row is walked. Returns dirty rows.
+(define (pad:lc-remark! name l)
+  (let ((old-name *lc-name*))
+    (let loop ((rs (vector->list *lc-recv*)) (ws (vector->list *lc-rowv*))
+               (i 0) (racc (list)) (wacc (list)) (dacc (list)))
+      (if (null? rs)
+          (begin
+            (set! *lc-recv* (list->vector (reverse racc)))
+            (set! *lc-rowv* (list->vector (reverse wacc)))
+            (pad:lc-with l (reverse dacc)))
+          (let* ((r (car rs))
+                 (e (car r))
+                 (sy (list-ref e 7)))
+            (if (or (member name sy) (member old-name sy))
+                (let* ((p1 (list-ref r 3))
+                       (p2 (list-ref r 4))
+                       (mrow (pad:lc-mrow e name p1 p2))
+                       (row (pad:lc-row (pad:lc-e-str e) (pad:lc-e-tape e) mrow)))
+                  (loop (cdr rs) (cdr ws) (+ i 1)
+                        (cons (list e (cons name (pad:lc-carry-key p1 p2)) mrow p1 p2) racc)
+                        (cons row wacc)
+                        (if (string=? row (car ws)) dacc (cons i dacc))))
+                (loop (cdr rs) (cdr ws) (+ i 1) (cons r racc) (cons (car ws) wacc) dacc)))))))
+
+;; Cursor-only frame (same lines object): rows change only if the name
+;; under the cursor changed (marks); else only the cursor row is dirty.
+(define (pad:lc-move! L l col)
+  (let ((name (pad:lc-name-at (car (vector-ref *lc-recv* l)) col)))
+    (set! *lc-moves* (+ *lc-moves* 1))
+    (if (string=? name *lc-name*)
+        (begin (pad:lc-commit! L l name 0) (list l))
+        (let ((dirty (pad:lc-remark! name l)))
+          (pad:lc-commit! L l name 0)
+          dirty))))
+
+;; Copy of vector v with slot i = x, builtins only (no vector-set!).
+(define (pad:lc-vput v i x)
+  (let* ((xs (vector->list v))
+         (n (length xs)))
+    (list->vector
+      (append (reverse (list-tail (reverse xs) (- n i)))
+              (cons x (list-tail xs (+ i 1)))))))
+
+;; Do L and the last frame's lines differ only at row l (same row count)?
+(define (pad:lc-one-line? L l)
+  (let ((n (length L)) (old *lc-L*))
+    (and (= n (length old))
+         (< l n)
+         (equal? (list-tail L (+ l 1)) (list-tail old (+ l 1)))
+         (equal? (list-tail (reverse L) (- n l))
+                 (list-tail (reverse old) (- n l))))))
+
+;; One-line edit frame: re-tokenize row l only. If the name under the
+;; cursor and the def-carry out of row l are unchanged, no other row can
+;; change; else fall back to the generic frame (entries still reused).
+(define (pad:lc-line! L l col)
+  (let* ((e (pad:lc-entry (list-ref L l)))
+         (old (vector-ref *lc-recv* l)))
+    (if (or (pad:lc-e-open e) (not (list-ref old 2)))
+        (pad:lc-generic! L l col)
+        (let* ((name (pad:lc-name-at e col))
+               (p1 (list-ref old 3))
+               (p2 (list-ref old 4))
+               (co-new (pad:lc-carry-out e p1 p2))
+               (co-old (pad:lc-carry-out (car old) p1 p2)))
+          (if (and (string=? name *lc-name*)
+                   (equal? (pad:lc-carry-key (car co-new) (cadr co-new))
+                           (pad:lc-carry-key (car co-old) (cadr co-old))))
+              (let ((mrow (pad:lc-mrow e name p1 p2)))
+                (set! *lc-recv*
+                      (pad:lc-vput *lc-recv* l
+                                   (list e (cons name (pad:lc-carry-key p1 p2)) mrow p1 p2)))
+                (set! *lc-rowv*
+                      (pad:lc-vput *lc-rowv* l
+                                   (pad:lc-row (pad:lc-e-str e) (pad:lc-e-tape e) mrow)))
+                (set! *lc-lines* (+ *lc-lines* 1))
+                (pad:lc-commit! L l name 0)
+                (list l))
+              (begin
+                ;; let the generic frame reuse the fresh entry for row l
+                (set! *lc-recv* (pad:lc-vput *lc-recv* l (list e #f #f p1 p2)))
+                (pad:lc-generic! L l col)))))))
+
+;; One frame. Returns dirty rows; () on the first frame (Soft omits
+;; DIRTY; C full-blits).
+(define (pad:lc-frame! L l col)
+  (cond
+    ((or (= *lc-framed* 0) (= *lc-full* 1)) (pad:lc-generic! L l col))
+    ((eq? L *lc-L*) (pad:lc-move! L l col))
+    ((pad:lc-one-line? L l) (pad:lc-line! L l col))
+    (#t (pad:lc-generic! L l col))))
+
+;; Whole SNAP block from the line cache. Same bytes as pad:snap-text plus
+;; an optional DIRTY line (see view.aura / c/snap.c).
+(define (pad:lc-snap title L l col say)
+  (let* ((dirty (pad:lc-frame! L l col))
+         (dcsv (pad:v-dirty-csv dirty)))
+    (string-append
+      "SNAP v1 pad\n"
+      "TITLE " title "\n"
+      "CURSOR line=" (number->string l) " col=" (number->string col) "\n"
+      "SAY " say "\n"
+      "LEGEND " *view-legend* "\n"
+      (if (string=? dcsv "") "" (string-append "DIRTY lines=" dcsv "\n"))
+      "ROWS n=" (number->string (vector-length *lc-rowv*)) "\n"
+      (apply string-append (vector->list *lc-rowv*))
+      "END\n")))
+
+;; Whole-page tokens for jump / refs, from the cache when it holds L
+;; (offsets shifted per line; equal to pad:hl-tokens when no line is
+;; open), else a real full tokenize.
+(define (pad:lc-toks L)
+  (if (and (= *lc-full* 0) (= *lc-framed* 1) (equal? L *lc-L*))
+      (let loop ((i 0) (off 0) (acc (list)))
+        (if (>= i (vector-length *lc-recv*))
+            (apply append (reverse acc))
+            (let ((e (car (vector-ref *lc-recv* i))))
+              (loop (+ i 1)
+                    (+ off (string-length (pad:lc-e-str e)) 1)
+                    (cons (map (lambda (t)
+                                 (list (car t) (+ off (cadr t)) (+ off (caddr t))
+                                       (list-ref t 3)))
+                               (pad:lc-e-toks e))
+                          acc)))))
+      (pad:hl-tokens (pad:v-src L))))
+
+(define (pad:lc-stats)
+  (string-append "frames=" (number->string *lc-frames*)
+                 " moves=" (number->string *lc-moves*)
+                 " line_edits=" (number->string *lc-lines*)
+                 " retok_lines=" (number->string *lc-retok*)
+                 " full_frames=" (number->string *lc-fulls*)))
+
+;; Twelve-line kid page (fits *play-max-lines* / *play-max-col*): the
+;; perf and test fixture where whole-page tokenize per key hurts.
+(define *lc-big-page*
+  (string-append
+    "(define (hello x) (+ x 1))\n"
+    "(define (bye y) (hello y))\n"
+    "(define (add a b) (+ a b))\n"
+    "; kids write stories here\n"
+    "(define pet \"cat\")\n"
+    "(define (greet n) (add n 1))\n"
+    "(hello 3)\n"
+    "(bye 4)\n"
+    "(greet (add 1 2))\n"
+    "(display pet)\n"
+    "(query:find hello)\n"
+    "(hello (bye 5))"))

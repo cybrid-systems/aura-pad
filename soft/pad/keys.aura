@@ -1,11 +1,11 @@
 ;; aura-pad M6 -- Soft keymap + play state for the thin C viewport.
 ;; Raw key bytes in, editor commands out. The C side never maps keys.
-;; Needs buffer/lines/edit/hl/jump/view. Soft reserved: never bind quote.
+;; Needs buffer/lines/edit/hl/jump/view/lc. Soft reserved: never bind quote.
 ;;
-;; Hot path cache: *pl-src* / *pl-tape* / *pl-toks* / *pl-marks* /
-;; *pl-mname* survive across keys. Text edits invalidate the tape;
-;; cursor-only moves reuse the HL tape and only rebuild marks when the
-;; name under point changes. Soft marks DIRTY rows so C can paint less.
+;; Key path (M7): pad:play-snap goes through the per-line cache in
+;; lc.aura (load it before this file). The M6 whole-page cache
+;; (*pl-src* / *pl-tape* / *pl-toks* / *pl-marks*) stays only for
+;; pad:play-snap-m6, the perf "before" reference.
 
 ;; The viewport pad is roomier than the M3 kid race pad. Soft decides.
 (define *play-max-col* 40)
@@ -48,6 +48,7 @@
   (set! *pl-mname* "")
   (set! *pl-prev-L* (list))
   (set! *pl-framed* 0)
+  (pad:lc-reset!)
   0)
 
 ;; --- keymap: byte -> command word, char code, "pending" or "unknown" ---
@@ -133,14 +134,15 @@
         (pad:play-reject! reason))))
 
 (define (pad:play-jump! cmd)
-  (let* ((src (pad:play-src))
+  (let* ((L (pad:es-L *pl-st*))
+         (src (pad:play-src))
          (pt (pad:play-point))
-         (toks (if (string=? src *pl-src*) *pl-toks* (pad:hl-tokens src)))
+         (toks (pad:lc-toks L))
          (name (pad:sym-at-in toks pt))
          (j (pad:js src pt *pl-stack*))
-         (r (cond ((string=? cmd "goto-def") (pad:goto-def j))
+         (r (cond ((string=? cmd "goto-def") (pad:goto-def-in j toks))
                   ((string=? cmd "jump-back") (pad:jump-back j))
-                  (#t (pad:find-refs-cmd j)))))
+                  (#t (pad:find-refs-cmd-in j toks)))))
     (if (not (string=? (car r) "ok"))
         (pad:play-reject! (car r))
         (begin
@@ -229,7 +231,20 @@
         (list)
         (if (pad:v-in? l dirty) dirty (cons l dirty)))))
 
+(define (pad:play-title)
+  (string-append "aura pad (Soft) keys="
+                 (number->string *pl-keys*)
+                 " no=" (number->string *pl-rej*)))
+
+;; M7 key path: line-incremental cache (lc.aura). Only the edited line is
+;; re-tokenized; DIRTY lists exactly the rows whose T/H/M changed.
 (define (pad:play-snap)
+  (pad:lc-snap (pad:play-title) (pad:es-L *pl-st*) (pad:es-l *pl-st*)
+               (pad:es-col *pl-st*) *pl-say*))
+
+;; M6 key path (whole-page tokenize per text change), kept as the perf
+;; "before" reference. Do not mix with pad:play-snap in one session.
+(define (pad:play-snap-m6)
   (let* ((L (pad:es-L *pl-st*))
          (l (pad:es-l *pl-st*))
          (col (pad:es-col *pl-st*))

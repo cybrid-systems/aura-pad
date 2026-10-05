@@ -12,6 +12,7 @@
 (load "/workspace/aura-pad/soft/pad/hl.aura")
 (load "/workspace/aura-pad/soft/pad/jump.aura")
 (load "/workspace/aura-pad/soft/pad/view.aura")
+(load "/workspace/aura-pad/soft/pad/lc.aura")
 (load "/workspace/aura-pad/soft/pad/keys.aura")
 
 (pad:play-reset! *play-start*)
