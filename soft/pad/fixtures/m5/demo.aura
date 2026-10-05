@@ -1,0 +1,5 @@
+;; M5 fixture snippet used by paren_check / docs (not loaded by Soft smoke).
+(define (hello x) (+ x 1))
+(define (bye y) (hello y))
+(query:find "hello")
+(mutate:summary)
