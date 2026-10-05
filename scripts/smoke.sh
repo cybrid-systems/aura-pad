@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Full stack: M0 race → M1 hot swap/heal → M2 fixture propose → optional
 # live MiniMax propose (PAD_M2_PROPOSE_LIVE_SKIP when no key, or PAD_LIVE=0)
-# → fixture burn. Ends with PAD_SMOKE_OK.
+# → fixture burn → M3 multi-line buffer + command-helper propose (fixtures,
+# then optional live helper; PAD_M3_LIVE_SKIP when no key or PAD_LIVE=0).
+# Ends with PAD_SMOKE_OK.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$ROOT/out"
@@ -45,5 +47,8 @@ fi
 
 echo "smoke: fixture burn"
 PAD_PROPOSE=0 bash "$ROOT/scripts/burn.sh"
+
+echo "smoke: m3 multi-line + command helper"
+bash "$ROOT/scripts/smoke_m3.sh"
 
 echo "smoke: PAD_SMOKE_OK"
