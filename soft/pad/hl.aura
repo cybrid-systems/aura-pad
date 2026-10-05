@@ -4,7 +4,10 @@
 ;;   P paren   K keyword (define/lambda/if/load/...)
 ;;   S symbol  T string   C comment
 ;;   Q query:  M mutate:  N number   . space/other
-;; Pure Soft. Needs buffer.aura (pad:nstr). Soft reserved: never bind quote.
+;; Hot path: one scan builds the tape via char-list -> list->string
+;; (no per-char string-append); snap reuses tokens via
+;; pad:hl-color-from-tokens / pad:hl-bundle. Soft reserved: never bind
+;; quote. Needs buffer.aura (pad:nstr).
 
 (require "std/string" all:)
 
@@ -101,9 +104,9 @@
           (reverse acc)
           (let* ((t (pad:hl-one s i n))
                  (k (car t))
-                 (a (pad:hl-nth t 1))
-                 (b (pad:hl-nth t 2))
-                 (ni (pad:hl-nth t 3)))
+                 (a (cadr t))
+                 (b (caddr t))
+                 (ni (car (cdr (cdr (cdr t))))))
             (if (not k)
                 (reverse acc)
                 (if (string=? k ".")
@@ -111,24 +114,43 @@
                     (loop ni
                           (cons (list k a b (substring s a b)) acc)))))))))
 
-;; Color tape: one letter per source char.
+;; Color tape: one scan, char list -> list->string (no string-append).
 (define (pad:hl-color s)
   (let ((n (string-length s)))
-    (let loop ((i 0) (out ""))
+    (let loop ((i 0) (acc (list)))
       (if (>= i n)
-          out
+          (list->string (reverse acc))
           (let* ((t (pad:hl-one s i n))
                  (k (car t))
-                 (a (pad:hl-nth t 1))
-                 (b (pad:hl-nth t 2))
-                 (ni (pad:hl-nth t 3))
-                 (letter (if k k "."))
-                 (chunk
-                  (let fill ((j a) (cs ""))
-                    (if (>= j b)
-                        cs
-                        (fill (+ j 1) (string-append cs letter))))))
-            (loop ni (string-append out chunk)))))))
+                 (a (cadr t))
+                 (b (caddr t))
+                 (ni (car (cdr (cdr (cdr t)))))
+                 (ch (if k (string-ref k 0) #\.)))
+            (let fill ((j a) (xs acc))
+              (if (>= j b)
+                  (loop ni xs)
+                  (fill (+ j 1) (cons ch xs)))))))))
+
+;; Color tape from toks (gaps = '.'). SNAP packer: one tokenize, reuse.
+(define (pad:hl-color-from-tokens s toks)
+  (let ((n (string-length s)))
+    (let loop ((i 0) (ts toks) (acc (list)))
+      (cond
+        ((>= i n) (list->string (reverse acc)))
+        ((and (pair? ts) (= (cadr (car ts)) i))
+         (let* ((t (car ts))
+                (b (caddr t))
+                (ch (string-ref (car t) 0)))
+           (let fill ((j i) (xs acc))
+             (if (>= j b)
+                 (loop b (cdr ts) xs)
+                 (fill (+ j 1) (cons ch xs))))))
+        (#t (loop (+ i 1) ts (cons #\. acc)))))))
+
+;; (color toks) — one tokenize for snap / marks / jump.
+(define (pad:hl-bundle s)
+  (let ((toks (pad:hl-tokens s)))
+    (list (pad:hl-color-from-tokens s toks) toks)))
 
 (define (pad:hl-count tokens kind)
   (let loop ((ts tokens) (n 0))
@@ -138,8 +160,9 @@
       (#t (loop (cdr ts) n)))))
 
 (define (pad:hl-tape! s)
-  (let* ((color (pad:hl-color s))
-         (toks (pad:hl-tokens s)))
+  (let* ((b (pad:hl-bundle s))
+         (color (car b))
+         (toks (cadr b)))
     (display "HL n=")
     (display (number->string (string-length s)))
     (display " toks=")
@@ -165,10 +188,10 @@
   (display " kind=")
   (display (car tok))
   (display " at=")
-  (display (number->string (pad:hl-nth tok 1)))
+  (display (number->string (cadr tok)))
   (display "..")
-  (display (number->string (pad:hl-nth tok 2)))
+  (display (number->string (caddr tok)))
   (display " text=")
-  (display (pad:hl-nth tok 3))
+  (display (car (cdr (cdr (cdr tok)))))
   (newline)
   0)
