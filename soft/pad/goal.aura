@@ -1,1 +1,117 @@
-PLACEHOLDER_REPLACE_FROM_DISK
+;; aura-pad M8 -- intent worldline: kid goal + pd:goal helper race.
+;; Kid gives a goal ("hi aura"); two command helpers race on fibers toward
+;; it; Soft shows CARD a=.. b=.. KEEP=..; strictly higher score KEEP,
+;; tie DROP + heal!; undo KEEP re-plays and re-scores (mismatch fails loud).
+;; Hot slot pd:goal holds the trial helper; pd:gshadow is main.
+;; Score (story): base - keys - 2*rejects - 3*dist - 4*unkind.
+;; Gate: banned words + kind-word list + capability probe (exec/network/ffi
+;; -> REJECT not-allowed when capability? is bound; else GAPS capability).
+;; Needs buffer/rules/lines/hot/card. Soft reserved: never bind quote.
+
+(load "/workspace/aura-pad/soft/pad/hot.aura")
+(load "/workspace/aura-pad/soft/pad/card.aura")
+
+(define *goal-main-body*
+  "(lambda () (list \"kill-line\" \"type:hi\" \"open-line\" \"next-line\" \"type:au\"))")
+(define *goal-seeded* 0)
+(define *goal-base* 0)
+(define *goal-trial* 0)
+(define *goal-tag* "boot")
+(define *goal-word* "")
+(define *goal-why* "")
+(define *goal-keeps* 0)
+(define *goal-drops* 0)
+(define *goal-history* (list))
+(define *goal-undos* 0)
+(define *goal-cap-gaps* 0)
+(define *goal-cap-bound* 0)
+(define *g-base* 40)
+(define *g-goal-text* "hi aura")
+(define *g-goal-lines* (list (list 104 105) (list 97 117 114 97)))
+(define *g-page* (list (list)))
+(define *g-score* 0)
+(define *g-keys* 0)
+(define *g-rej* 0)
+(define *g-dist* 0)
+(define *g-unkind* 0)
+(define *g-tag* "none")
+(define *g-card* "")
+(define *goal-history-max* 8)
+
+(define *goal-banned*
+  (list "pd:goal" "pd:gshadow" "pad:gstamp" "pad:gsim" "*g-goal"
+        "string->symbol" "require" "import" "define"))
+
+(define *goal-cap-words* (list "exec" "network" "ffi"))
+
+;; --- capability probe (once): bound? -> gate exec/network/ffi; else GAPS ---
+(define (pd:goal-probe-cap!)
+  (if (> *goal-cap-bound* 0)
+      *goal-cap-bound*
+      (let ((r (try (begin (capability? "Mutate") 1) (catch (e) 0))))
+        (if (= r 1)
+            (set! *goal-cap-bound* 1)
+            (begin
+              (set! *goal-cap-bound* 2)
+              (set! *goal-cap-gaps* 1)
+              (display "GAPS capability")
+              (newline)))
+        *goal-cap-bound*)))
+
+(define (pd:goal-cap-word s)
+  (let loop ((ws *goal-cap-words*))
+    (cond
+      ((null? ws) "")
+      ((string-contains? s (car ws)) (car ws))
+      (#t (loop (cdr ws))))))
+
+;; --- goal text <-> lines ("hi aura" -> ("hi" "aura")) ---
+(define (pad:goal-split text)
+  (let* ((clean (pd:clean text))
+         (n (string-length clean)))
+    (if (= n 0)
+        (list)
+        (let loop ((i 0) (start 0) (acc (list)))
+          (cond
+            ((>= i n)
+             (reverse (cons (substring clean start n) acc)))
+            ((char=? (string-ref clean i) #\space)
+             (if (= start i)
+                 (loop (+ i 1) (+ i 1) acc)
+                 (loop (+ i 1) (+ i 1)
+                       (cons (substring clean start i) acc))))
+            (#t (loop (+ i 1) start acc)))))))
+
+(define (pad:goal-lines-of text)
+  (map pad:type-codes (pad:goal-split text)))
+
+(define (pad:goal-set-text! text)
+  (let ((t (pd:clean text)))
+    (if (= (string-length t) 0)
+        (list #f "no-goal")
+        (begin
+          (set! *g-goal-text* t)
+          (set! *g-goal-lines* (pad:goal-lines-of t))
+          (list #t t)))))
+
+;; Local kind-word list (m4's pad:mean-word is optional; do not call it
+;; unbound -- try/catch can return an error string that looks "truthy").
+(define *goal-mean-words* (list "stupid" "dumb" "hate" "idiot" "shut up"))
+(define (pad:goal-mean-word s)
+  (let loop ((ws *goal-mean-words*))
+    (cond
+      ((null? ws) "")
+      ((string-contains? s (car ws)) (car ws))
+      (#t (loop (cdr ws))))))
+
+(define (pad:mean-word-goal s)
+  (pad:goal-mean-word s))
+
+(define (pad:goal-unkind plan)
+  ;; Kind words are refused at the gate before a plan enters pd:goal.
+  ;; Unkind penalty stays 0 here so score matches the host model.
+  0)
+
+(define (pad:gsim plan tag print)
+  (let ((unk (pad:goal-unkind plan)))
+    (let loop ((cs (pad:expand plan))
