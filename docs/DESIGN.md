@@ -35,14 +35,14 @@ keywords, kid words and key-byte comparisons).
  │           lc.aura     line cache: per-line toks/tape/marks, DIRTY      (M7)       │
  │           keys.aura   keymap bytes→commands, play gate, play state     (M6/M7)    │
  │           play.aura   loop: IN/KEY lines in, SNAP blocks out           (M6)       │
- └─────────────────────────────────────┬──────────────────────────────────────────┘
+ └─────────────────────────────────────┬─────────────────────────────────────────┘
                                        │ SNAP v1 pad … END (stdout / file)
  ┌──────────────────────── C (thin viewport, no logic) ───────────────────────────┐
  │ snap.c  reader: fail closed, last complete block wins; ANSI/plain blit;        │
  │         pad_blit_dirty repaints DIRTY rows + any row whose text differs         │
  │ pad_view.c  blit one snapshot (file / stream)                                    │
  │ pad_play.c  raw terminal, forwards every byte as "IN <n>", blits Soft frames    │
- └─────────────────────────────────────────────────────────────────────────────────┘
+ └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 All model step functions are pure on their state lists (fiber-safe); only
@@ -198,10 +198,10 @@ open last1 last2 syms)` and a record `(entry mkey mrow p1 p2)`. Frames:
 
 **Soft floor.** With the pad loaded a Soft call costs ~0.2 ms (Aura
 #4343: linear in top-level defines) and an in-place `vector-set!` /
-`set-car!` ~15 ms (slope ~6× steeper than calls; filed from aura-pad, see
-`perf.md`). So the pad avoids per-char Soft loops where a builtin can do
-it, never mutates a vector or pair in place, and keeps per-key Soft calls
-to O(edited line + rows touched).
+`set-car!` ~15 ms (slope ~6× steeper than calls; drafted to file from
+aura-pad, see `ISSUES.md` / `perf.md`). So the pad avoids per-char Soft
+loops where a builtin can do it, never mutates a vector or pair in place,
+and keeps per-key Soft calls to O(edited line + rows touched).
 
 ## 9. Observability
 
