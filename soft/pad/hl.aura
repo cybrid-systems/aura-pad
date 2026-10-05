@@ -1,0 +1,174 @@
+;; aura-pad M5 -- Soft-side Aura syntax highlight (no C viewport).
+;; Tokenize an .aura / sexp string into kind tags and a kid-readable
+;; HL color tape (one letter per source char). Kinds:
+;;   P paren   K keyword (define/lambda/if/load/...)
+;;   S symbol  T string   C comment
+;;   Q query:  M mutate:  N number   . space/other
+;; Pure Soft. Needs buffer.aura (pad:nstr). Soft reserved: never bind quote.
+
+(require "std/string" all:)
+
+(define (pad:hl-nth xs i)
+  (if (= i 0) (car xs) (pad:hl-nth (cdr xs) (- i 1))))
+
+(define *hl-keywords*
+  (list "define" "lambda" "if" "load" "cond" "let" "begin"
+        "set!" "and" "or" "not" "else" "require" "export"
+        "try" "catch" "list" "cons" "car" "cdr" "null?"
+        "string=?" "number?" "string?" "display" "newline"))
+
+(define (pad:hl-ci s i) (string-ref s i))
+
+(define (pad:hl-space? c)
+  (or (= c 32) (= c 9) (= c 10) (= c 13)))
+
+(define (pad:hl-digit? c) (and (>= c 48) (<= c 57)))
+
+(define (pad:hl-sym? c)
+  (or (and (>= c 97) (<= c 122))
+      (and (>= c 65) (<= c 90))
+      (pad:hl-digit? c)
+      (= c 45) (= c 95) (= c 58) (= c 43) (= c 42) (= c 47)
+      (= c 61) (= c 63) (= c 33) (= c 46) (= c 60) (= c 62)
+      (= c 36) (= c 37) (= c 38) (= c 94) (= c 126)))
+
+(define (pad:hl-kw? name)
+  (let loop ((ks *hl-keywords*))
+    (cond
+      ((null? ks) #f)
+      ((string=? name (car ks)) #t)
+      (#t (loop (cdr ks))))))
+
+(define (pad:hl-kind-of name)
+  (cond
+    ((and (>= (string-length name) 6)
+          (string=? (substring name 0 6) "query:")) "Q")
+    ((and (>= (string-length name) 7)
+          (string=? (substring name 0 7) "mutate:")) "M")
+    ((pad:hl-kw? name) "K")
+    (#t "S")))
+
+;; Read one token from s at i. Returns (kind start end next-i) or
+;; (#f i i i) at EOF. Kind letters: P K S T C Q M N .
+(define (pad:hl-one s i n)
+  (if (>= i n)
+      (list #f i i i)
+      (let ((c (pad:hl-ci s i)))
+        (cond
+          ((or (= c 40) (= c 41))
+           (list "P" i (+ i 1) (+ i 1)))
+          ((= c 59)
+           (let loop ((j (+ i 1)))
+             (if (or (>= j n) (= (pad:hl-ci s j) 10))
+                 (list "C" i j j)
+                 (loop (+ j 1)))))
+          ((= c 34)
+           (let loop ((j (+ i 1)))
+             (cond
+               ((>= j n) (list "T" i j j))
+               ((= (pad:hl-ci s j) 92)
+                (loop (if (>= (+ j 1) n) n (+ j 2))))
+               ((= (pad:hl-ci s j) 34)
+                (list "T" i (+ j 1) (+ j 1)))
+               (#t (loop (+ j 1))))))
+          ((pad:hl-space? c)
+           (let loop ((j (+ i 1)))
+             (if (or (>= j n) (not (pad:hl-space? (pad:hl-ci s j))))
+                 (list "." i j j)
+                 (loop (+ j 1)))))
+          ((and (pad:hl-digit? c)
+                (or (= i 0)
+                    (let ((p (pad:hl-ci s (- i 1))))
+                      (or (pad:hl-space? p) (= p 40) (= p 41)))))
+           (let loop ((j (+ i 1)))
+             (if (or (>= j n) (not (pad:hl-digit? (pad:hl-ci s j))))
+                 (list "N" i j j)
+                 (loop (+ j 1)))))
+          ((pad:hl-sym? c)
+           (let loop ((j (+ i 1)))
+             (if (or (>= j n) (not (pad:hl-sym? (pad:hl-ci s j))))
+                 (let* ((txt (substring s i j))
+                        (k (pad:hl-kind-of txt)))
+                   (list k i j j))
+                 (loop (+ j 1)))))
+          (#t (list "." i (+ i 1) (+ i 1)))))))
+
+;; All tokens as ((kind start end text) ...), skipping space ".".
+(define (pad:hl-tokens s)
+  (let ((n (string-length s)))
+    (let loop ((i 0) (acc (list)))
+      (if (>= i n)
+          (reverse acc)
+          (let* ((t (pad:hl-one s i n))
+                 (k (car t))
+                 (a (pad:hl-nth t 1))
+                 (b (pad:hl-nth t 2))
+                 (ni (pad:hl-nth t 3)))
+            (if (not k)
+                (reverse acc)
+                (if (string=? k ".")
+                    (loop ni acc)
+                    (loop ni
+                          (cons (list k a b (substring s a b)) acc)))))))))
+
+;; Color tape: one letter per source char.
+(define (pad:hl-color s)
+  (let ((n (string-length s)))
+    (let loop ((i 0) (out ""))
+      (if (>= i n)
+          out
+          (let* ((t (pad:hl-one s i n))
+                 (k (car t))
+                 (a (pad:hl-nth t 1))
+                 (b (pad:hl-nth t 2))
+                 (ni (pad:hl-nth t 3))
+                 (letter (if k k "."))
+                 (chunk
+                  (let fill ((j a) (cs ""))
+                    (if (>= j b)
+                        cs
+                        (fill (+ j 1) (string-append cs letter))))))
+            (loop ni (string-append out chunk)))))))
+
+(define (pad:hl-count tokens kind)
+  (let loop ((ts tokens) (n 0))
+    (cond
+      ((null? ts) n)
+      ((string=? (car (car ts)) kind) (loop (cdr ts) (+ n 1)))
+      (#t (loop (cdr ts) n)))))
+
+(define (pad:hl-tape! s)
+  (let* ((color (pad:hl-color s))
+         (toks (pad:hl-tokens s)))
+    (display "HL n=")
+    (display (number->string (string-length s)))
+    (display " toks=")
+    (display (number->string (length toks)))
+    (display " K=")
+    (display (number->string (pad:hl-count toks "K")))
+    (display " Q=")
+    (display (number->string (pad:hl-count toks "Q")))
+    (display " M=")
+    (display (number->string (pad:hl-count toks "M")))
+    (display " C=")
+    (display (number->string (pad:hl-count toks "C")))
+    (display " T=")
+    (display (number->string (pad:hl-count toks "T")))
+    (display " color=")
+    (display color)
+    (newline)
+    color))
+
+(define (pad:hl-tok-line! i tok)
+  (display "HL tok=")
+  (display (number->string i))
+  (display " kind=")
+  (display (car tok))
+  (display " at=")
+  (display (number->string (pad:hl-nth tok 1)))
+  (display "..")
+  (display (number->string (pad:hl-nth tok 2)))
+  (display " text=")
+  (display (pad:hl-nth tok 3))
+  (newline)
+  0)
