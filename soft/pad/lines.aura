@@ -1,0 +1,285 @@
+;; aura-pad M3 -- multi-line buffer. Soft owns the lines.
+;; *lines* is a list of lines; each line is a list of char codes (the M0
+;; FlatAST-friendly shape, one per line). Point is (*line* *col*).
+;; Builds on buffer.aura (pad:take / pad:drop / pad:insert / pad:dist /
+;; pad:seed-step). M0-M2 do not load this file.
+;; Soft reserved: never bind the identifier quote.
+
+(require "std/string" all:)
+
+;; Goal fixture: two lines "hi" / "aura".
+(define *goal-lines* (list (list 104 105) (list 97 117 114 97)))
+(define *max-lines* 4)
+(define *max-col* 12)
+(define *noise-len* 3)
+;; Plan score = base - keys - 2*rejects - 3*dist.
+(define *plan-base* 40)
+(define *plan-max* 32)
+(define *keys-max* 48)
+
+;; Main-world multi-line state. Only pad:stamp-lines! writes it.
+(define *lines* (list (list)))
+(define *line* 0)
+(define *col* 0)
+(define *ln-keys* 0)
+(define *ln-rej* 0)
+(define *ln-dist* 0)
+(define *ln-score* 0)
+(define *ln-tag* "none")
+
+(define *line-cmds*
+  (list "left" "right" "home" "end" "back"
+        "open-line" "kill-line" "next-line" "prev-line"))
+
+;; --- pure list helpers ---
+(define (pad:nth xs i)
+  (if (= i 0) (car xs) (pad:nth (cdr xs) (- i 1))))
+
+(define (pad:put-nth xs i v)
+  (if (= i 0)
+      (cons v (cdr xs))
+      (cons (car xs) (pad:put-nth (cdr xs) (- i 1) v))))
+
+(define (pad:del-nth xs i)
+  (if (= i 0)
+      (cdr xs)
+      (cons (car xs) (pad:del-nth (cdr xs) (- i 1)))))
+
+(define (pad:ins-nth xs i v)
+  (append (pad:take i xs) (cons v (pad:drop i xs))))
+
+(define (pad:str-in? s xs)
+  (cond
+    ((null? xs) #f)
+    ((string=? s (car xs)) #t)
+    (#t (pad:str-in? s (cdr xs)))))
+
+;; Seeded start: one line of noise letters (deterministic, seed 20261005).
+(define (pad:start-lines)
+  (let loop ((i 0) (r (pad:seed-step *seed*)) (acc (list)))
+    (if (>= i *noise-len*)
+        (list acc)
+        (loop (+ i 1)
+              (pad:seed-step r)
+              (append acc (list (+ 97 (modulo r 26))))))))
+
+;; Line text for TAPE: "hi|aura".
+(define (pad:line-text ln)
+  (list->string (map integer->char ln)))
+
+(define (pad:lines-text L)
+  (string-join (map pad:line-text L) "|"))
+
+;; Distance: per-line M0 distance; a missing or extra line costs len+1.
+(define (pad:dist-lines L G)
+  (let loop ((a L) (b G) (d 0))
+    (cond
+      ((and (null? a) (null? b)) d)
+      ((null? a) (loop a (cdr b) (+ d (+ (length (car b)) 1))))
+      ((null? b) (loop (cdr a) b (+ d (+ (length (car a)) 1))))
+      (#t (loop (cdr a) (cdr b) (+ d (pad:dist (car a) (car b))))))))
+
+;; --- Soft gate for one command on lines. "ok" or a kid reason. ---
+;; A command is a char code (insert) or a command word.
+(define (pad:lgate c L l col)
+  (let* ((n (length L))
+         (ln (pad:nth L l))
+         (len (length ln))
+         (empty (and (= n 1) (= len 0))))
+    (cond
+      ((number? c)
+       (cond
+         ((not (or (= c 32) (and (>= c 97) (<= c 122)))) "not-print")
+         ((>= len *max-col*) "need-space")
+         (#t "ok")))
+      ((not (string? c)) "not-a-key")
+      ((not (pad:str-in? c *line-cmds*)) "not-a-key")
+      ((and (string=? c "left") (= l 0) (= col 0)) "too-far")
+      ((and (string=? c "right") (= l (- n 1)) (>= col len)) "too-far")
+      ((and (string=? c "next-line") (>= l (- n 1))) "no-line")
+      ((and (string=? c "prev-line") (= l 0)) "no-line")
+      ((and (string=? c "back") empty) "empty-buf")
+      ((and (string=? c "back") (= l 0) (= col 0)) "too-far")
+      ((and (string=? c "kill-line") empty) "empty-buf")
+      ((and (string=? c "kill-line") (>= col len) (>= l (- n 1))) "no-line")
+      ((and (string=? c "open-line") (>= n *max-lines*)) "need-space")
+      (#t "ok"))))
+
+;; --- apply one accepted command. Returns (L line col). ---
+;; open-line: split at point, point stays (Emacs C-o).
+;; kill-line: kill to end of line; at end of line, pull the next line up.
+(define (pad:lapply c L l col)
+  (let* ((ln (pad:nth L l))
+         (len (length ln)))
+    (cond
+      ((number? c)
+       (list (pad:put-nth L l (pad:insert ln col c)) l (+ col 1)))
+      ((string=? c "left")
+       (if (> col 0)
+           (list L l (- col 1))
+           (list L (- l 1) (length (pad:nth L (- l 1))))))
+      ((string=? c "right")
+       (if (< col len)
+           (list L l (+ col 1))
+           (list L (+ l 1) 0)))
+      ((string=? c "home") (list L l 0))
+      ((string=? c "end") (list L l len))
+      ((string=? c "next-line")
+       (let ((nl (length (pad:nth L (+ l 1)))))
+         (list L (+ l 1) (if (> col nl) nl col))))
+      ((string=? c "prev-line")
+       (let ((pl (length (pad:nth L (- l 1)))))
+         (list L (- l 1) (if (> col pl) pl col))))
+      ((string=? c "back")
+       (if (> col 0)
+           (list (pad:put-nth L l (pad:delete-back ln col)) l (- col 1))
+           (let* ((pv (pad:nth L (- l 1)))
+                  (pl (length pv)))
+             (list (pad:del-nth (pad:put-nth L (- l 1) (append pv ln)) l)
+                   (- l 1)
+                   pl))))
+      ((string=? c "kill-line")
+       (if (< col len)
+           (list (pad:put-nth L l (pad:take col ln)) l col)
+           (list (pad:del-nth (pad:put-nth L l (append ln (pad:nth L (+ l 1))))
+                              (+ l 1))
+                 l
+                 col)))
+      ((string=? c "open-line")
+       (list (pad:ins-nth (pad:put-nth L l (pad:take col ln))
+                          (+ l 1)
+                          (pad:drop col ln))
+             l
+             col))
+      (#t (list L l col)))))
+
+;; Named line ops (gate first; a rejected op returns the reason string).
+(define (pad:line-op c L l col)
+  (let ((reason (pad:lgate c L l col)))
+    (if (string=? reason "ok") (pad:lapply c L l col) reason)))
+(define (pad:open-line L l col) (pad:line-op "open-line" L l col))
+(define (pad:kill-line L l col) (pad:line-op "kill-line" L l col))
+(define (pad:next-line L l col) (pad:line-op "next-line" L l col))
+(define (pad:prev-line L l col) (pad:line-op "prev-line" L l col))
+
+;; --- command plans ---
+;; A plan is a list of tokens: a char code, a command word, or "type:<text>"
+;; which expands to one insert per char.
+(define (pad:type-codes s)
+  (map char->integer (string->list s)))
+
+(define (pad:expand plan)
+  (cond
+    ((null? plan) (list))
+    ((and (string? (car plan)) (string-prefix? (car plan) "type:"))
+     (append (pad:type-codes (substring (car plan) 5 (string-length (car plan))))
+             (pad:expand (cdr plan))))
+    (#t (cons (car plan) (pad:expand (cdr plan))))))
+
+;; Plan shape check: "ok", "not-a-plan", "bad-token", "too-long".
+(define (pad:plan-check p)
+  (if (not (pair? p))
+      "not-a-plan"
+      (let loop ((xs p) (n 0))
+        (cond
+          ((null? xs)
+           (if (> (length (pad:expand p)) *keys-max*) "too-long" "ok"))
+          ((not (pair? xs)) "not-a-plan")
+          ((> n *plan-max*) "too-long")
+          ((not (or (number? (car xs)) (string? (car xs)))) "bad-token")
+          (#t (loop (cdr xs) (+ n 1)))))))
+
+(define (pad:plan-ok? p) (string=? (pad:plan-check p) "ok"))
+
+(define (pad:cmd-str c)
+  (cond
+    ((number? c) (string-append "char-" (number->string c)))
+    ((string? c) c)
+    (#t "?")))
+
+(define (pad:lreject! step c reason tag)
+  (display "REJECT mid=3 reason=")
+  (display reason)
+  (display " cmd=")
+  (display (pad:cmd-str c))
+  (display " step=")
+  (display (number->string step))
+  (display " slot=")
+  (display tag)
+  (newline)
+  0)
+
+;; Pure play of a plan from the seeded start. Writes no world slot -- fiber-safe.
+;; print=1 shows up to 4 REJECT lines (host audit only).
+;; Returns (score keys rejects dist lines line col).
+(define (pad:lsim plan tag print)
+  (let loop ((cs (pad:expand plan))
+             (i 0)
+             (L (pad:start-lines))
+             (l 0)
+             (col 0)
+             (keys 0)
+             (rej 0))
+    (if (null? cs)
+        (let ((d (pad:dist-lines L *goal-lines*)))
+          (list (- *plan-base* (+ keys (* 2 rej) (* 3 d)))
+                keys rej d L l col))
+        (let* ((c (car cs))
+               (reason (pad:lgate c L l col)))
+          (if (string=? reason "ok")
+              (let ((st (pad:lapply c L l col)))
+                (loop (cdr cs) (+ i 1)
+                      (car st) (car (cdr st)) (car (cdr (cdr st)))
+                      (+ keys 1) rej))
+              (begin
+                (if (and (= print 1) (< rej 4))
+                    (pad:lreject! (+ i 1) c reason tag))
+                (loop (cdr cs) (+ i 1) L l col keys (+ rej 1))))))))
+
+(define (pad:l-score s) (car s))
+(define (pad:l-keys s) (car (cdr s)))
+(define (pad:l-rej s) (car (cdr (cdr s))))
+(define (pad:l-dist s) (car (cdr (cdr (cdr s)))))
+(define (pad:l-lines s) (car (cdr (cdr (cdr (cdr s))))))
+(define (pad:l-line s) (car (cdr (cdr (cdr (cdr (cdr s)))))))
+(define (pad:l-col s) (car (cdr (cdr (cdr (cdr (cdr (cdr s))))))))
+
+(define (pad:score-plan plan)
+  (if (pad:plan-ok? plan)
+      (pad:l-score (pad:lsim plan "race" 0))
+      -999))
+
+(define (pad:ltape! tag)
+  (display "TAPE lines=")
+  (display (number->string (length *lines*)))
+  (display " line=")
+  (display (number->string *line*))
+  (display " col=")
+  (display (number->string *col*))
+  (display " text=")
+  (display (pad:lines-text *lines*))
+  (display " keys=")
+  (display (number->string *ln-keys*))
+  (display " rejects=")
+  (display (number->string *ln-rej*))
+  (display " dist=")
+  (display (number->string *ln-dist*))
+  (display " score=")
+  (display (pad:nstr *ln-score*))
+  (display " slot=")
+  (display tag)
+  (newline)
+  *ln-score*)
+
+;; Stamp a plan into the main multi-line world. The only writer of *lines*.
+(define (pad:stamp-lines! plan tag)
+  (let ((s (pad:lsim plan tag 0)))
+    (set! *ln-tag* tag)
+    (set! *lines* (pad:l-lines s))
+    (set! *line* (pad:l-line s))
+    (set! *col* (pad:l-col s))
+    (set! *ln-keys* (pad:l-keys s))
+    (set! *ln-rej* (pad:l-rej s))
+    (set! *ln-dist* (pad:l-dist s))
+    (set! *ln-score* (pad:l-score s))
+    (pad:ltape! tag)))

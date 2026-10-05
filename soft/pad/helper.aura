@@ -1,0 +1,174 @@
+;; aura-pad M3 -- command-helper propose. A helper is a named Soft lambda
+;; in a std/hot-strategy slot that returns a small command plan:
+;;   (lambda () (list "kill-line" "type:hi" "open-line" "next-line" ...))
+;; pd:helper is the trial slot, pd:hshadow the current main helper.
+;; Soft gates the body (no set!/display/eval/load/shell/http ...), probes
+;; the plan shape, races trial vs main on the multi-line goal fixture, and
+;; KEEPs only on a strictly better score. Otherwise heal! + DROP.
+;; Needs buffer.aura, rules.aura, lines.aura. Soft does not speak HTTP.
+
+(load "/workspace/aura-pad/soft/pad/hot.aura")
+
+;; Main helper: forgets the last two letters. Score 27 on the fixture.
+(define *helper-main-body*
+  "(lambda () (list \"kill-line\" \"type:hi\" \"open-line\" \"next-line\" \"type:au\"))")
+(define *helper-seeded* 0)
+(define *helper-base* 0)
+(define *helper-trial* 0)
+(define *helper-tag* "boot")
+(define *helper-word* "")
+(define *helper-why* "")
+(define *helper-keeps* 0)
+(define *helper-drops* 0)
+
+;; Words a helper body may not use, on top of hot.aura *banned-words*.
+(define *helper-banned*
+  (list "pd:helper" "pd:hshadow" "pad:stamp" "pad:lsim" "*lines*"
+        "string->symbol" "require" "import" "define"))
+
+(define (pd:helper-bad-word s)
+  (let ((w (pd:bad-word s)))
+    (if (> (string-length w) 0)
+        w
+        (let loop ((ws *helper-banned*))
+          (cond
+            ((null? ws) "")
+            ((string-contains? s (car ws)) (car ws))
+            (#t (loop (cdr ws))))))))
+
+(define (pd:helper-body-ok? body)
+  (and (string? body)
+       (> (string-length body) 10)
+       (< (string-length body) 2000)
+       (string-prefix? body "(lambda")
+       (string=? (pd:helper-bad-word body) "")))
+
+;; Seed both helper slots with one body via set-code, then register.
+(define (pd:helper-seed! body)
+  (if (= *helper-seeded* 1)
+      (list #t "seed")
+      (let* ((src (string-append
+                   "(define pd:helper " body ")\n"
+                   "(define pd:hshadow " body ")\n"))
+             (sc (try (set-code src) (catch (e) e))))
+        (if (not (equal? sc #t))
+            (list #f "seed")
+            (begin
+              (eval-current)
+              (hot-strategy:register! "pd:helper" body)
+              (set! *helper-main-body* body)
+              (set! *helper-seeded* 1)
+              (set! *race-backend* 0)
+              (set! *race-spawned* 0)
+              (set! *race-joined* 0)
+              (let ((p (try (pd:hshadow) (catch (e) #f))))
+                (if (and (pad:plan-ok? p)
+                         (pad:plan-ok? (try (pd:helper) (catch (e) #f))))
+                    (begin
+                      (set! *main-name* "pd:hshadow")
+                      (set! *main-score* (pad:score-plan p))
+                      (display "MAIN helper start=")
+                      (display (pad:nstr *main-score*))
+                      (newline)
+                      (pad:stamp-lines! p "pd:hshadow")
+                      (list #t "seed"))
+                    (list #f "probe"))))))))
+
+;; Point both slots at the main helper before a trial.
+(define (pd:helper-sync!)
+  (hot-strategy:swap! "pd:hshadow" *helper-main-body* "helper-shadow")
+  (hot-strategy:swap! "pd:helper" *helper-main-body* "helper-choose")
+  *helper-main-body*)
+
+(define (pd:helper-out! tag)
+  (set! *helper-tag* tag)
+  (display "PROPOSE kind=helper tag=")
+  (display tag)
+  (newline)
+  (list (string=? tag "helper_keep") tag))
+
+;; Race trial vs main. Plans are taken outside the fibers; the fibers only
+;; run the pure scorer. Trial REJECTs are shown by a host audit pass.
+(define (pd:helper-race! clean)
+  (let* ((base-plan (pd:hshadow))
+         (trial-plan (pd:helper))
+         (pair (pad:race-thunks!
+                (lambda () (pad:score-plan base-plan))
+                (lambda () (pad:score-plan trial-plan))))
+         (base (car pair))
+         (trial (car (cdr pair))))
+    (set! *helper-base* base)
+    (set! *helper-trial* trial)
+    (pad:lsim trial-plan "pd:helper" 1)
+    (display "RACE helper base=")
+    (display (pad:nstr base))
+    (display " trial=")
+    (display (pad:nstr trial))
+    (newline)
+    (if (> trial base)
+        (begin
+          (set! *helper-main-body* clean)
+          (set! *main-score* trial)
+          (set! *main-name* "pd:helper")
+          (set! *keep-reason* "higher-score-stamp")
+          (set! *helper-keeps* (+ *helper-keeps* 1))
+          (display "KEEP kind=helper reason=higher-score-stamp score=")
+          (display (pad:nstr trial))
+          (newline)
+          (pad:stamp-lines! trial-plan "pd:helper")
+          (pd:helper-out! "helper_keep"))
+        (begin
+          (hot-strategy:heal!)
+          (set! *drop-reason* (if (= trial base)
+                                  "tie-is-not-better-rollback"
+                                  "lower-score-rollback"))
+          (set! *helper-drops* (+ *helper-drops* 1))
+          (display "HEAL name=pd:helper reason=score")
+          (newline)
+          (display "DROP kind=helper reason=")
+          (display *drop-reason*)
+          (display " score=")
+          (display (pad:nstr trial))
+          (newline)
+          (pd:helper-out! "helper_drop")))))
+
+(define (pd:helper-propose-body! body)
+  (let ((clean (pd:clean body)))
+    (set! *helper-word* "")
+    (set! *helper-why* "")
+    (cond
+      ((not (pd:helper-body-ok? clean))
+       (set! *helper-word* (pd:helper-bad-word clean))
+       (pd:gate-reject! "gate" *helper-word*)
+       (pd:helper-out! "helper_reject"))
+      (#t
+       (let ((sw (hot-strategy:swap! "pd:helper" clean "helper-propose")))
+         (if (not (and (pair? sw) (equal? (car sw) #t)))
+             (begin
+               (pd:gate-reject! "swap" "")
+               (pd:helper-out! "helper_reject"))
+             (let ((why (pad:plan-check (try (pd:helper) (catch (e) #f)))))
+               (if (not (string=? why "ok"))
+                   (begin
+                     (set! *helper-why* why)
+                     (hot-strategy:heal!)
+                     (display "HEAL name=pd:helper reason=probe why=")
+                     (display why)
+                     (newline)
+                     (pd:helper-out! "helper_heal"))
+                   (begin
+                     (display "SWAP name=pd:helper reason=propose")
+                     (newline)
+                     (pd:helper-race! clean))))))))))
+
+(define (pd:helper-propose-file! path)
+  (pd:helper-sync!)
+  (display "PROPOSE kind=helper file=")
+  (display path)
+  (newline)
+  (let ((body (try (read-file path) (catch (e) #f))))
+    (if (not (string? body))
+        (begin
+          (pd:gate-reject! "read" "")
+          (pd:helper-out! "helper_reject"))
+        (pd:helper-propose-body! body))))
