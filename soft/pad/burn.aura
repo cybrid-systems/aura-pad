@@ -1,0 +1,54 @@
+;; Multi-round propose -> gate -> play. Keys default to 24.
+;; Each round reads PAD_ROUND_DIR/<n>.lambda. KEEP only on strict gain.
+;; The kept body becomes the next round's main (pd:shadow).
+(load "/workspace/aura-pad/soft/pad/buffer.aura")
+(load "/workspace/aura-pad/soft/pad/rules.aura")
+(load "/workspace/aura-pad/soft/pad/pack.aura")
+(load "/workspace/aura-pad/soft/pad/propose.aura")
+
+(define (pad:env-int name fallback)
+  (let ((raw (getenv name)))
+    (if (and (string? raw) (> (string-length raw) 0))
+        (let ((n (string->number raw)))
+          (if (number? n) n fallback))
+        fallback)))
+
+(define (pad:burn!)
+  (let ((dir (getenv "PAD_ROUND_DIR"))
+        (rounds (pad:env-int "PAD_BURN_ROUNDS" 3))
+        (hz (pad:env-int "PAD_HORIZON" 24)))
+    (set! *steps* hz)
+    (display "BURN rounds=")
+    (display (number->string rounds))
+    (display " keys=")
+    (display (number->string hz))
+    (newline)
+    (if (not (and (string? dir) (> (string-length dir) 0)))
+        (display "PAD_BURN_FAIL dir\n")
+        (let ((seeded (pd:strategy-seed! *bold-body*)))
+          (if (not (and (pair? seeded) (equal? (car seeded) #t)))
+              (display "PAD_BURN_FAIL seed\n")
+              (begin
+                (set! *main-score* (pad:score-pack (pd:shadow)))
+                (display "MAIN start=")
+                (display (pad:nstr *main-score*))
+                (newline)
+                (let loop ((i 1))
+                  (if (> i rounds)
+                      0
+                      (begin
+                        (display "BURN_ROUND=")
+                        (display (number->string i))
+                        (newline)
+                        (pd:propose-file!
+                         (string-append dir "/" (number->string i) ".lambda"))
+                        (loop (+ i 1)))))
+                (pad:stamp-world!)
+                (display "MAIN score=")
+                (display (pad:nstr *main-score*))
+                (display " body=")
+                (display *main-body*)
+                (newline)
+                (display "PAD_BURN_OK\n")))))))
+
+(pad:burn!)

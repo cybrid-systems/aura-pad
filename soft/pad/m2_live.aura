@@ -1,0 +1,34 @@
+;; One host-written lambda (MiniMax via scripts/propose_minimax.py).
+;; Any honest gate result is success; a missing file or Soft error is not.
+;; HTTP stays in the host script.
+(load "/workspace/aura-pad/soft/pad/buffer.aura")
+(load "/workspace/aura-pad/soft/pad/rules.aura")
+(load "/workspace/aura-pad/soft/pad/pack.aura")
+(load "/workspace/aura-pad/soft/pad/propose.aura")
+
+(define (live-tag? s)
+  (or (string=? s "propose_keep")
+      (string=? s "propose_drop")
+      (string=? s "propose_heal")
+      (string=? s "propose_reject")))
+
+(define (main)
+  (let ((seeded (pd:strategy-seed! *bold-body*)))
+    (if (not (and (pair? seeded) (equal? (car seeded) #t)))
+        (display "PAD_M2_PROPOSE_LIVE_FAIL seed\n")
+        (let ((path (getenv "PAD_PROPOSE_FILE")))
+          (set! *main-score* (pad:score-pack (pd:shadow)))
+          (if (not (and (string? path) (> (string-length path) 0)))
+              (display "PAD_M2_PROPOSE_LIVE_FAIL path\n")
+              (let ((r (pd:propose-file! path)))
+                (pad:stamp-world!)
+                (display "MAIN score=")
+                (display (pad:nstr *main-score*))
+                (display " body=")
+                (display *main-body*)
+                (newline)
+                (if (and (pair? r) (pair? (cdr r)) (live-tag? (car (cdr r))))
+                    (display "PAD_M2_PROPOSE_LIVE_OK\n")
+                    (display "PAD_M2_PROPOSE_LIVE_FAIL\n"))))))))
+
+(main)
