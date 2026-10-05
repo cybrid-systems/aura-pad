@@ -1,0 +1,1 @@
+(lambda () (list "undo" "yank" "kill-region" "dedent" "bob" "kill-line" "type:hi" "open-line" "next-line" "type:aura"))

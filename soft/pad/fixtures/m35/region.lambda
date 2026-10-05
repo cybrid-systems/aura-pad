@@ -1,0 +1,1 @@
+(lambda () (list "type:hi" "set-mark" "end" "kill-region" "open-line" "next-line" "indent" "type:aura" "open-line" "next-line" "type:pad"))
