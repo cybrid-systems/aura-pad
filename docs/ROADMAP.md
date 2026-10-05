@@ -3,7 +3,7 @@
 Requirements: [`REQUIREMENTS.md`](REQUIREMENTS.md) · Design:
 [`DESIGN.md`](DESIGN.md) · Engine gaps: [`ISSUES.md`](ISSUES.md).
 
-M0–M6 shipped (see `m0.md` … `m6.md`). **M7 shipped** (`m7.md`). The
+M0–M6 shipped (see `m0.md` … `m6.md`). **M7 shipped** (`m7.md`). M8 shipped (`m8.md`). The
 earlier M7–M12 sketch in [`NEXT.md`](NEXT.md) (kept for its detail) is
 renumbered here; where they disagree, this file wins:
 NEXT's "M7 workspace" is now **M9**, "M8 intent worldline" stays **M8**,
@@ -36,7 +36,7 @@ helpers on builtins. Acceptance (all in `scripts/smoke_m7.sh`):
       `PAD_M7_PERF_OK`).
 - [x] M0–M6 markers unchanged; C unchanged.
 
-## M8 — kid onboarding card + intent worldline (next)
+## M8 — kid onboarding card + intent worldline (done)
 
 Kid opens the pad and sees a two-line welcome card (Soft text in the SNAP
 `SAY` / a `CARD` row), then can give a goal (`goal:hi aura`). Two command
