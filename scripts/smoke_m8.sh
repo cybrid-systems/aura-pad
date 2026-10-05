@@ -13,6 +13,7 @@ soft_errs() { grep -qiE 'error:|unbound variable' "$@"; }
 
 python3 "$ROOT/scripts/paren_check.py" \
   "$ROOT"/soft/pad/card.aura "$ROOT"/soft/pad/goal.aura \
+  "$ROOT"/soft/pad/goal_p1.aura "$ROOT"/soft/pad/goal_p2.aura \
   "$ROOT"/soft/pad/m8_test.aura "$ROOT"/soft/pad/m8_smoke.aura \
   "$ROOT"/soft/pad/keys.aura "$ROOT"/soft/pad/play.aura \
   "$ROOT"/soft/pad/fixtures/m8/*.lambda
