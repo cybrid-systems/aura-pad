@@ -4,20 +4,11 @@
 ;; SNAP block. The C viewport (c/pad_view.c) maps letters to colors and
 ;; draws; it never tokenizes, gates, edits or picks words.
 ;;
-;; Wire (one block; a stream may carry many, last complete one wins):
-;;   SNAP v1 pad
-;;   TITLE <words>
-;;   CURSOR line=<l> col=<c>
-;;   SAY <kid words>
-;;   LEGEND <L>=<word> ...
-;;   ROWS n=<k>
-;;   T <row text>      \
-;;   H <HL tape>        > k times; |T| = |H| = |M|
-;;   M <mark tape>     /
-;;   END
-;; HL letters (from hl.aura): P K S T C Q M N .
-;; Mark letters: d = name is born here (def), r = name used here, . none.
-;; Needs buffer.aura, hl.aura, jump.aura. Soft reserved: never bind quote.
+;; Hot path: pad:snap-text tokenizes ONCE (pad:hl-bundle), builds the
+;; color tape and def/use marks from the same toks — no full re-HL per
+;; mark helper. Optional DIRTY line=<csv> when the caller knows which
+;; rows changed (C may redraw only those; full rows still sent).
+;; Soft reserved: never bind quote.
 
 (define *view-legend*
   "K=magic-word S=name T=quote C=note N=number P=paren Q=ask M=change d=born-here r=used-here")
@@ -46,8 +37,7 @@
         (+ off col)
         (loop (+ i 1) (cdr xs) (+ off (+ (length (car xs)) 1))))))
 
-;; Mark tape for the name under point: d at defs, r at other uses.
-;; Same length as src; all "." when point is not on a name.
+;; Mark tape helpers (reuse toks — no second/third tokenize).
 (define (pad:v-fill-span cs a k ch)
   (let loop ((i 0) (xs cs) (acc (list)))
     (cond
@@ -58,22 +48,26 @@
 (define (pad:v-in? x xs)
   (cond ((null? xs) #f) ((= x (car xs)) #t) (#t (pad:v-in? x (cdr xs)))))
 
-(define (pad:v-marks src point)
+(define (pad:v-marks-in src point toks)
   (let* ((n (string-length src))
          (blank (let loop ((i 0) (acc (list)))
                   (if (>= i n) acc (loop (+ i 1) (cons #\. acc)))))
-         (name (pad:sym-at src point)))
+         (name (pad:sym-at-in toks point)))
     (if (string=? name "")
         (list->string blank)
         (let* ((k (string-length name))
-               (defs (pad:find-defs src name))
-               (refs (pad:find-refs src name)))
+               (defs (pad:find-defs-in toks name))
+               (refs (pad:find-refs-in toks name)))
           (let loop ((rs refs) (cs blank))
             (if (null? rs)
                 (list->string cs)
                 (loop (cdr rs)
                       (pad:v-fill-span cs (car rs) k
-                                       (if (pad:v-in? (car rs) defs) #\d #\r)))))))))
+                                       (if (pad:v-in? (car rs) defs)
+                                           #\d #\r)))))))))
+
+(define (pad:v-marks src point)
+  (pad:v-marks-in src point (pad:hl-tokens src)))
 
 ;; Row block: T/H/M for each line, sliced from whole-source tapes.
 (define (pad:v-rows lines tape marks)
@@ -90,18 +84,35 @@
                                "H " (substring tape off e) "\n"
                                "M " (substring marks off e) "\n"))))))
 
-;; The whole SNAP block for editor lines L, cursor (l col), kid say.
+;; DIRTY csv of 0-based row indexes, or "" if unknown / all dirty.
+(define (pad:v-dirty-csv xs)
+  (cond
+    ((null? xs) "")
+    ((null? (cdr xs)) (number->string (car xs)))
+    (#t (string-append (number->string (car xs)) ","
+                       (pad:v-dirty-csv (cdr xs))))))
+
+;; The whole SNAP block. Tokenize once; optional dirty row list.
 (define (pad:snap-text title L l col say)
+  (pad:snap-text-dirty title L l col say (list)))
+
+(define (pad:snap-text-dirty title L l col say dirty)
   (let* ((src (pad:v-src L))
-         (tape (pad:hl-color src))
-         (marks (pad:v-marks src (pad:v-point L l col)))
-         (lines (pad:v-split src)))
+         (b (pad:hl-bundle src))
+         (tape (car b))
+         (toks (cadr b))
+         (marks (pad:v-marks-in src (pad:v-point L l col) toks))
+         (lines (pad:v-split src))
+         (dcsv (pad:v-dirty-csv dirty)))
     (string-append
       "SNAP v1 pad\n"
       "TITLE " title "\n"
       "CURSOR line=" (number->string l) " col=" (number->string col) "\n"
       "SAY " say "\n"
       "LEGEND " *view-legend* "\n"
+      (if (string=? dcsv "")
+          ""
+          (string-append "DIRTY lines=" dcsv "\n"))
       "ROWS n=" (number->string (length lines)) "\n"
       (pad:v-rows lines tape marks)
       "END\n")))
