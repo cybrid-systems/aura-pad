@@ -1,0 +1,59 @@
+;; M4 live: one host-written story macro (MiniMax via
+;; scripts/propose_minimax.py --macro). The law race runs first (wrap-3
+;; KEEP), then the main macro (30) is seeded and the live lambda is
+;; gated / probed / raced. Any honest gate result is success; on KEEP the
+;; macro undo must restore main 30 with an honest re-score. A missing file
+;; or a Soft error is not success. No HTTP here.
+(load "/workspace/aura-pad/soft/pad/buffer.aura")
+(load "/workspace/aura-pad/soft/pad/rules.aura")
+(load "/workspace/aura-pad/soft/pad/lines.aura")
+(load "/workspace/aura-pad/soft/pad/helper.aura")
+(load "/workspace/aura-pad/soft/pad/edit.aura")
+(load "/workspace/aura-pad/soft/pad/m4.aura")
+(load "/workspace/aura-pad/soft/pad/macro.aura")
+
+(define *fx* "/workspace/aura-pad/soft/pad/fixtures/m4/")
+
+(define (live-tag? s)
+  (or (string=? s "macro_keep")
+      (string=? s "macro_drop")
+      (string=? s "macro_heal")
+      (string=? s "macro_reject")))
+
+(define (tag-of r)
+  (if (and (pair? r) (pair? (cdr r))) (car (cdr r)) "none"))
+
+(define (undo-ok? tag)
+  (if (not (string=? tag "macro_keep"))
+      #t
+      (let ((u (pd:macro-undo!)))
+        (and (string=? (tag-of u) "macro_undo") (= *main-score* 30)))))
+
+(define (main)
+  (display "DIALECT=live-soft-editor-pad-m4")
+  (newline)
+  (pad:law-race! *law-wrap*
+                 (list "replace-all:a=o" "eob" "find:cat" "replace:dog" "find-next" "replace:dog"))
+  (let ((seeded (pd:macro-seed! (pd:clean (read-file (string-append *fx* "main.lambda"))))))
+    (if (not (and (pair? seeded) (equal? (car seeded) #t)))
+        (display "PAD_M4_LIVE_FAIL seed\n")
+        (let ((path (getenv "PAD_PROPOSE_FILE")))
+          (if (not (and (string? path) (> (string-length path) 0)))
+              (display "PAD_M4_LIVE_FAIL path\n")
+              (let* ((r (pd:macro-propose-file! path))
+                     (tag (tag-of r))
+                     (trial *macro-trial*)
+                     (uok (undo-ok? tag)))
+                (pad:stamp-world!)
+                (display "LIVE tag=")
+                (display tag)
+                (display " trial=")
+                (display (pad:nstr trial))
+                (display " undo=")
+                (display (if uok "ok" "bad"))
+                (newline)
+                (if (and (live-tag? tag) uok)
+                    (display "PAD_M4_LIVE_OK\n")
+                    (display "PAD_M4_LIVE_FAIL\n"))))))))
+
+(main)
