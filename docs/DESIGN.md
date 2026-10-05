@@ -48,6 +48,12 @@ Never use `quote` as an identifier. Prefer `qf`, `mid`, `tag`.
   gates it, probes it, races it vs main helper `pd:hshadow` on the
   `"hi"`/`"aura"` goal and KEEPs only on a strictly better score, else
   `heal!` + DROP. See [`m3.md`](m3.md).
+- **M3.5** — finer commands (`soft/pad/edit.aura`): `undo`, `yank`,
+  `indent`/`dedent`, `bob`/`eob`, `set-mark`, `kill-region`,
+  `copy-region`, each with a kid reason; `say="..."` on REJECT, `SCORE`
+  breakdown; three-line goal for the helper race via scoring hooks;
+  `pd:helper-undo!` takes back a KEEP with an honest re-score. Tests:
+  paren check, Python model, Soft unit tests. See [`m35.md`](m35.md).
 
 ## M3 layering
 
@@ -58,4 +64,11 @@ pack.aura     M1/M2 keymap pack (unchanged, not loaded by M3)
 hot.aura      M1/M2 hot slot + gate words (reused by M3)
 lines.aura    M3 lines, (line col), line ops, plans, pure lsim, stamp
 helper.aura   M3 pd:helper / pd:hshadow propose → gate → race → KEEP/DROP
+              (M3.5: scoring hooks, KEEP history, pd:helper-undo!)
+edit.aura     M3.5 edit state (kill, mark, undo), finer commands, esim,
+              goal3, TAPE view / SCORE, pad:helper-use-goal3!
 ```
+
+Honesty rules (M3.5): a REJECT never mutates and never pushes undo; undo
+restores a recorded snapshot, never a guess; world undo re-plays and
+re-scores the restored helper and fails loudly on a mismatch.
