@@ -14,11 +14,11 @@ Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 Milestones: [`docs/m0.md`](docs/m0.md), [`docs/m1.md`](docs/m1.md),
 [`docs/m2.md`](docs/m2.md), [`docs/m3.md`](docs/m3.md), [`docs/m35.md`](docs/m35.md),
 [`docs/m4.md`](docs/m4.md), [`docs/m5.md`](docs/m5.md), [`docs/m6.md`](docs/m6.md),
-[`docs/m7.md`](docs/m7.md).
+[`docs/m7.md`](docs/m7.md), [`docs/m8.md`](docs/m8.md).
 Repo: https://github.com/cybrid-systems/aura-pad
 
 中文简介：Aura Pad 是给小朋友也能玩的 Soft 小编辑器。缓冲区、光标、按键
-表都在 Soft 里。两种键位策略（温柔 / 大胆）赛跑同一串按键；Soft 门卫用
+表都在 Soft 里。两种键位策略（温和 / 大胆）赛跑同一串按键；Soft 门卫用
 简短理由拒绝坏命令；分数高的 KEEP，另一条 DROP。M0 没有 C 画面。
 M1 在运行中热换/自愈键位参数包；M2 让 MiniMax 提议参数包，Soft 门卫
 把关，严格更高分才 KEEP。M3 让缓冲区变成多行（open-line / kill-line /
@@ -27,7 +27,7 @@ next-line / prev-line），并让 AI 提议“命令助手”（返回一串命�
 yank、indent/dedent、bob/eob、标记区域剪切/复制（每个都有小朋友能懂的
 拒绝理由），三行第二目标，“撤销 KEEP”，以及 168 项 Soft 单元测试。
 M4 变成小朋友的故事编辑器：两个本子（story / scratch）、查找/替换
-（找不到、没给词、一次改太多处、不友好的词都会被温柔地拒绝）、宏录制
+（找不到、没给词、一次改太多处、不友好的词都会被温和地拒绝）、宏录制
 （rec / stop / play）、两条规则在同一串按键上赛跑，以及 AI 提议“录好的宏”，
 Soft 把关后严格更高分才 KEEP（30 → 44 → 51），可撤销；293 项 Soft 检查。
 M5 加上 Soft 侧 Aura 语法高亮（HL 色带）、跳转/引用（goto-def /
@@ -38,6 +38,8 @@ M6 “加c”：一个很薄的 C 画面。编辑、高亮、跳转标记、按�
 把字母换成颜色画到终端（以及把原始按键字节转发给 Soft）。
 按键延迟：M6 缓存后小页面约 49/29 ms；M7 行级缓存后约 23/12 ms，
 12 行页面插入约 230→26–30 ms（见 docs/perf.md）。不声称比 vi/Emacs 快。
+M8 欢迎卡 + 意图世界线：首帧欢迎词、`goal:` 命令、两条助手赛跑、
+CARD 行、门卫（含 capability）、撤销 KEEP → `PAD_M8_OK`。
 
 - **M0** races `map-gentle` (mid 1) and `map-bold` (mid 2) on 24 seeded
   key steps toward the goal fixture `"hi aura"`. Score is
@@ -121,7 +123,7 @@ M6 “加c”：一个很薄的 C 画面。编辑、高亮、跳转标记、按�
   checks). C unchanged. Soft floors published (#4343 + in-place
   `vector-set!` cost). Tests: `PAD_M7_TEST_OK`, `PAD_M7_DIRTY_OK`,
   `PAD_PERF_OK`, `PAD_M7_PERF_OK`, `PAD_M7_OK`. See
-  [`docs/m7.md`](docs/m7.md).
+  [`docs/m7.md`](docs/m7.md), [`docs/m8.md`](docs/m8.md).
 
 ## Soft smoke
 
@@ -132,7 +134,7 @@ Soft runs natively in that container (no nested docker). Never
 `build_soft4132`. Needs `AURA_SANDBOX=off`.
 
 ```bash
-bash scripts/smoke.sh         # M0..M7 (+ live MiniMax if keyed) → PAD_SMOKE_OK
+bash scripts/smoke.sh         # M0..M8 (+ live MiniMax if keyed) → PAD_SMOKE_OK
 bash scripts/smoke_soft.sh    # M0 → PAD_M0_OK
 bash scripts/smoke_m1.sh      # M1 → PAD_M1_OK
 bash scripts/smoke_m2.sh      # M2 fixtures → PAD_M2_PROPOSE_OK
@@ -143,8 +145,9 @@ bash scripts/smoke_m4.sh      # M4 PAREN_OK, PAD_M4_MODEL_OK, PAD_M4_TEST_OK, PA
 bash scripts/smoke_m5.sh      # M5 PAREN_OK, PAD_M5_MODEL_OK, PAD_M5_TEST_OK, PAD_M5_OK
 bash scripts/smoke_c.sh       # M6 Soft dump → thin C blit … PAD_C_OK (PAD_C_DOCKER=1 builds C in the image)
 bash scripts/smoke_m7.sh      # M7 Soft tests + DIRTY audit + perf → PAD_M7_OK
+bash scripts/smoke_m8.sh      # M8 welcome card + intent race → PAD_M8_OK
 bash scripts/smoke_perf.sh    # key-path ms/key → PAD_PERF_OK + PAD_M7_PERF_OK
-PAD_LIVE=0 bash scripts/smoke.sh     # skip live MiniMax (includes M7)
+PAD_LIVE=0 bash scripts/smoke.sh     # skip live MiniMax (includes M8)
 ```
 
 Scripts may be mode `100644` in git. Always invoke them with `bash`.
