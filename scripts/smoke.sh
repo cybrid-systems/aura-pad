@@ -13,6 +13,9 @@
 # → M5 Soft Aura HL + LSP-lite jump/refs + Soft query/mutate bridge
 # (paren, Python model PAD_M5_MODEL_OK, Soft tests PAD_M5_TEST_OK,
 # HL/jump/query smoke PAD_M5_OK).
+# → M6 thin C viewport (Soft tests PAD_M6_TEST_OK, Soft snapshot PAD_M6_OK,
+# host model PAD_M6_MODEL_OK, C thin guard, golden/fail-closed blits,
+# soft_play → C blit; PAD_C_OK). Soft owns the editor; C only blits.
 # Ends with PAD_SMOKE_OK.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -69,5 +72,8 @@ bash "$ROOT/scripts/smoke_m4.sh"
 
 echo "smoke: m5 HL + jump/refs + query/mutate"
 bash "$ROOT/scripts/smoke_m5.sh"
+
+echo "smoke: m6 thin C viewport (Soft dump -> C blit)"
+bash "$ROOT/scripts/smoke_c.sh"
 
 echo "smoke: PAD_SMOKE_OK"
