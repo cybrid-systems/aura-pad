@@ -10,6 +10,9 @@
 # PAD_M4_MODEL_OK, Soft tests PAD_M4_TEST_OK, law race + macro race +
 # macro undo PAD_M4_OK, optional live --macro; PAD_M4_LIVE_SKIP when no key
 # or PAD_LIVE=0).
+# → M5 Soft Aura HL + LSP-lite jump/refs + Soft query/mutate bridge
+# (paren, Python model PAD_M5_MODEL_OK, Soft tests PAD_M5_TEST_OK,
+# HL/jump/query smoke PAD_M5_OK).
 # Ends with PAD_SMOKE_OK.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -63,5 +66,8 @@ bash "$ROOT/scripts/smoke_m35.sh"
 
 echo "smoke: m4 pads + find/replace + macros"
 bash "$ROOT/scripts/smoke_m4.sh"
+
+echo "smoke: m5 HL + jump/refs + query/mutate"
+bash "$ROOT/scripts/smoke_m5.sh"
 
 echo "smoke: PAD_SMOKE_OK"
