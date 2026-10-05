@@ -33,6 +33,8 @@ query:* / mutate:* Soft 桥；没有的原语记成 GAPS 并向 Aura 提 issue�
 M6 “加c”：一个很薄的 C 画面。编辑、高亮、跳转标记、按键表和所有给
 小朋友看的话都在 Soft；Soft 把它们打包成 `SNAP v1 pad` 块，C 只负责
 把字母换成颜色画到终端（以及把原始按键字节转发给 Soft）。
+按键延迟：Soft 侧增量/缓存高亮 + DIRTY 行，插入/光标从约 161/288 ms
+降到约 36/18 ms（见 docs/perf.md）。
 
 - **M0** races `map-gentle` (mid 1) and `map-bold` (mid 2) on 24 seeded
   key steps toward the goal fixture `"hi aura"`. Score is
@@ -102,6 +104,11 @@ M6 “加c”：一个很薄的 C 画面。编辑、高亮、跳转标记、按�
   `PAD_C_THIN_OK`. Tests: 61 Soft checks, host model byte-for-byte,
   golden blits, fail-closed fixtures, soft_play → C → `PAD_C_OK`. See
   [`docs/m6.md`](docs/m6.md).
+- **Key latency** — Soft no longer full-buffer re-HL on every key:
+  one tokenize per text change, play cache for cursor moves, optional
+  SNAP `DIRTY` for lighter C redraw. Before ~161/288 ms/key → after
+  ~36/18 ms/key (insert/cursor); `PAD_PERF_OK` < 50 ms. Soft kernel
+  define-lookup still scales (#4343). See [`docs/perf.md`](docs/perf.md).
 
 ## Soft smoke
 
@@ -122,7 +129,8 @@ bash scripts/smoke_m35.sh     # M3.5 PAREN_OK, PAD_MODEL_OK, PAD_TEST_OK, PAD_M3
 bash scripts/smoke_m4.sh      # M4 PAREN_OK, PAD_M4_MODEL_OK, PAD_M4_TEST_OK, PAD_M4_OK (+ live if keyed)
 bash scripts/smoke_m5.sh      # M5 PAREN_OK, PAD_M5_MODEL_OK, PAD_M5_TEST_OK, PAD_M5_OK
 bash scripts/smoke_c.sh       # M6 Soft dump → thin C blit … PAD_C_OK (PAD_C_DOCKER=1 builds C in the image)
-PAD_LIVE=0 bash scripts/smoke.sh     # skip live MiniMax
+bash scripts/smoke_perf.sh    # key-path ms/key → PAD_PERF_OK (<50ms median)
+PAD_LIVE=0 bash scripts/smoke.sh     # skip live MiniMax (includes perf)
 ```
 
 Scripts may be mode `100644` in git. Always invoke them with `bash`.
