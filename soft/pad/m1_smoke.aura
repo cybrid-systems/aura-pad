@@ -1,0 +1,116 @@
+;; M1: mid-run hot-strategy swap/heal of the live keymap pack, then an
+;; honest dual race gentle vs bold. Prints SWAP / HEAL / MUTATE / KEEP /
+;; DROP / PAD_M1_OK. fiber_live only if both joins landed.
+(load "/workspace/aura-pad/soft/pad/buffer.aura")
+(load "/workspace/aura-pad/soft/pad/rules.aura")
+(load "/workspace/aura-pad/soft/pad/pack.aura")
+(load "/workspace/aura-pad/soft/pad/hot.aura")
+
+(define *fail* 0)
+
+(define (fail! tag)
+  (display tag)
+  (newline)
+  (set! *fail* (+ *fail* 1))
+  *fail*)
+
+(define (expect tag got want)
+  (display tag)
+  (display "=")
+  (display (pad:nstr got))
+  (if (= got want)
+      (display " OK")
+      (begin
+        (display " WANT=")
+        (display (pad:nstr want))
+        (set! *fail* (+ *fail* 1))))
+  (newline)
+  got)
+
+(define (tag? r want)
+  (and (pair? r) (pair? (cdr r)) (equal? (car (cdr r)) want)))
+
+(define (pack= p a b c)
+  (and (pad:pack-ok? p)
+       (= (pad:pack-step p) a)
+       (= (pad:pack-room p) b)
+       (= (pad:pack-strict p) c)))
+
+(define (keys! n tag)
+  (let loop ((i 0))
+    (if (< i n)
+        (begin
+          (pd:live-key! tag)
+          (loop (+ i 1)))))
+  *key*)
+
+(define (main)
+  (display "DIALECT=live-soft-editor-pad-m1")
+  (newline)
+  ;; Packs replay M0 exactly through the pack sim.
+  (expect "PACK_GENTLE" (pad:score-pack (list 1 8 1)) -2)
+  (expect "PACK_BOLD" (pad:score-pack (list 3 20 0)) 9)
+  (let ((seeded (pd:strategy-seed! *gentle-body*)))
+    (if (not (and (pair? seeded) (equal? (car seeded) #t)))
+        (display "PAD_M1_FAIL seed\n")
+        (begin
+          (pad:reset-live!)
+          (keys! 10 "pd:law")
+          (pad:live-tape! "pd:law")
+          ;; A sneaky body is gate-rejected. Key count and slot stay.
+          (let ((bad (pd:apply-body!
+                      "(lambda () (begin (set! *key* 0) (list 3 20 0)))"
+                      "bad")))
+            (if (not (tag? bad "gate")) (fail! "GATE_FAIL")))
+          (expect "KEY_PRE" *key* 10)
+          (if (not (pack= (pd:law) 1 8 1)) (fail! "SLOT_FAIL pre"))
+          ;; Mid-run swap to a middle pack.
+          (let ((sw (pd:apply-body! *mid-body* "mid-swap")))
+            (if (not (tag? sw "swap")) (fail! "SWAP_FAIL")))
+          (expect "KEY_SWAP" *key* 10)
+          (if (not (pack= (pd:law) 2 12 0)) (fail! "SLOT_FAIL swap"))
+          (keys! 5 "pd:law")
+          (pad:live-tape! "pd:law")
+          (expect "KEY_CONT" *key* 15)
+          ;; Ugly body: short pack. Swap lands, probe fails, heal!.
+          (let ((ugly (pd:apply-body! "(lambda () (list 2 12))" "ugly")))
+            (if (not (tag? ugly "probe")) (fail! "HEAL_FAIL")))
+          (expect "KEY_HEAL" *key* 15)
+          (if (not (pack= (pd:law) 2 12 0)) (fail! "SLOT_FAIL heal"))
+          (expect "ROOM_BOOST" *room-boost* 2)
+          (expect "LIVE_EDITS" *live-edits* 12)
+          (expect "LIVE_REJECTS" *live-rej* 3)
+          (expect "LIVE_LEN" (length *buf*) 8)
+          (expect "LIVE_DIST" *dist* 8)
+          ;; Dual race: still gentle vs bold on the pure sim path.
+          (set! *race-backend* 0)
+          (set! *race-spawned* 0)
+          (set! *race-joined* 0)
+          (set! *world-line* "host-sequential")
+          (let ((pair (pad:race-thunks!
+                       (lambda () (map-gentle))
+                       (lambda () (map-bold)))))
+            (display "RACE gentle=")
+            (display (pad:nstr (car pair)))
+            (display " bold=")
+            (display (pad:nstr (car (cdr pair))))
+            (newline)
+            (pad:decide! (car pair) (car (cdr pair))))
+          (pad:audit!)
+          (expect "SCORE_GENTLE" *score-gentle* -2)
+          (expect "SCORE_BOLD" *score-bold* 9)
+          (expect "MAIN_SCORE" *main-score* 9)
+          (expect "KEEP_MID" *keep-mid* 2)
+          (expect "DROP_MID" *drop-mid* 1)
+          (if (string=? *world-line* "fiber_live")
+              (if (not (and (> *race-backend* 0)
+                            (> *race-spawned* 0)
+                            (= *race-joined* *race-spawned*)))
+                  (fail! "WORLD_FAIL"))
+              (if (not (string=? *world-line* "host-sequential"))
+                  (fail! "WORLD_FAIL")))
+          (if (= *fail* 0)
+              (display "PAD_M1_OK\n")
+              (display "PAD_M1_FAIL\n"))))))
+
+(main)
