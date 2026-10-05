@@ -92,8 +92,8 @@ All model step functions are pure on their state lists (fiber-safe); only
 6. `WORLD line=fiber_live backend=.. joins=n/n` only when every join
    returns a number and `backend > 0`; otherwise `host-sequential`.
 
-Keymaps (M0): `map-gentle` (mid 1, ±1, reject `too-far`, max len 8) vs
-`map-bold` (mid 2, ±3 clamped, max len 20).
+Keymaps (M0): `map-gentle` (mid 1, Δ±1, reject `too-far`, max len 8) vs
+`map-bold` (mid 2, Δ±3 clamped, max len 20).
 
 ## 5. AI Propose flow (M2–M4, M8 next)
 
@@ -216,7 +216,7 @@ and keeps per-key Soft calls to O(edited line + rows touched).
   rejected= cursor=`.
 - Host audits: `*_model.py` byte oracles, `dirty_check.py`
   (`M7_DIRTY blocks= pairs= partial=`).
-- Every smoke marker is greppable: `PAD_M0_OK` … `PAD_M7_OK`,
+- Every smoke marker is greppable: `PAD_M0_OK` … `PAD_M8_OK`,
   `PAD_SMOKE_OK`.
 
 ## 10. Honesty rules (all milestones)
@@ -251,7 +251,7 @@ and keeps per-key Soft calls to O(edited line + rows touched).
 | M5 | done | Soft HL, LSP-lite jump/refs, honest query/mutate bridge |
 | M6 | done | thin C viewport, SNAP v1 pad, Soft keymap/play; key-latency cache |
 | **M7** | **done** | **snappy pad: line-incremental Soft key path, exact DIRTY** |
-| M8 | next | kid onboarding card + intent worldline (goal race, story cards) |
+| **M8** | **done** | **kid onboarding card + intent worldline (goal race, story cards)** |
 | M9 | next | workspace notebook: load once, pen at mutation boundaries |
 | M10 | next | provenance (`who`) + engine dirty nodes |
 | M11 | later | `aura` notebook pad, hygienic macro play |
