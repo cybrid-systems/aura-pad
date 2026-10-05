@@ -20,8 +20,13 @@ M3 helper shape (--helper): (lambda () (list TOKEN ...))
   "kill-line" "next-line" "prev-line"), "type:<a-z and space>", or a char
   code. Soft plays it on the multi-line buffer toward "hi" / "aura".
 
+M3.5 helper shape (--helper3): same lambda shape, plus "undo" "yank"
+  "indent" "dedent" "bob" "eob" "set-mark" "kill-region" "copy-region";
+  goal is three lines "hi" / "  aura" / "pad" (score base 60).
+
 Usage: propose_minimax.py OUT_PATH [ROUND [NOTE [PREV_PATH]]]
        propose_minimax.py --helper OUT_PATH [ROUND [NOTE [PREV_PATH]]]
+       propose_minimax.py --helper3 OUT_PATH [ROUND [NOTE [PREV_PATH]]]
        propose_minimax.py --check   (exit 0 if a key is configured, 3 if not)
 Stdout stays empty. Stderr is PROPOSE_WROTE or PROPOSE_FAIL <reason>.
 The API key is never printed.
@@ -203,7 +208,52 @@ def _prompt_helper(rnd: int, note: str, prev: str) -> str:
     )
 
 
-def _looks_like_helper(lam: str) -> bool:
+HELPER3_CMDS = HELPER_CMDS + (
+    "undo", "yank", "indent", "dedent", "bob", "eob",
+    "set-mark", "kill-region", "copy-region",
+)
+HELPER3_MAIN = (
+    '(lambda () (list "kill-line" "type:hi" "open-line" "next-line" "type:aura" '
+    '"open-line" "next-line" "type:pad"))'
+)
+
+
+def _prompt_helper3(rnd: int, note: str, prev: str) -> str:
+    prev_s = prev.strip() if prev else "none"
+    return (
+        "Return ONLY one Aura line of the form (lambda () (list TOKEN ...)). "
+        f"You are proposing a command helper for a kid-friendly multi-line text editor, round {rnd}. "
+        "The buffer starts as ONE line with the text \"nwn\" and the cursor at line 0, column 0. "
+        "The goal is THREE lines: line 0 is \"hi\", line 1 is \"  aura\" (two spaces then aura), "
+        "line 2 is \"pad\". "
+        "Each TOKEN is a double-quoted string: one of \"left\" \"right\" \"home\" \"end\" \"back\" "
+        "\"open-line\" \"kill-line\" \"next-line\" \"prev-line\" \"undo\" \"yank\" \"indent\" "
+        "\"dedent\" \"bob\" \"eob\" \"set-mark\" \"kill-region\" \"copy-region\", or \"type:TEXT\" "
+        "where TEXT is lowercase a-z or spaces (one key per letter). "
+        "open-line splits the line at the cursor and the cursor STAYS on the current line (like Emacs C-o). "
+        "kill-line deletes to the end of the line (at the end it joins the next line) and remembers the text. "
+        "yank pastes the last killed or copied text. undo takes back the last text change. "
+        "indent puts two spaces at the start of the line; dedent removes them. "
+        "bob / eob jump to the start / end of the whole buffer. "
+        "set-mark marks the cursor; kill-region / copy-region cut / copy between mark and cursor. "
+        "Refused keys cost 2 points each: undo with nothing to undo, yank with nothing killed, "
+        "kill-region without a mark, dedent without leading spaces, bob/eob when already there, "
+        "left at the very start, next-line on the last line, kill-line on an empty buffer. "
+        "Score = 60 - accepted_keys - 2*refused_keys - 3*distance_from_goal. Higher is better. "
+        f"The current main helper is {HELPER3_MAIN} scoring 28 (line 1 lacks the two spaces). "
+        "Beat it strictly. At most 32 tokens. "
+        "Do NOT use set!, begin, display, write, eval, load, shell, http, define, or any other function. "
+        "No markdown. "
+        f"Previous lambda (do not repeat it verbatim): {prev_s}. "
+        f"Last note: {note}."
+    )
+
+
+def _looks_like_helper3(lam: str) -> bool:
+    return _looks_like_helper(lam, HELPER3_CMDS)
+
+
+def _looks_like_helper(lam: str, cmds: tuple = HELPER_CMDS) -> bool:
     m = re.match(r"^\(lambda\s*\(\s*\)\s*\(list\s+(.*)\)\s*\)$", lam)
     if not m:
         return False
@@ -216,7 +266,7 @@ def _looks_like_helper(lam: str) -> bool:
         if not (t.startswith('"') and t.endswith('"')):
             return False
         word = t[1:-1]
-        if word in HELPER_CMDS:
+        if word in cmds:
             continue
         if word.startswith("type:") and re.fullmatch(r"[a-z ]*", word[5:]):
             continue
@@ -309,9 +359,9 @@ def _check() -> int:
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--check":
         return _check()
-    helper = False
-    if len(sys.argv) >= 2 and sys.argv[1] == "--helper":
-        helper = True
+    helper = ""
+    if len(sys.argv) >= 2 and sys.argv[1] in ("--helper", "--helper3"):
+        helper = sys.argv[1][2:]
         del sys.argv[1]
     if len(sys.argv) < 2 or len(sys.argv) > 5:
         print("PROPOSE_FAIL usage", file=sys.stderr)
@@ -346,8 +396,12 @@ def main() -> int:
         or env.get("MINIMAX_MODEL", "").strip()
         or "MiniMax-M3"
     )
-    prompt = _prompt_helper(rnd, note, prev) if helper else _prompt(rnd, note, prev)
-    shape_ok = _looks_like_helper if helper else _looks_like_pack
+    if helper == "helper3":
+        prompt, shape_ok = _prompt_helper3(rnd, note, prev), _looks_like_helper3
+    elif helper == "helper":
+        prompt, shape_ok = _prompt_helper(rnd, note, prev), _looks_like_helper
+    else:
+        prompt, shape_ok = _prompt(rnd, note, prev), _looks_like_pack
     lam = ""
     last_fail = "no_lambda"
     for _attempt, temp in ((1, 0.4), (2, 0.8)):
