@@ -1,0 +1,142 @@
+;; aura-pad M8 Soft tests: welcome card words, goal: empty reject, score
+;; oracle, fixture race, gate (banned / kind / capability), undo KEEP +
+;; loud mismatch. Play-stack CARD_FIRST / GOAL_NONE live frames are
+;; checked in scripts/smoke_m8.sh (Soft tip: play+goal together regresses
+;; substring in nested defines -- keep stacks separate).
+(load "/workspace/aura-pad/soft/pad/buffer.aura")
+(load "/workspace/aura-pad/soft/pad/rules.aura")
+(load "/workspace/aura-pad/soft/pad/lines.aura")
+(load "/workspace/aura-pad/soft/pad/card.aura")
+(load "/workspace/aura-pad/soft/pad/goal.aura")
+
+(define *fail* 0)
+(define *checks* 0)
+(define *fx* "/workspace/aura-pad/soft/pad/fixtures/m8/")
+
+(define (expect tag got want)
+  (set! *checks* (+ *checks* 1))
+  (display "T ") (display tag) (display "=")
+  (display (if (number? got) (pad:nstr got) (if (string? got) got "?")))
+  (if (equal? got want)
+      (display " OK")
+      (begin
+        (display " WANT=")
+        (display (if (number? want) (pad:nstr want) want))
+        (set! *fail* (+ *fail* 1))))
+  (newline)
+  got)
+
+(define (expect-true tag got)
+  (set! *checks* (+ *checks* 1))
+  (display "T ") (display tag) (display "=")
+  (display (if got "1" "0"))
+  (if got (display " OK")
+      (begin (display " WANT=1") (set! *fail* (+ *fail* 1))))
+  (newline)
+  got)
+
+(define (expect-str tag got want)
+  (set! *checks* (+ *checks* 1))
+  (display "T ") (display tag) (display "=")
+  (display got)
+  (if (and (string? got) (string=? got want))
+      (display " OK")
+      (begin
+        (display " WANT=")
+        (display want)
+        (set! *fail* (+ *fail* 1))))
+  (newline)
+  got)
+
+(define (tag-of r)
+  (if (and (pair? r) (pair? (cdr r))) (car (cdr r)) "none"))
+
+(define (main)
+  (display "DIALECT=live-soft-editor-pad-m8")
+  (newline)
+  ;; welcome card words (play frame checked in smoke_m8.sh)
+  (expect-true "CARD_FIRST" (pad:card-welcome? (pad:card-welcome-say)))
+  (expect-true "CARD_WELCOME" (string-contains? (pad:card-welcome-say) *card-welcome*))
+  (expect-true "CARD_TIP" (string-contains? (pad:card-welcome-say) *card-tip*))
+  ;; goal: empty
+  (let ((r (pad:goal-cmd! "goal:"))
+        (page0 *g-page*)
+        (score0 *g-score*)
+        (hist0 (length *goal-history*)))
+    (expect-str "GOAL_NONE" (tag-of r) "no-goal")
+    (expect-true "GOAL_NONE_PAGE" (equal? *g-page* page0))
+    (expect "GOAL_NONE_SCORE" *g-score* score0)
+    (expect "GOAL_NONE_UNDO" (length *goal-history*) hist0))
+  (expect-str "GOAL_SET" (tag-of (pad:goal-cmd! "goal:hi aura")) "goal-set")
+  (expect-str "GOAL_TEXT" *g-goal-text* "hi aura")
+  ;; scores
+  (expect "SCORE_MAIN"
+          (pad:gscore-plan
+           (list "kill-line" "type:hi" "open-line" "next-line" "type:au"))
+          27)
+  (expect "SCORE_BETTER"
+          (pad:gscore-plan
+           (list "kill-line" "type:hi" "open-line" "next-line" "type:aura"))
+          31)
+  (expect "SCORE_WORSE"
+          (pad:gscore-plan
+           (list "kill-line" "kill-line" "left" "next-line" "prev-line" "type:hi"))
+          14)
+  (expect-str "CARD_WORSE" (pad:card-line 27 14 "a" "a is closer")
+              "CARD a=27 b=14 KEEP=a say=\"a is closer\"")
+  (expect-str "CARD_TIE" (pad:card-line 27 27 "a" (pad:card-kid "tie"))
+              "CARD a=27 b=27 KEEP=a say=\"same score, keeping yours\"")
+  (expect-str "CARD_BETTER" (pad:card-line 27 31 "b" "b is closer")
+              "CARD a=27 b=31 KEEP=b say=\"b is closer\"")
+  ;; seed + race
+  (let ((seeded (pd:goal-seed!
+                 (pd:clean (read-file (string-append *fx* "main.lambda"))))))
+    (expect-true "SEED" (and (pair? seeded) (equal? (car seeded) #t)))
+    (expect "MAIN_START" *main-score* 27)
+    (expect-str "MAIN_TEXT" (pad:lines-text *g-page*) "hi|au")
+    (expect-str "TAG_WORSE"
+                (tag-of (pd:goal-propose-file! (string-append *fx* "worse.lambda")))
+                "goal_drop")
+    (expect "WORSE_TRIAL" *goal-trial* 14)
+    (expect-str "TAG_TIE"
+                (tag-of (pd:goal-propose-file! (string-append *fx* "tie.lambda")))
+                "goal_drop")
+    (expect-str "TIE_WHY" *drop-reason* "tie")
+    (expect-str "TAG_BETTER"
+                (tag-of (pd:goal-propose-file! (string-append *fx* "better.lambda")))
+                "goal_keep")
+    (expect "BETTER_TRIAL" *goal-trial* 31)
+    (expect-str "KEEP_TEXT" (pad:lines-text *g-page*) "hi|aura")
+    (expect "KEEP_SCORE" *g-score* 31)
+    (expect-str "TAG_BAD"
+                (tag-of (pd:goal-propose-file! (string-append *fx* "bad.lambda")))
+                "goal_reject")
+    (expect-str "WORD_BAD" *goal-word* "set!")
+    (expect-str "TAG_MEAN"
+                (tag-of (pd:goal-propose-file! (string-append *fx* "mean.lambda")))
+                "goal_reject")
+    (expect-str "WORD_MEAN" *goal-word* "stupid")
+    (expect-str "TAG_CAP"
+                (tag-of (pd:goal-propose-file! (string-append *fx* "cap.lambda")))
+                "goal_reject")
+    (expect-str "WORD_CAP" *goal-word* "exec")
+    (expect-str "TAG_UGLY"
+                (tag-of (pd:goal-propose-file! (string-append *fx* "ugly.lambda")))
+                "goal_heal")
+    (expect-str "HEAL_WHY" *goal-why* "not-a-plan")
+    (expect-str "UNDO_OK" (tag-of (pd:goal-undo!)) "goal_undo")
+    (expect "UNDO_SCORE" *g-score* 27)
+    (expect-str "UNDO_TEXT" (pad:lines-text *g-page*) "hi|au")
+    (pd:goal-propose-file! (string-append *fx* "better.lambda"))
+    (expect-str "UNDO_FAIL" (tag-of (pd:goal-undo-mismatch!)) "goal_undo_fail")
+    (pad:stamp-world!)
+    (display "TESTS checks=")
+    (display (number->string *checks*))
+    (display " fail=")
+    (display (number->string *fail*))
+    (newline)
+    (if (= *fail* 0)
+        (display "PAD_M8_TEST_OK\n")
+        (display "PAD_M8_TEST_FAIL\n"))))
+
+(main)

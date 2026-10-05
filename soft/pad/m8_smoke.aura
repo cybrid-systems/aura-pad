@@ -1,0 +1,80 @@
+;; M8 smoke: fixture race on goal "hi aura" + capability gate + undo KEEP.
+;; Fixtures: worse DROP+HEAL, tie DROP reason=tie, better KEEP, gates, undo.
+(load "/workspace/aura-pad/soft/pad/buffer.aura")
+(load "/workspace/aura-pad/soft/pad/rules.aura")
+(load "/workspace/aura-pad/soft/pad/lines.aura")
+(load "/workspace/aura-pad/soft/pad/goal.aura")
+
+(define *fail* 0)
+(define *fx* "/workspace/aura-pad/soft/pad/fixtures/m8/")
+
+(define (fail! tag)
+  (display tag) (newline)
+  (set! *fail* (+ *fail* 1)))
+
+(define (expect tag got want)
+  (display tag) (display "=") (display (pad:nstr got))
+  (if (and (number? got) (= got want))
+      (display " OK")
+      (begin (display " WANT=") (display (pad:nstr want)) (set! *fail* (+ *fail* 1))))
+  (newline))
+
+(define (expect-str tag got want)
+  (display tag) (display "=") (display got)
+  (if (and (string? got) (string=? got want))
+      (display " OK")
+      (begin (display " WANT=") (display want) (set! *fail* (+ *fail* 1))))
+  (newline))
+
+(define (tag-of r)
+  (if (and (pair? r) (pair? (cdr r))) (car (cdr r)) "none"))
+
+(define (main)
+  (display "DIALECT=live-soft-editor-pad-m8-smoke")
+  (newline)
+  (let ((seeded (pd:goal-seed!
+                 (pd:clean (read-file (string-append *fx* "main.lambda"))))))
+    (if (not (and (pair? seeded) (equal? (car seeded) #t)))
+        (fail! "PAD_M8_FAIL seed")
+        (begin
+          (expect "MAIN_START" *main-score* 27)
+          (expect-str "MAIN_TEXT" (pad:lines-text *g-page*) "hi|au")
+          (expect-str "TAG_worse"
+                      (tag-of (pd:goal-propose-file! (string-append *fx* "worse.lambda")))
+                      "goal_drop")
+          (expect "WORSE_TRIAL" *goal-trial* 14)
+          (expect-str "TAG_tie"
+                      (tag-of (pd:goal-propose-file! (string-append *fx* "tie.lambda")))
+                      "goal_drop")
+          (expect-str "TIE_WHY" *drop-reason* "tie")
+          (expect-str "TAG_better"
+                      (tag-of (pd:goal-propose-file! (string-append *fx* "better.lambda")))
+                      "goal_keep")
+          (expect "BETTER_TRIAL" *goal-trial* 31)
+          (expect-str "KEEP_TEXT" (pad:lines-text *g-page*) "hi|aura")
+          (expect-str "TAG_bad"
+                      (tag-of (pd:goal-propose-file! (string-append *fx* "bad.lambda")))
+                      "goal_reject")
+          (expect-str "WORD_bad" *goal-word* "set!")
+          (expect-str "TAG_mean"
+                      (tag-of (pd:goal-propose-file! (string-append *fx* "mean.lambda")))
+                      "goal_reject")
+          (expect-str "TAG_cap"
+                      (tag-of (pd:goal-propose-file! (string-append *fx* "cap.lambda")))
+                      "goal_reject")
+          (expect-str "WORD_cap" *goal-word* "exec")
+          (expect-str "TAG_ugly"
+                      (tag-of (pd:goal-propose-file! (string-append *fx* "ugly.lambda")))
+                      "goal_heal")
+          (expect-str "UNDO" (tag-of (pd:goal-undo!)) "goal_undo")
+          (expect "UNDO_SCORE" *g-score* 27)
+          (expect-str "UNDO_TEXT" (pad:lines-text *g-page*) "hi|au")
+          (expect "KEEPS" *goal-keeps* 1)
+          (expect "DROPS" *goal-drops* 2)
+          (expect "UNDOS" *goal-undos* 1)
+          (pad:stamp-world!)
+          (if (= *fail* 0)
+              (display "PAD_M8_OK\n")
+              (display "PAD_M8_FAIL\n"))))))
+
+(main)
