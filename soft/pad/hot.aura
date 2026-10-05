@@ -1,0 +1,132 @@
+;; aura-pad M1/M2 -- hot keymap pack slot (std/hot-strategy).
+;; pd:law is the active pack, pd:shadow is the current main (M2 base).
+;; Both return (step room strict). swap! / heal! are std/hot-strategy,
+;; not a renamed set!. Fiber helpers live in rules.aura; this file never
+;; fakes fiber_live. M0 does not load this file.
+
+(require "std/hot-strategy" all:)
+(require "std/string" all:)
+
+(define *gentle-body* "(lambda () (list 1 8 1))")
+(define *bold-body* "(lambda () (list 3 20 0))")
+(define *mid-body* "(lambda () (list 2 12 0))")
+(define *main-body* *gentle-body*)
+(define *strategy-seeded* 0)
+(define *base-last* 0)
+(define *trial-last* 0)
+(define *propose-tag* "boot")
+(define *gate-word* "")
+
+;; Seed both slots with one body via set-code, then register pd:law.
+(define (pd:strategy-seed! body)
+  (if (= *strategy-seeded* 1)
+      (list #t "seed")
+      (let* ((src (string-append
+                   "(define pd:law " body ")\n"
+                   "(define pd:shadow " body ")\n"))
+             (sc (try (set-code src) (catch (e) e))))
+        (if (not (equal? sc #t))
+            (list #f "seed")
+            (begin
+              (eval-current)
+              (hot-strategy:register! "pd:law" body)
+              (set! *main-body* body)
+              (set! *strategy-seeded* 1)
+              (set! *race-backend* 0)
+              (set! *race-spawned* 0)
+              (set! *race-joined* 0)
+              (if (and (pad:pack-ok? (try (pd:law) (catch (e) #f)))
+                       (pad:pack-ok? (try (pd:shadow) (catch (e) #f))))
+                  (list #t "seed")
+                  (list #f "probe")))))))
+
+;; string-trim keeps newlines, so a host-written file is cleaned here.
+(define (pd:ws? c)
+  (or (char=? c #\space) (char=? c #\newline)
+      (char=? c #\tab) (char=? c #\return)))
+
+(define (pd:clean s)
+  (if (not (string? s))
+      ""
+      (let loop-a ((a 0))
+        (if (and (< a (string-length s)) (pd:ws? (string-ref s a)))
+            (loop-a (+ a 1))
+            (let loop-b ((b (string-length s)))
+              (if (and (> b a) (pd:ws? (string-ref s (- b 1))))
+                  (loop-b (- b 1))
+                  (substring s a b)))))))
+
+;; First banned word in a proposed body, or "".
+(define *banned-words*
+  (list "set!" "vector-set!" "display" "write" "mutate" "eval" "load"
+        "shell" "http" "read-file" "set-code" "fiber:" "hot-strategy"
+        "pd:law" "pd:shadow" "pad:live" "pad:stamp" "pad:race" "pad:reset"))
+
+(define (pd:bad-word s)
+  (let loop ((ws *banned-words*))
+    (cond
+      ((null? ws) "")
+      ((string-contains? s (car ws)) (car ws))
+      (#t (loop (cdr ws))))))
+
+(define (pd:body-ok? body)
+  (and (string? body)
+       (> (string-length body) 10)
+       (< (string-length body) 2000)
+       (string-prefix? body "(lambda")
+       (string=? (pd:bad-word body) "")))
+
+(define (pd:gate-reject! reason word)
+  (display "GATE reject reason=")
+  (display reason)
+  (if (> (string-length word) 0)
+      (begin
+        (display " word=")
+        (display word)))
+  (newline)
+  (list #f reason))
+
+(define (pd:probe-law!)
+  (pad:pack-ok? (try (pd:law) (catch (e) #f))))
+
+(define (pd:live-key! tag)
+  (pad:live-key! (pd:law) tag))
+
+;; Install a lambda string into pd:law. pd:shadow is untouched.
+;; Gate reject leaves the slot alone. A bad probe heal!s the snapshot.
+(define (pd:apply-body! body reason)
+  (let ((clean (pd:clean body)))
+    (cond
+      ((not (string? body))
+       (pd:gate-reject! "gate" ""))
+      ((not (pd:body-ok? clean))
+       (set! *gate-word* (pd:bad-word clean))
+       (pd:gate-reject! "gate" *gate-word*)
+       (list #f "gate"))
+      (#t
+       (let ((sw (hot-strategy:swap! "pd:law" clean reason)))
+         (if (not (and (pair? sw) (equal? (car sw) #t)))
+             (begin
+               (pd:gate-reject! "swap" "")
+               (list #f "swap"))
+             (if (pd:probe-law!)
+                 (begin
+                   (display "SWAP name=pd:law key=")
+                   (display (number->string *key*))
+                   (display " reason=")
+                   (display reason)
+                   (newline)
+                   (list #t "swap"))
+                 (begin
+                   (hot-strategy:heal!)
+                   (display "HEAL name=pd:law key=")
+                   (display (number->string *key*))
+                   (display " reason=probe")
+                   (newline)
+                   (list #f "probe")))))))))
+
+;; Point both slots at the current main body before a trial.
+(define (pd:sync-main!)
+  (hot-strategy:swap! "pd:shadow" *main-body* "shadow")
+  (hot-strategy:swap! "pd:law" *main-body* "choose")
+  *main-body*)
