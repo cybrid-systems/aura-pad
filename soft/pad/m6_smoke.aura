@@ -1,0 +1,93 @@
+;; M6 smoke: Soft edits + HL + jump, then packs SNAP blocks for the thin
+;; C viewport. Soft decides everything; C (c/pad_view.c) only blits.
+;; stdout = log lines + two SNAP blocks (stream: last complete one wins).
+;; Also writes /workspace/aura-pad/out/m6.snap (first block, file path).
+;; Prints VIEW / REJECT / SNAPFILE / PAD_M6_OK. Soft reserved: never bind quote.
+(load "/workspace/aura-pad/soft/pad/buffer.aura")
+(load "/workspace/aura-pad/soft/pad/lines.aura")
+(load "/workspace/aura-pad/soft/pad/edit.aura")
+(load "/workspace/aura-pad/soft/pad/hl.aura")
+(load "/workspace/aura-pad/soft/pad/jump.aura")
+(load "/workspace/aura-pad/soft/pad/view.aura")
+
+(define *fail* 0)
+(define (expect tag got want)
+  (display "EXPECT ")
+  (display tag)
+  (display "=")
+  (display (if (number? got) (pad:nstr got) (if (string? got) got "?")))
+  (if (or (and (number? got) (number? want) (= got want))
+          (and (string? got) (string? want) (string=? got want)))
+      (display " OK")
+      (begin (display " WANT=")
+             (display (if (number? want) (pad:nstr want) want))
+             (set! *fail* (+ *fail* 1))))
+  (newline)
+  got)
+
+(define *src*
+  "(define (hello x) (+ x 1)) ; hi\n(define (bye y) (hello y))\n(hello 3)")
+(define *snap-path* "/workspace/aura-pad/out/m6.snap")
+
+(display "M6 soft editor -> SNAP -> thin C viewport")
+(newline)
+
+;; Soft editor: every key goes through the Soft gate (pad:egate).
+(define (play-keys st keys)
+  (let loop ((ks keys) (s st) (ok 0) (rej 0) (say "ready to type"))
+    (if (null? ks)
+        (list s ok rej say)
+        (let ((reason (pad:egate (car ks) s)))
+          (if (string=? reason "ok")
+              (loop (cdr ks) (pad:eapply (car ks) s) (+ ok 1) rej say)
+              (begin
+                (pad:ereject! 6 (car ks) reason "view")
+                (loop (cdr ks) s ok (+ rej 1) (pad:kid-say reason))))))))
+
+(define L0 (pad:v-lines *src*))
+(expect "ROWS" (length L0) 3)
+(expect "ROUNDTRIP" (pad:v-src L0) *src*)
+
+(define r1 (play-keys (pad:es-at L0 0 0) (list "eob" "home" "right" "next-line")))
+(define st1 (pad:nth r1 0))
+(display "VIEW keys=")
+(display (pad:nstr (pad:nth r1 1)))
+(display " rej=")
+(display (pad:nstr (pad:nth r1 2)))
+(display " cursor=")
+(display (pad:nstr (pad:es-l st1)))
+(display ":")
+(display (pad:nstr (pad:es-col st1)))
+(display " name=")
+(display (pad:sym-at *src* (pad:v-point (pad:es-L st1) (pad:es-l st1) (pad:es-col st1))))
+(newline)
+(expect "CUR_L" (pad:es-l st1) 2)
+(expect "CUR_C" (pad:es-col st1) 1)
+(expect "POINT" (pad:v-point (pad:es-L st1) 2 1) 60)
+(expect "MARKS" (pad:v-marks *src* 60)
+        ".........ddddd...................................rrrrr......rrrrr...")
+
+(define snap1 (pad:snap-text "kid pad (Soft)" (pad:es-L st1) 2 1 (pad:nth r1 3)))
+(pad:snap-write! *snap-path* snap1)
+(display "SNAPFILE path=")
+(display *snap-path*)
+(display " bytes=")
+(display (pad:nstr (string-length snap1)))
+(newline)
+(pad:snap-emit! snap1)
+
+;; Soft jump: goto-def from the use; cursor moves to where hello is born.
+(define rg (pad:goto-def (pad:js-at *src* 60)))
+(define lc (pad:v-linecol L0 (pad:nth rg 1)))
+(pad:jump-ok! "goto-def" (pad:nth rg 1) (length (pad:nth rg 3)))
+(expect "GOTO_L" (car lc) 0)
+(expect "GOTO_C" (pad:nth lc 1) 9)
+(define snap2 (pad:snap-text "kid pad (Soft)" L0 (car lc) (pad:nth lc 1)
+                             "hello is born here"))
+(pad:snap-emit! snap2)
+
+(if (= *fail* 0)
+    (begin (display "PAD_M6_OK") (newline))
+    (begin (display "PAD_M6_FAIL fail=")
+           (display (number->string *fail*))
+           (newline)))

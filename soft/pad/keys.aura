@@ -1,0 +1,172 @@
+;; aura-pad M6 -- Soft keymap + play state for the thin C viewport.
+;; Raw key bytes in, editor commands out. The C side never maps keys.
+;; Needs buffer/lines/edit/hl/jump/view. Soft reserved: never bind quote.
+
+;; The viewport pad is roomier than the M3 kid race pad. Soft decides.
+(define *play-max-col* 40)
+(define *play-max-lines* 12)
+
+(define *play-start* "(define (hello x) (+ x 1))\n(hello 3)")
+(define *play-hello*
+  "hi! type, arrows move, ctrl-g finds where a name is born, ctrl-q says bye")
+
+;; Play state (only pad:play-* write it).
+(define *pl-st* (pad:es-at (list (list)) 0 0))
+(define *pl-stack* (list))
+(define *pl-esc* (list))
+(define *pl-say* "")
+(define *pl-keys* 0)
+(define *pl-rej* 0)
+
+(define (pad:play-reset! src)
+  (set! *max-col* *play-max-col*)
+  (set! *max-lines* *play-max-lines*)
+  (set! *pl-st* (pad:es-at (pad:v-lines src) 0 0))
+  (set! *pl-stack* (list))
+  (set! *pl-esc* (list))
+  (set! *pl-say* *play-hello*)
+  (set! *pl-keys* 0)
+  (set! *pl-rej* 0)
+  0)
+
+;; --- keymap: byte -> command word, char code, "pending" or "unknown" ---
+(define *keymap*
+  (list (list 1 "home") (list 5 "end") (list 11 "kill-line")
+        (list 25 "yank") (list 31 "undo") (list 21 "undo")
+        (list 127 "back") (list 8 "back")
+        (list 13 "enter") (list 10 "enter")
+        (list 0 "set-mark") (list 23 "kill-region") (list 16 "copy-region")
+        (list 7 "goto-def") (list 2 "jump-back") (list 18 "find-refs")
+        (list 17 "quit")))
+
+(define *arrows*
+  (list (list 65 "prev-line") (list 66 "next-line")
+        (list 67 "right") (list 68 "left")
+        (list 72 "home") (list 70 "end")))
+
+(define (pad:kv-get xs k)
+  (cond
+    ((null? xs) #f)
+    ((= (car (car xs)) k) (car (cdr (car xs))))
+    (#t (pad:kv-get (cdr xs) k))))
+
+;; Feed one byte through the escape-sequence state. Pure on (esc byte):
+;; returns (cmd new-esc).
+(define (pad:key-step esc b)
+  (cond
+    ((and (null? esc) (= b 27)) (list "pending" (list 27)))
+    ((and (equal? esc (list 27)) (or (= b 91) (= b 79)))
+     (list "pending" (list 27 91)))
+    ((equal? esc (list 27 91))
+     (let ((w (pad:kv-get *arrows* b)))
+       (list (if w w "unknown") (list))))
+    ((pair? esc) (list "unknown" (list)))
+    ((and (>= b 32) (<= b 126)) (list b (list)))
+    (#t (let ((w (pad:kv-get *keymap* b)))
+          (list (if w w "unknown") (list))))))
+
+;; --- kid words for play-only outcomes ---
+(define (pad:play-say reason)
+  (cond
+    ((string=? reason "unknown") "that key does nothing yet")
+    ((string=? reason "not-print") "that letter is not on the pad yet")
+    ((string=? reason "need-space") "this line is full")
+    (#t (let ((j (pad:kid-say-jump reason)))
+          (if (string=? j "the gate said no") (pad:kid-say reason) j)))))
+
+;; Play gate: the viewport pad types any printable char; words use egate.
+(define (pad:play-gate c st)
+  (if (number? c)
+      (cond
+        ((not (and (>= c 32) (<= c 126))) "not-print")
+        ((>= (length (pad:nth (pad:es-L st) (pad:es-l st))) *max-col*)
+         "need-space")
+        (#t "ok"))
+      (pad:egate c st)))
+
+(define (pad:play-src) (pad:v-src (pad:es-L *pl-st*)))
+(define (pad:play-point)
+  (pad:v-point (pad:es-L *pl-st*) (pad:es-l *pl-st*) (pad:es-col *pl-st*)))
+
+(define (pad:play-move-to! point)
+  (let ((lc (pad:v-linecol (pad:es-L *pl-st*) point)))
+    (set! *pl-st* (pad:es-move *pl-st* (car lc) (car (cdr lc))))))
+
+(define (pad:play-reject! reason)
+  (set! *pl-rej* (+ *pl-rej* 1))
+  (set! *pl-say* (pad:play-say reason))
+  reason)
+
+(define (pad:play-ok! say)
+  (set! *pl-keys* (+ *pl-keys* 1))
+  (set! *pl-say* say)
+  "ok")
+
+;; One gated editor step (char code or command word).
+(define (pad:play-edit! c)
+  (let ((reason (pad:play-gate c *pl-st*)))
+    (if (string=? reason "ok")
+        (begin (set! *pl-st* (pad:eapply c *pl-st*)) (pad:play-ok! *pl-say*))
+        (pad:play-reject! reason))))
+
+(define (pad:play-jump! cmd)
+  (let* ((src (pad:play-src))
+         (pt (pad:play-point))
+         (name (pad:sym-at src pt))
+         (j (pad:js src pt *pl-stack*))
+         (r (cond ((string=? cmd "goto-def") (pad:goto-def j))
+                  ((string=? cmd "jump-back") (pad:jump-back j))
+                  (#t (pad:find-refs-cmd j)))))
+    (if (not (string=? (car r) "ok"))
+        (pad:play-reject! (car r))
+        (begin
+          (set! *pl-stack* (pad:hl-nth r 2))
+          (pad:play-move-to! (pad:hl-nth r 1))
+          (pad:play-ok!
+           (cond
+             ((string=? cmd "goto-def")
+              (string-append "jumped to where " name " is born"))
+             ((string=? cmd "jump-back") "jumped back")
+             (#t (string-append name " is used "
+                                (number->string (length (pad:hl-nth r 3)))
+                                " times"))))))))
+
+;; Run one command. Returns "ok", "quit", or a reject reason.
+(define (pad:play-cmd! c)
+  (cond
+    ((number? c) (pad:play-edit! c))
+    ((string=? c "quit") "quit")
+    ((string=? c "unknown") (pad:play-reject! "unknown"))
+    ((or (string=? c "goto-def") (string=? c "jump-back")
+         (string=? c "find-refs"))
+     (pad:play-jump! c))
+    ((string=? c "enter")
+     (let ((r (pad:play-edit! "open-line")))
+       (if (string=? r "ok") (pad:play-edit! "right") r)))
+    (#t (pad:play-edit! c))))
+
+;; One protocol line. Returns "pending", "quit", "ok" or a reason.
+(define (pad:play-line! line)
+  (cond
+    ((string=? line "QUIT") "quit")
+    ((string-prefix? line "IN ")
+     (let ((b (string->number (substring line 3 (string-length line)))))
+       (if (not (number? b))
+           (pad:play-reject! "unknown")
+           (let ((step (pad:key-step *pl-esc* b)))
+             (set! *pl-esc* (car (cdr step)))
+             (if (and (string? (car step)) (string=? (car step) "pending"))
+                 "pending"
+                 (pad:play-cmd! (car step)))))))
+    ((string-prefix? line "KEY ")
+     (pad:play-cmd! (substring line 4 (string-length line))))
+    (#t (pad:play-reject! "unknown"))))
+
+(define (pad:play-snap)
+  (pad:snap-text (string-append "aura pad (Soft) keys="
+                                (number->string *pl-keys*)
+                                " no=" (number->string *pl-rej*))
+                 (pad:es-L *pl-st*) (pad:es-l *pl-st*) (pad:es-col *pl-st*)
+                 *pl-say*))
+
+(define (pad:play-emit!) (display (pad:play-snap)) 0)

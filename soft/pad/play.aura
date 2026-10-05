@@ -1,0 +1,27 @@
+;; aura-pad M6 -- Soft play loop for the thin C viewport (c/pad_play.c).
+;; stdin : "IN <byte>" (raw key byte forwarded by C, uninterpreted),
+;;         "KEY <word>" (scripted command word), "QUIT".
+;; stdout: SNAP v1 pad blocks only (see view.aura).
+;; Soft owns everything: the keymap (bytes -> commands), the gate, the
+;; buffer, cursor, jump stack, HL tape, marks and kid words. C forwards
+;; bytes and blits; it never learns what a key means.
+;; Soft reserved: never bind quote.
+(load "/workspace/aura-pad/soft/pad/buffer.aura")
+(load "/workspace/aura-pad/soft/pad/lines.aura")
+(load "/workspace/aura-pad/soft/pad/edit.aura")
+(load "/workspace/aura-pad/soft/pad/hl.aura")
+(load "/workspace/aura-pad/soft/pad/jump.aura")
+(load "/workspace/aura-pad/soft/pad/view.aura")
+(load "/workspace/aura-pad/soft/pad/keys.aura")
+
+(pad:play-reset! *play-start*)
+(pad:play-emit!)
+(let loop ()
+  (let ((line (read-line)))
+    (if (string? line)
+        (let ((r (pad:play-line! line)))
+          (cond
+            ((string=? r "quit") 0)
+            ((string=? r "pending") (loop))
+            (#t (pad:play-emit!) (loop))))
+        0)))

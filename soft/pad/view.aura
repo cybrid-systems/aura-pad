@@ -1,0 +1,122 @@
+;; aura-pad M6 -- Soft side of the thin C viewport ("加c").
+;; Soft owns the editor state, the HL tape, jump marks and the kid words.
+;; This file only *packs* what Soft already decided into a blit-friendly
+;; SNAP block. The C viewport (c/pad_view.c) maps letters to colors and
+;; draws; it never tokenizes, gates, edits or picks words.
+;;
+;; Wire (one block; a stream may carry many, last complete one wins):
+;;   SNAP v1 pad
+;;   TITLE <words>
+;;   CURSOR line=<l> col=<c>
+;;   SAY <kid words>
+;;   LEGEND <L>=<word> ...
+;;   ROWS n=<k>
+;;   T <row text>      \
+;;   H <HL tape>        > k times; |T| = |H| = |M|
+;;   M <mark tape>     /
+;;   END
+;; HL letters (from hl.aura): P K S T C Q M N .
+;; Mark letters: d = name is born here (def), r = name used here, . none.
+;; Needs buffer.aura, hl.aura, jump.aura. Soft reserved: never bind quote.
+
+(define *view-legend*
+  "K=magic-word S=name T=quote C=note N=number P=paren Q=ask M=change d=born-here r=used-here")
+
+;; Split on newline (char 10). "a\nb\n" -> ("a" "b" "").
+(define (pad:v-split s)
+  (let ((n (string-length s)))
+    (let loop ((i 0) (start 0) (acc (list)))
+      (cond
+        ((>= i n) (reverse (cons (substring s start n) acc)))
+        ((= (string-ref s i) 10)
+         (loop (+ i 1) (+ i 1) (cons (substring s start i) acc)))
+        (#t (loop (+ i 1) start acc))))))
+
+;; Editor lines (lists of char codes) <-> source string.
+(define (pad:v-codes s) (map char->integer (string->list s)))
+(define (pad:v-lines src) (map pad:v-codes (pad:v-split src)))
+(define (pad:v-src L)
+  (string-join (map (lambda (ln) (list->string (map integer->char ln))) L)
+               "\n"))
+
+;; Char offset of (line, col) in the joined source.
+(define (pad:v-point L l col)
+  (let loop ((i 0) (xs L) (off 0))
+    (if (or (null? xs) (>= i l))
+        (+ off col)
+        (loop (+ i 1) (cdr xs) (+ off (+ (length (car xs)) 1))))))
+
+;; Mark tape for the name under point: d at defs, r at other uses.
+;; Same length as src; all "." when point is not on a name.
+(define (pad:v-fill-span cs a k ch)
+  (let loop ((i 0) (xs cs) (acc (list)))
+    (cond
+      ((null? xs) (reverse acc))
+      ((and (>= i a) (< i (+ a k))) (loop (+ i 1) (cdr xs) (cons ch acc)))
+      (#t (loop (+ i 1) (cdr xs) (cons (car xs) acc))))))
+
+(define (pad:v-in? x xs)
+  (cond ((null? xs) #f) ((= x (car xs)) #t) (#t (pad:v-in? x (cdr xs)))))
+
+(define (pad:v-marks src point)
+  (let* ((n (string-length src))
+         (blank (let loop ((i 0) (acc (list)))
+                  (if (>= i n) acc (loop (+ i 1) (cons #\. acc)))))
+         (name (pad:sym-at src point)))
+    (if (string=? name "")
+        (list->string blank)
+        (let* ((k (string-length name))
+               (defs (pad:find-defs src name))
+               (refs (pad:find-refs src name)))
+          (let loop ((rs refs) (cs blank))
+            (if (null? rs)
+                (list->string cs)
+                (loop (cdr rs)
+                      (pad:v-fill-span cs (car rs) k
+                                       (if (pad:v-in? (car rs) defs) #\d #\r)))))))))
+
+;; Row block: T/H/M for each line, sliced from whole-source tapes.
+(define (pad:v-rows lines tape marks)
+  (let loop ((xs lines) (off 0) (acc ""))
+    (if (null? xs)
+        acc
+        (let* ((s (car xs))
+               (k (string-length s))
+               (e (+ off k)))
+          (loop (cdr xs)
+                (+ e 1)
+                (string-append acc
+                               "T " s "\n"
+                               "H " (substring tape off e) "\n"
+                               "M " (substring marks off e) "\n"))))))
+
+;; The whole SNAP block for editor lines L, cursor (l col), kid say.
+(define (pad:snap-text title L l col say)
+  (let* ((src (pad:v-src L))
+         (tape (pad:hl-color src))
+         (marks (pad:v-marks src (pad:v-point L l col)))
+         (lines (pad:v-split src)))
+    (string-append
+      "SNAP v1 pad\n"
+      "TITLE " title "\n"
+      "CURSOR line=" (number->string l) " col=" (number->string col) "\n"
+      "SAY " say "\n"
+      "LEGEND " *view-legend* "\n"
+      "ROWS n=" (number->string (length lines)) "\n"
+      (pad:v-rows lines tape marks)
+      "END\n")))
+
+;; Emit on stdout (stream protocol) and/or write to a file.
+(define (pad:snap-emit! text) (display text) text)
+(define (pad:snap-write! path text) (write-file path text) text)
+
+;; Char offset -> (line col) in editor lines L (inverse of pad:v-point).
+;; Clamped: a stale offset past the end lands on the last line's end, so a
+;; jump-back after an edit never hands the viewport an out-of-range cursor.
+(define (pad:v-linecol L point)
+  (let loop ((i 0) (xs L) (off (if (< point 0) 0 point)))
+    (let ((len (length (car xs))))
+      (cond
+        ((<= off len) (list i off))
+        ((null? (cdr xs)) (list i len))
+        (#t (loop (+ i 1) (cdr xs) (- off (+ len 1))))))))
