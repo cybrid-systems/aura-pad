@@ -12,6 +12,10 @@ typedef struct {
     int cur_line, cur_col;
     int nrows;
     char *t[PAD_MAX_ROWS], *h[PAD_MAX_ROWS], *m[PAD_MAX_ROWS];
+    /* Optional Soft DIRTY lines=<csv>. dirty_n < 0 means "all rows"
+     * (no DIRTY line — full redraw). C never invents dirty sets. */
+    int dirty_n;
+    int dirty[PAD_MAX_ROWS];
 } PadSnap;
 
 typedef struct {
@@ -34,5 +38,9 @@ void pad_reader_free(PadReader *rd);
 void pad_snap_free(PadSnap *s);
 /* Draw s. ansi=1 colors + reverse-video cursor; 0 = plain text + caret. */
 void pad_blit(FILE *o, const PadSnap *s, int ansi);
+/* Interactive redraw: if Soft marked DIRTY and prev is set, only those
+ * rows (plus title/say/legend when they change). Else full pad_blit.
+ * Never edits Soft's letters — C only chooses which rows to paint. */
+void pad_blit_dirty(FILE *o, const PadSnap *prev, const PadSnap *s, int ansi);
 
 #endif
