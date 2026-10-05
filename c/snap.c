@@ -6,10 +6,13 @@
  * SAY/LEGEND are copied as Soft wrote them. No edit state lives here.
  *
  * Wire (see soft/pad/view.aura):
- *   SNAP v1 pad / TITLE / CURSOR line= col= / SAY / LEGEND / ROWS n=
+ *   SNAP v1 pad / TITLE / CURSOR line= col= / SAY / LEGEND /
+ *   optional DIRTY lines=<csv> / ROWS n=
  *   then n x (T text, H tape, M marks) with |T| == |H| == |M|, then END.
- * Non-SNAP lines between blocks are skipped (Soft logs may share stdout).
- * A bad or truncated block is dropped whole; the last complete one wins.
+ * Soft may mark dirty rows so the interactive viewport redraws less;
+ * C never invents which rows changed. Non-SNAP lines between blocks are
+ * skipped (Soft logs may share stdout). A bad or truncated block is
+ * dropped whole; the last complete one wins.
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -46,6 +49,7 @@ void pad_snap_free(PadSnap *s) {
         free(s->m[i]);
     }
     memset(s, 0, sizeof(*s));
+    s->dirty_n = -1; /* default: all rows dirty when Soft omits DIRTY */
 }
 
 static char *dup_n(const char *p, size_t n) {
@@ -78,7 +82,7 @@ static int copy_field(char *dst, const char *src) {
 }
 
 /* Parser state for one block. stage: 0 TITLE 1 CURSOR 2 SAY 3 LEGEND
-   4 ROWS 5 rows (T/H/M cycling) 6 END. */
+   4 ROWS-or-optional-DIRTY 5 rows (T/H/M cycling) 6 END. */
 typedef struct {
     PadSnap s;
     int stage;
@@ -113,6 +117,25 @@ static int block_line(Block *b, const char *line) {
         b->stage = 4;
         return 1;
     case 4:
+        /* Optional Soft DIRTY lines=0,2,5 — stay in stage 4 until ROWS. */
+        if (strncmp(line, "DIRTY lines=", 12) == 0) {
+            const char *q = line + 12;
+            s->dirty_n = 0;
+            while (*q && s->dirty_n < PAD_MAX_ROWS) {
+                char *end = NULL;
+                long v = strtol(q, &end, 10);
+                if (end == q || v < 0 || v >= PAD_MAX_ROWS)
+                    return 0;
+                s->dirty[s->dirty_n++] = (int)v;
+                if (*end == ',')
+                    q = end + 1;
+                else if (*end == '\0')
+                    break;
+                else
+                    return 0;
+            }
+            return 1;
+        }
         if (sscanf(line, "ROWS n=%d", &b->left) != 1 || b->left < 1 ||
             b->left > PAD_MAX_ROWS)
             return 0;
@@ -193,6 +216,7 @@ int pad_reader_line(PadReader *rd, const char *line) {
             rd->rejected++;
         }
         memset(b, 0, sizeof(*b));
+        b->s.dirty_n = -1;
         rd->in = 1;
         return 0;
     }
@@ -332,6 +356,70 @@ void pad_blit(FILE *o, const PadSnap *s, int ansi) {
         if (!ansi && strspn(m, ".") != n) /* any d/r mark on this row */
             fprintf(o, "    | %s\n", m);
     }
+    fputs("  say: ", o);
+    sgr(o, ansi, "1;33");
+    fputs(s->say, o);
+    sgr(o, ansi, "0");
+    fputc('\n', o);
+    draw_legend(o, ansi, s->legend);
+    fflush(o);
+}
+
+/* Interactive dirty redraw. Soft said which rows changed; C only paints.
+ * Falls back to full pad_blit when Soft omitted DIRTY or prev is missing. */
+static int row_dirty(const PadSnap *s, int r) {
+    if (s->dirty_n < 0)
+        return 1;
+    for (int i = 0; i < s->dirty_n; i++)
+        if (s->dirty[i] == r)
+            return 1;
+    return 0;
+}
+
+void pad_blit_dirty(FILE *o, const PadSnap *prev, const PadSnap *s, int ansi) {
+    if (!ansi || !prev || s->dirty_n < 0 || prev->nrows != s->nrows) {
+        pad_blit(o, s, ansi);
+        return;
+    }
+    /* Home without wipe; redraw title when Soft changed it. */
+    if (isatty(fileno(o)))
+        fputs("\033[H", o);
+    if (strcmp(prev->title, s->title) != 0 || strcmp(prev->say, s->say) != 0 ||
+        strcmp(prev->legend, s->legend) != 0 || prev->cur_line != s->cur_line ||
+        prev->cur_col != s->cur_col || s->dirty_n > 0) {
+        /* Title line always refreshed so keys=/say stay honest. */
+        if (isatty(fileno(o)))
+            fputs("\033[H\033[2K", o);
+        sgr(o, ansi, "1");
+        fprintf(o, "== %s ==", s->title);
+        sgr(o, ansi, "0");
+        fputc('\n', o);
+    }
+    for (int r = 0; r < s->nrows; r++) {
+        int need = row_dirty(s, r) || r == s->cur_line || r == prev->cur_line;
+        if (!need && prev->t[r] && s->t[r] && strcmp(prev->t[r], s->t[r]) == 0 &&
+            prev->h[r] && s->h[r] && strcmp(prev->h[r], s->h[r]) == 0 &&
+            prev->m[r] && s->m[r] && strcmp(prev->m[r], s->m[r]) == 0)
+            continue;
+        if (isatty(fileno(o)))
+            fprintf(o, "\033[%d;1H\033[2K", r + 2); /* +1 title, 1-based */
+        const char *tt = s->t[r], *hh = s->h[r], *mm = s->m[r];
+        size_t n = strlen(tt);
+        sgr(o, ansi, "2");
+        fprintf(o, "%3d | ", r + 1);
+        sgr(o, ansi, "0");
+        Attr pen = {NULL, 0, 0};
+        for (size_t i = 0; i < n; i++)
+            draw_cell(o, ansi, &pen, tt[i], hh[i], mm[i],
+                      r == s->cur_line && (int)i == s->cur_col);
+        if (r == s->cur_line && (size_t)s->cur_col == n)
+            draw_cell(o, ansi, &pen, ' ', '.', '.', 1);
+        sgr(o, ansi, "0");
+        fputc('\n', o);
+    }
+    /* say + legend under the rows */
+    if (isatty(fileno(o)))
+        fprintf(o, "\033[%d;1H\033[J", s->nrows + 2);
     fputs("  say: ", o);
     sgr(o, ansi, "1;33");
     fputs(s->say, o);
