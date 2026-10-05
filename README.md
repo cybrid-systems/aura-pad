@@ -10,7 +10,7 @@ There is no C viewport in this tree.
 Design: [`docs/DESIGN.md`](docs/DESIGN.md).
 Milestones: [`docs/m0.md`](docs/m0.md), [`docs/m1.md`](docs/m1.md),
 [`docs/m2.md`](docs/m2.md), [`docs/m3.md`](docs/m3.md), [`docs/m35.md`](docs/m35.md),
-[`docs/m4.md`](docs/m4.md).
+[`docs/m4.md`](docs/m4.md), [`docs/m5.md`](docs/m5.md).
 Repo: https://github.com/cybrid-systems/aura-pad
 
 中文简介：Aura Pad 是给小朋友也能玩的 Soft 小编辑器。缓冲区、光标、按键
@@ -26,6 +26,9 @@ M4 变成小朋友的故事编辑器：两个本子（story / scratch）、查�
 （找不到、没给词、一次改太多处、不友好的词都会被温柔地拒绝）、宏录制
 （rec / stop / play）、两条规则在同一串按键上赛跑，以及 AI 提议“录好的宏”，
 Soft 把关后严格更高分才 KEEP（30 → 44 → 51），可撤销；293 项 Soft 检查。
+M5 加上 Soft 侧 Aura 语法高亮（HL 色带）、跳转/引用（goto-def /
+find-refs / jump-back，小朋友拒绝理由），以及 tip 上真实可用的
+query:* / mutate:* Soft 桥；没有的原语记成 GAPS 并向 Aura 提 issue。
 
 - **M0** races `map-gentle` (mid 1) and `map-bold` (mid 2) on 24 seeded
   key steps toward the goal fixture `"hi aura"`. Score is
@@ -74,6 +77,16 @@ Soft 把关后严格更高分才 KEEP（30 → 44 → 51），可撤销；293 �
   30 → 44 KEEP → 51 KEEP, tie DROP, `pd:macro-undo!`). Tests: Python model
   `PAD_M4_MODEL_OK`, `m4_test.aura` (293 checks, `PAD_M4_TEST_OK`),
   `PAD_M4_OK`, live `--macro`. See [`docs/m4.md`](docs/m4.md).
+- **M5** adds Soft-side Aura syntax highlight (`hl.aura`: kind tags +
+  kid HL color tape, no C viewport), Soft LSP-lite goto-def /
+  find-refs / jump-back with kid reasons (`no-symbol`, `no-def`,
+  `no-ref`, `nothing-to-back`), and an honest Soft bridge to tip
+  `query:*` / `mutate:*` (`query.aura`: categories, help, find,
+  def-use, mutate summary/rebind). Gaps (`define-lookup`,
+  `query:code`, `query:ref-counts`, `query:node-types`) are listed
+  and filed as Aura issues from aura-pad — no fake Soft APIs.
+  Tests: Python model, Soft checks, `PAD_M5_OK`. See
+  [`docs/m5.md`](docs/m5.md).
 
 ## Soft smoke
 
@@ -84,7 +97,7 @@ Soft runs natively in that container (no nested docker). Never
 `build_soft4132`. Needs `AURA_SANDBOX=off`.
 
 ```bash
-bash scripts/smoke.sh         # M0+M1+M2+burn+M3+M3.5+M4 (+ live MiniMax if keyed) → PAD_SMOKE_OK
+bash scripts/smoke.sh         # M0+M1+M2+burn+M3+M3.5+M4+M5 (+ live MiniMax if keyed) → PAD_SMOKE_OK
 bash scripts/smoke_soft.sh    # M0 → PAD_M0_OK
 bash scripts/smoke_m1.sh      # M1 → PAD_M1_OK
 bash scripts/smoke_m2.sh      # M2 fixtures → PAD_M2_PROPOSE_OK
@@ -92,6 +105,7 @@ PAD_PROPOSE=0 bash scripts/burn.sh   # fixture burn → PAD_BURN_OK
 bash scripts/smoke_m3.sh      # M3 multi-line + helper → PAD_M3_OK (+ live if keyed)
 bash scripts/smoke_m35.sh     # M3.5 PAREN_OK, PAD_MODEL_OK, PAD_TEST_OK, PAD_M35_OK (+ live if keyed)
 bash scripts/smoke_m4.sh      # M4 PAREN_OK, PAD_M4_MODEL_OK, PAD_M4_TEST_OK, PAD_M4_OK (+ live if keyed)
+bash scripts/smoke_m5.sh      # M5 PAREN_OK, PAD_M5_MODEL_OK, PAD_M5_TEST_OK, PAD_M5_OK
 PAD_LIVE=0 bash scripts/smoke.sh     # skip live MiniMax
 ```
 
