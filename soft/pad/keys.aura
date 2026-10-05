@@ -1,6 +1,11 @@
 ;; aura-pad M6 -- Soft keymap + play state for the thin C viewport.
 ;; Raw key bytes in, editor commands out. The C side never maps keys.
 ;; Needs buffer/lines/edit/hl/jump/view. Soft reserved: never bind quote.
+;;
+;; Hot path cache: *pl-src* / *pl-tape* / *pl-toks* / *pl-marks* /
+;; *pl-mname* survive across keys. Text edits invalidate the tape;
+;; cursor-only moves reuse the HL tape and only rebuild marks when the
+;; name under point changes. Soft marks DIRTY rows so C can paint less.
 
 ;; The viewport pad is roomier than the M3 kid race pad. Soft decides.
 (define *play-max-col* 40)
@@ -18,6 +23,15 @@
 (define *pl-keys* 0)
 (define *pl-rej* 0)
 
+;; HL / marks cache for the interactive key path (kid-friendly speed).
+(define *pl-src* "")
+(define *pl-tape* "")
+(define *pl-toks* (list))
+(define *pl-marks* "")
+(define *pl-mname* "")
+(define *pl-prev-L* (list))
+(define *pl-framed* 0)
+
 (define (pad:play-reset! src)
   (set! *max-col* *play-max-col*)
   (set! *max-lines* *play-max-lines*)
@@ -27,6 +41,13 @@
   (set! *pl-say* *play-hello*)
   (set! *pl-keys* 0)
   (set! *pl-rej* 0)
+  (set! *pl-src* "")
+  (set! *pl-tape* "")
+  (set! *pl-toks* (list))
+  (set! *pl-marks* "")
+  (set! *pl-mname* "")
+  (set! *pl-prev-L* (list))
+  (set! *pl-framed* 0)
   0)
 
 ;; --- keymap: byte -> command word, char code, "pending" or "unknown" ---
@@ -106,13 +127,16 @@
 (define (pad:play-edit! c)
   (let ((reason (pad:play-gate c *pl-st*)))
     (if (string=? reason "ok")
-        (begin (set! *pl-st* (pad:eapply c *pl-st*)) (pad:play-ok! *pl-say*))
+        (begin
+          (set! *pl-st* (pad:eapply c *pl-st*))
+          (pad:play-ok! *pl-say*))
         (pad:play-reject! reason))))
 
 (define (pad:play-jump! cmd)
   (let* ((src (pad:play-src))
          (pt (pad:play-point))
-         (name (pad:sym-at src pt))
+         (toks (if (string=? src *pl-src*) *pl-toks* (pad:hl-tokens src)))
+         (name (pad:sym-at-in toks pt))
          (j (pad:js src pt *pl-stack*))
          (r (cond ((string=? cmd "goto-def") (pad:goto-def j))
                   ((string=? cmd "jump-back") (pad:jump-back j))
@@ -120,15 +144,15 @@
     (if (not (string=? (car r) "ok"))
         (pad:play-reject! (car r))
         (begin
-          (set! *pl-stack* (pad:hl-nth r 2))
-          (pad:play-move-to! (pad:hl-nth r 1))
+          (set! *pl-stack* (caddr r))
+          (pad:play-move-to! (cadr r))
           (pad:play-ok!
            (cond
              ((string=? cmd "goto-def")
               (string-append "jumped to where " name " is born"))
              ((string=? cmd "jump-back") "jumped back")
              (#t (string-append name " is used "
-                                (number->string (length (pad:hl-nth r 3)))
+                                (number->string (length (car (cdr (cdr (cdr r))))))
                                 " times"))))))))
 
 ;; Run one command. Returns "ok", "quit", or a reject reason.
@@ -162,11 +186,70 @@
      (pad:play-cmd! (substring line 4 (string-length line))))
     (#t (pad:play-reject! "unknown"))))
 
+;; Which rows differ between two editor line-lists (char-code lists).
+(define (pad:play-dirty-rows oldL newL)
+  (let loop ((i 0) (a oldL) (b newL) (acc (list)))
+    (cond
+      ((and (null? a) (null? b)) (reverse acc))
+      ((null? a)
+       (loop (+ i 1) a (cdr b) (cons i acc)))
+      ((null? b)
+       (loop (+ i 1) (cdr a) b (cons i acc)))
+      ((equal? (car a) (car b))
+       (loop (+ i 1) (cdr a) (cdr b) acc))
+      (#t (loop (+ i 1) (cdr a) (cdr b) (cons i acc))))))
+
+;; Refresh HL/marks cache; return dirty row list for SNAP.
+;; First frame returns () so Soft omits DIRTY (C does a full blit).
+(define (pad:play-cache! L l col)
+  (let* ((src (pad:v-src L))
+         (pt (pad:v-point L l col))
+         (same-text (string=? src *pl-src*))
+         (first (= *pl-framed* 0))
+         (dirty (if first (list) (pad:play-dirty-rows *pl-prev-L* L))))
+    (if same-text
+        (let ((name (pad:sym-at-in *pl-toks* pt)))
+          (if (string=? name *pl-mname*)
+              0
+              (begin
+                (set! *pl-mname* name)
+                (set! *pl-marks*
+                      (pad:v-marks-in src pt *pl-toks*)))))
+        (let* ((b (pad:hl-bundle src))
+               (tape (car b))
+               (toks (cadr b)))
+          (set! *pl-src* src)
+          (set! *pl-tape* tape)
+          (set! *pl-toks* toks)
+          (set! *pl-mname* (pad:sym-at-in toks pt))
+          (set! *pl-marks* (pad:v-marks-in src pt toks))))
+    (set! *pl-prev-L* L)
+    (set! *pl-framed* 1)
+    (if first
+        (list)
+        (if (pad:v-in? l dirty) dirty (cons l dirty)))))
+
 (define (pad:play-snap)
-  (pad:snap-text (string-append "aura pad (Soft) keys="
-                                (number->string *pl-keys*)
-                                " no=" (number->string *pl-rej*))
-                 (pad:es-L *pl-st*) (pad:es-l *pl-st*) (pad:es-col *pl-st*)
-                 *pl-say*))
+  (let* ((L (pad:es-L *pl-st*))
+         (l (pad:es-l *pl-st*))
+         (col (pad:es-col *pl-st*))
+         (dirty (pad:play-cache! L l col))
+         (title (string-append "aura pad (Soft) keys="
+                               (number->string *pl-keys*)
+                               " no=" (number->string *pl-rej*)))
+         (lines (pad:v-split *pl-src*))
+         (dcsv (pad:v-dirty-csv dirty)))
+    (string-append
+      "SNAP v1 pad\n"
+      "TITLE " title "\n"
+      "CURSOR line=" (number->string l) " col=" (number->string col) "\n"
+      "SAY " *pl-say* "\n"
+      "LEGEND " *view-legend* "\n"
+      (if (string=? dcsv "")
+          ""
+          (string-append "DIRTY lines=" dcsv "\n"))
+      "ROWS n=" (number->string (length lines)) "\n"
+      (pad:v-rows lines *pl-tape* *pl-marks*)
+      "END\n")))
 
 (define (pad:play-emit!) (display (pad:play-snap)) 0)
