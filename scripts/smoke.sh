@@ -5,7 +5,11 @@
 # then optional live helper; PAD_M3_LIVE_SKIP when no key or PAD_LIVE=0)
 # → M3.5 finer editor (paren check, Python model, Soft unit tests
 # PAD_TEST_OK, goal3 helper race + world undo PAD_M35_OK, optional live
-# --helper3; PAD_M35_LIVE_SKIP when no key or PAD_LIVE=0).
+# --helper3; PAD_M35_LIVE_SKIP when no key or PAD_LIVE=0)
+# → M4 two pads + find/replace + record/play (paren, Python model
+# PAD_M4_MODEL_OK, Soft tests PAD_M4_TEST_OK, law race + macro race +
+# macro undo PAD_M4_OK, optional live --macro; PAD_M4_LIVE_SKIP when no key
+# or PAD_LIVE=0).
 # Ends with PAD_SMOKE_OK.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -56,5 +60,8 @@ bash "$ROOT/scripts/smoke_m3.sh"
 
 echo "smoke: m3.5 finer editor + tests"
 bash "$ROOT/scripts/smoke_m35.sh"
+
+echo "smoke: m4 pads + find/replace + macros"
+bash "$ROOT/scripts/smoke_m4.sh"
 
 echo "smoke: PAD_SMOKE_OK"

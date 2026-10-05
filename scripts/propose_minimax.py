@@ -24,9 +24,16 @@ M3.5 helper shape (--helper3): same lambda shape, plus "undo" "yank"
   "indent" "dedent" "bob" "eob" "set-mark" "kill-region" "copy-region";
   goal is three lines "hi" / "  aura" / "pad" (score base 60).
 
+M4 macro shape (--macro): (lambda () (list TOKEN ...)) for two named pads
+  "story" / "scratch": every --helper3 word plus "find:WORD" "find-next"
+  "replace:NEW" "replace-all:OLD=NEW" "switch:story" "switch:scratch"
+  "rec" "stop" "play". Goal: story "a dog" / "the dog ran" / "they had fun",
+  scratch unchanged. Unkind words are left for the Soft kind gate.
+
 Usage: propose_minimax.py OUT_PATH [ROUND [NOTE [PREV_PATH]]]
        propose_minimax.py --helper OUT_PATH [ROUND [NOTE [PREV_PATH]]]
        propose_minimax.py --helper3 OUT_PATH [ROUND [NOTE [PREV_PATH]]]
+       propose_minimax.py --macro OUT_PATH [ROUND [NOTE [PREV_PATH]]]
        propose_minimax.py --check   (exit 0 if a key is configured, 3 if not)
 Stdout stays empty. Stderr is PROPOSE_WROTE or PROPOSE_FAIL <reason>.
 The API key is never printed.
@@ -249,6 +256,70 @@ def _prompt_helper3(rnd: int, note: str, prev: str) -> str:
     )
 
 
+MACRO_MAIN = (
+    '(lambda () (list "right" "right" "kill-line" "type:dog" "next-line" "left" '
+    '"kill-line" "type:dog ran" "open-line" "next-line" "type:they had fun"))'
+)
+MACRO_WORDS = HELPER3_CMDS + ("find-next", "rec", "stop", "play",
+                              "switch:story", "switch:scratch")
+
+
+def _prompt_macro(rnd: int, note: str, prev: str) -> str:
+    prev_s = prev.strip() if prev else "none"
+    return (
+        "Return ONLY one Aura line of the form (lambda () (list TOKEN ...)). "
+        f"You are proposing a recorded keyboard macro for a kid-friendly editor with two pads, round {rnd}. "
+        "Pad \"story\" starts as two lines \"a cat\" / \"the cat ran\" and has the cursor (line 0, column 0). "
+        "Pad \"scratch\" holds two lines \"my notes\" / \"they had fun\" (cursor at line 0, column 0). "
+        "GOAL: story becomes THREE lines \"a dog\" / \"the dog ran\" / \"they had fun\" and scratch stays unchanged. "
+        "Each TOKEN is a double-quoted string. Words: \"left\" \"right\" \"home\" \"end\" \"back\" "
+        "\"open-line\" \"kill-line\" \"next-line\" \"prev-line\" \"undo\" \"yank\" \"indent\" \"dedent\" "
+        "\"bob\" \"eob\" \"set-mark\" \"kill-region\" \"copy-region\" \"find-next\" \"rec\" \"stop\" \"play\" "
+        "\"switch:story\" \"switch:scratch\", or \"type:TEXT\", \"find:WORD\", \"replace:NEW\", "
+        "\"replace-all:OLD=NEW\" where TEXT/WORD/OLD/NEW are lowercase a-z or spaces. "
+        "find:WORD jumps to the next WORD at or after the cursor (it wraps to the top). find-next jumps to the one after. "
+        "replace:NEW swaps the found word under the cursor for NEW. "
+        "replace-all:OLD=NEW swaps every OLD in the current pad, but is refused if OLD appears more than 3 times. "
+        "switch:NAME moves to the other pad; the cut/copied text comes with you. "
+        "copy-region copies between set-mark and the cursor; yank pastes it (a copied line break makes a new line). "
+        "eob jumps to the end of the pad. open-line splits the line and the cursor stays. "
+        "rec starts recording keys, stop ends it, play replays them for one key. "
+        "Each type: letter is one key; every other token is one key. Refused tokens cost 2 points each. "
+        "Score = 60 - keys - 2*refused - 3*letters_off. Higher is better. "
+        f"The current main macro is {MACRO_MAIN} scoring 30 (it types everything by hand). "
+        "Beat it strictly. At most 32 tokens. Use kind words only. "
+        "Do NOT use set!, begin, display, write, eval, load, shell, http, define, or any other function. "
+        "No markdown. "
+        f"Previous lambda (do not repeat it verbatim): {prev_s}. "
+        f"Last note: {note}."
+    )
+
+
+def _looks_like_macro(lam: str) -> bool:
+    m = re.match(r"^\(lambda\s*\(\s*\)\s*\(list\s+(.*)\)\s*\)$", lam)
+    if not m:
+        return False
+    toks = re.findall(r'"[^"]*"|\d+|\S+', m.group(1))
+    if not toks or len(toks) > 32:
+        return False
+    for t in toks:
+        if t.isdigit():
+            continue
+        if not (t.startswith('"') and t.endswith('"')):
+            return False
+        word = t[1:-1]
+        if word in MACRO_WORDS:
+            continue
+        if re.fullmatch(r"(type|replace):[a-z ]*", word):
+            continue
+        if re.fullmatch(r"find:[a-z ]+", word):
+            continue
+        if re.fullmatch(r"replace-all:[a-z ]+=[a-z ]*", word):
+            continue
+        return False
+    return True
+
+
 def _looks_like_helper3(lam: str) -> bool:
     return _looks_like_helper(lam, HELPER3_CMDS)
 
@@ -360,7 +431,7 @@ def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--check":
         return _check()
     helper = ""
-    if len(sys.argv) >= 2 and sys.argv[1] in ("--helper", "--helper3"):
+    if len(sys.argv) >= 2 and sys.argv[1] in ("--helper", "--helper3", "--macro"):
         helper = sys.argv[1][2:]
         del sys.argv[1]
     if len(sys.argv) < 2 or len(sys.argv) > 5:
@@ -396,7 +467,9 @@ def main() -> int:
         or env.get("MINIMAX_MODEL", "").strip()
         or "MiniMax-M3"
     )
-    if helper == "helper3":
+    if helper == "macro":
+        prompt, shape_ok = _prompt_macro(rnd, note, prev), _looks_like_macro
+    elif helper == "helper3":
         prompt, shape_ok = _prompt_helper3(rnd, note, prev), _looks_like_helper3
     elif helper == "helper":
         prompt, shape_ok = _prompt_helper(rnd, note, prev), _looks_like_helper
