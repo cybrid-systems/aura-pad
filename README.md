@@ -9,7 +9,8 @@ There is no C viewport in this tree.
 
 Design: [`docs/DESIGN.md`](docs/DESIGN.md).
 Milestones: [`docs/m0.md`](docs/m0.md), [`docs/m1.md`](docs/m1.md),
-[`docs/m2.md`](docs/m2.md), [`docs/m3.md`](docs/m3.md), [`docs/m35.md`](docs/m35.md).
+[`docs/m2.md`](docs/m2.md), [`docs/m3.md`](docs/m3.md), [`docs/m35.md`](docs/m35.md),
+[`docs/m4.md`](docs/m4.md).
 Repo: https://github.com/cybrid-systems/aura-pad
 
 中文简介：Aura Pad 是给小朋友也能玩的 Soft 小编辑器。缓冲区、光标、按键
@@ -21,6 +22,10 @@ next-line / prev-line），并让 AI 提议“命令助手”（返回一串命�
 在“hi / aura”两行目标上比主助手严格更高分才 KEEP。M3.5 加入 undo、
 yank、indent/dedent、bob/eob、标记区域剪切/复制（每个都有小朋友能懂的
 拒绝理由），三行第二目标，“撤销 KEEP”，以及 168 项 Soft 单元测试。
+M4 变成小朋友的故事编辑器：两个本子（story / scratch）、查找/替换
+（找不到、没给词、一次改太多处、不友好的词都会被温柔地拒绝）、宏录制
+（rec / stop / play）、两条规则在同一串按键上赛跑，以及 AI 提议“录好的宏”，
+Soft 把关后严格更高分才 KEEP（30 → 44 → 51），可撤销；293 项 Soft 检查。
 
 - **M0** races `map-gentle` (mid 1) and `map-bold` (mid 2) on 24 seeded
   key steps toward the goal fixture `"hi aura"`. Score is
@@ -59,6 +64,16 @@ yank、indent/dedent、bob/eob、标记区域剪切/复制（每个都有小朋�
   and `pd:helper-undo!` that honestly takes back a KEEP. Tests: paren
   check, Python model, `m35_test.aura` (168 checks, `PAD_TEST_OK`),
   `PAD_M35_OK`. See [`docs/m35.md`](docs/m35.md).
+- **M4** adds two named pads (`story` / `scratch`, `switch:NAME`, the kill
+  text travels), `find:WORD` / `find-next` / `replace:NEW` /
+  `replace-all:OLD=NEW` with kid reasons (`not-found`, `empty-needle`,
+  `too-many`, `not-kind`, `no-buffer`), a macro recorder (`rec` / `stop` /
+  `play`), a **buffer-law race** (two laws on the same keys: `wrap-3`
+  KEEP, `wrap-9` DROP) and **macro propose** (hot slot `pd:macro`: code-word
+  and kind-word gate, shape probe + `heal!`, race on the kid story goal
+  30 → 44 KEEP → 51 KEEP, tie DROP, `pd:macro-undo!`). Tests: Python model
+  `PAD_M4_MODEL_OK`, `m4_test.aura` (293 checks, `PAD_M4_TEST_OK`),
+  `PAD_M4_OK`, live `--macro`. See [`docs/m4.md`](docs/m4.md).
 
 ## Soft smoke
 
@@ -69,13 +84,14 @@ Soft runs natively in that container (no nested docker). Never
 `build_soft4132`. Needs `AURA_SANDBOX=off`.
 
 ```bash
-bash scripts/smoke.sh         # M0+M1+M2+burn+M3+M3.5 (+ live MiniMax if keyed) → PAD_SMOKE_OK
+bash scripts/smoke.sh         # M0+M1+M2+burn+M3+M3.5+M4 (+ live MiniMax if keyed) → PAD_SMOKE_OK
 bash scripts/smoke_soft.sh    # M0 → PAD_M0_OK
 bash scripts/smoke_m1.sh      # M1 → PAD_M1_OK
 bash scripts/smoke_m2.sh      # M2 fixtures → PAD_M2_PROPOSE_OK
 PAD_PROPOSE=0 bash scripts/burn.sh   # fixture burn → PAD_BURN_OK
 bash scripts/smoke_m3.sh      # M3 multi-line + helper → PAD_M3_OK (+ live if keyed)
 bash scripts/smoke_m35.sh     # M3.5 PAREN_OK, PAD_MODEL_OK, PAD_TEST_OK, PAD_M35_OK (+ live if keyed)
+bash scripts/smoke_m4.sh      # M4 PAREN_OK, PAD_M4_MODEL_OK, PAD_M4_TEST_OK, PAD_M4_OK (+ live if keyed)
 PAD_LIVE=0 bash scripts/smoke.sh     # skip live MiniMax
 ```
 
