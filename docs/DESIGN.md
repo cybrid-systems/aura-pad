@@ -62,6 +62,12 @@ Never use `quote` as an identifier. Prefer `qf`, `mid`, `tag`.
   slot `pd:macro` vs `pd:mshadow`, kind-word gate, race on the story goal,
   KEEP only strictly better, `heal!` on DROP, `pd:macro-undo!`). Tests:
   Python model, 293 Soft checks. See [`m4.md`](m4.md).
+- **M5** — Soft Aura syntax highlight (`soft/pad/hl.aura`), Soft
+  LSP-lite goto-def / find-refs / jump-back (`soft/pad/jump.aura`)
+  with kid reasons `no-symbol` / `no-def` / `no-ref` /
+  `nothing-to-back`, and an honest Soft bridge to tip
+  `query:*` / `mutate:*` (`soft/pad/query.aura`). Gaps documented
+  and filed as Aura issues from aura-pad. See [`m5.md`](m5.md).
 
 ## M3 layering
 
@@ -80,6 +86,9 @@ m4.aura       M4 pad state (story / scratch, needle, recorder, law), find /
               two-pad TAPE, pad:law-race!
 macro.aura    M4 pd:macro / pd:mshadow propose → gate (code + kind words) →
               probe → race → KEEP/DROP, KEEP history, pd:macro-undo!
+hl.aura       M5 Soft Aura tokenize + kid HL color tape (no C viewport)
+jump.aura     M5 Soft LSP-lite goto-def / find-refs / jump-back
+query.aura    M5 Soft bridge to tip query:* / mutate:* (honest gaps listed)
 ```
 
 Honesty rules (M3.5): a REJECT never mutates and never pushes undo; undo
@@ -90,3 +99,7 @@ Honesty rules (M4): a refused token never mutates (also inside `play`,
 where each step is gated again and refusals count); a law is stamped into
 main only after a strictly better race; a macro body with an unkind word
 never reaches a slot; `fiber_live` only when every join lands.
+
+Honesty rules (M5): Soft HL and Soft jump analyze the pad
+source string; they do not invent engine APIs. Soft query/mutate helpers
+call only tip-bound surfaces; unbound names are GAPS, not wrappers.
