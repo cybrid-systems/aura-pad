@@ -1,1 +1,2 @@
-(lambda () (begin (set! *lines* (list)) (list "kill-line")))
+(lambda (s)
+  (list (list "type" "x") (list "set!" "y")))
