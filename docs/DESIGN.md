@@ -18,6 +18,9 @@ packs its decisions (text, HL letters, def/use marks, cursor, kid words)
 into a `SNAP v1 pad` block and C maps letters to colors. C never owns
 edit logic, HL, the keymap or any word a kid reads. See [`m6.md`](m6.md).
 
+M7–M12 (workspace is the buffer, intent worldlines, dirty SNAP, provenance,
+aura notebook, persist) live in [`NEXT.md`](NEXT.md). M0–M6 stay green.
+
 ## Aura loop (M0)
 
 1. Build an isomorphic empty buffer for each keymap.
@@ -79,6 +82,8 @@ Never use `quote` as an identifier. Prefer `qf`, `mid`, `tag`.
   own the keymap and play loop. C (`c/pad_view`, `c/pad_play`) reads,
   checks (fail closed), and blits ANSI/plain; `pad_play` forwards raw key
   bytes. Guarded by `PAD_C_THIN_OK`. See [`m6.md`](m6.md).
+- **M7–M12** — workspace buffer, intent worldline, dirty SNAP, provenance,
+  aura notebook, persist. See [`NEXT.md`](NEXT.md).
 
 ## M3 layering
 
