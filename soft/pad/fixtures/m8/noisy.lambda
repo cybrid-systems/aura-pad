@@ -1,0 +1,1 @@
+(lambda () (begin (eval "(+ 1 2)") (list "kill-line" "type:hi")))
