@@ -82,6 +82,9 @@ Never use `quote` as an identifier. Prefer `qf`, `mid`, `tag`.
   own the keymap and play loop. C (`c/pad_view`, `c/pad_play`) reads,
   checks (fail closed), and blits ANSI/plain; `pad_play` forwards raw key
   bytes. Guarded by `PAD_C_THIN_OK`. See [`m6.md`](m6.md).
+- **Key latency** — Soft incremental HL / play cache / SNAP `DIRTY`;
+  C dirty-row blit only. Publish ms/key in [`perf.md`](perf.md);
+  `PAD_PERF_OK` (<50ms). Soft define-lookup scaling remains Aura #4343.
 - **M7–M12** — workspace buffer, intent worldline, dirty SNAP, provenance,
   aura notebook, persist. See [`NEXT.md`](NEXT.md).
 
