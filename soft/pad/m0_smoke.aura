@@ -1,0 +1,113 @@
+;; Dual keymap race. Prints RACE/REJECT/WORLD/KEEP/DROP and PAD_M0_OK.
+;; fiber_live is accepted only when joins equal spawns and backend > 0.
+(load "/workspace/aura-pad/soft/pad/buffer.aura")
+(load "/workspace/aura-pad/soft/pad/rules.aura")
+
+(define *fail* 0)
+
+(define (expect tag got want)
+  (display tag)
+  (display "=")
+  (display (pad:nstr got))
+  (if (= got want)
+      (display " OK")
+      (begin
+        (display " WANT=")
+        (display (pad:nstr want))
+        (set! *fail* (+ *fail* 1))))
+  (newline)
+  got)
+
+(define (expect-str tag got want)
+  (display tag)
+  (display "=")
+  (display got)
+  (if (string=? got want)
+      (display " OK")
+      (begin
+        (display " WANT=")
+        (display want)
+        (set! *fail* (+ *fail* 1))))
+  (newline)
+  got)
+
+(display "DIALECT=")
+(display (pad:dialect))
+(newline)
+
+(expect "STEPS" *steps* 24)
+(expect "SEED" *seed* 20261005)
+(expect "RNG" (pad:seed-step *seed*) 34567)
+(expect "GOAL_LEN" (length *goal*) 7)
+
+;; Gate self-check on hand-built states (not strategy output).
+(expect-str "GATE_TOO_FAR"
+            (pad:gate 1 0 0 (list) 0)
+            "too-far")
+(expect-str "GATE_EMPTY"
+            (pad:gate 1 3 0 (list) 0)
+            "empty-line")
+(expect-str "GATE_SPACE"
+            (pad:gate 1 2 0 (list 1 2 3 4 5 6 7 8) 8)
+            "need-space")
+(expect-str "GATE_OK"
+            (pad:gate 2 2 0 (list) 0)
+            "ok")
+
+(pad:race!)
+(pad:audit!)
+
+;; Pinned evidence for seed 20261005, 24 steps.
+(expect "SCORE_GENTLE" *score-gentle* -2)
+(expect "SCORE_BOLD" *score-bold* 9)
+(expect "REJ_GENTLE" *rej-gentle* 6)
+(expect "REJ_BOLD" *rej-bold* 1)
+(expect "KEEP_MID" *keep-mid* 2)
+(expect "DROP_MID" *drop-mid* 1)
+(expect "MAIN_MID" *main-mid* 2)
+(expect "MAIN_SCORE" *main-score* 9)
+(expect "EDITS" *edits* 23)
+(expect "REJECTS" *rejects* 1)
+(expect "DIST" *dist* 12)
+(expect "LEN" (length *buf*) 12)
+(expect "POINT" *point* 5)
+(expect-str "SLOT" *slot-tag* "map-bold")
+(expect-str "KEEP_REASON" *keep-reason* "higher-score-stamp")
+(expect-str "DROP_REASON" *drop-reason* "lower-score-rollback")
+
+(if (string=? *world-line* "fiber_live")
+    (if (not (and (> *race-backend* 0)
+                  (> *race-spawned* 0)
+                  (= *race-joined* *race-spawned*)))
+        (begin
+          (display "WORLD_FAIL")
+          (newline)
+          (set! *fail* (+ *fail* 1))))
+    (if (not (string=? *world-line* "host-sequential"))
+        (begin
+          (display "WORLD_FAIL")
+          (newline)
+          (set! *fail* (+ *fail* 1)))))
+
+(if (not (> (+ *rej-gentle* *rej-bold*) 0))
+    (begin
+      (display "REJECT_FAIL")
+      (newline)
+      (set! *fail* (+ *fail* 1))))
+
+(if (not (and (not (= *keep-mid* *drop-mid*))
+              (= *main-mid* *keep-mid*)
+              (= *main-score* *score-bold*)
+              (> *score-bold* *score-gentle*)))
+    (begin
+      (display "KEEP_FAIL")
+      (newline)
+      (set! *fail* (+ *fail* 1))))
+
+(if (= *fail* 0)
+    (begin
+      (display "PAD_M0_OK")
+      (newline))
+    (begin
+      (display "PAD_M0_FAIL")
+      (newline)))
