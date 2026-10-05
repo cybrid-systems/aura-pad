@@ -13,7 +13,7 @@
 
 (define *play-start* "(define (hello x) (+ x 1))\n(hello 3)")
 (define *play-hello*
-  "hi! type, arrows move, ctrl-g finds where a name is born, ctrl-q says bye")
+  "welcome to aura pad - type goal:hi aura to try")
 
 ;; Play state (only pad:play-* write it).
 (define *pl-st* (pad:es-at (list (list)) 0 0))
@@ -236,7 +236,7 @@
                  (number->string *pl-keys*)
                  " no=" (number->string *pl-rej*)))
 
-;; M7 key path: line-incremental cache (lc.aura). Only the edited line is
+;; M7 key path: line-incremental Soft key path (lc.aura). Only the edited line is
 ;; re-tokenized; DIRTY lists exactly the rows whose T/H/M changed.
 (define (pad:play-snap)
   (pad:lc-snap (pad:play-title) (pad:es-L *pl-st*) (pad:es-l *pl-st*)
