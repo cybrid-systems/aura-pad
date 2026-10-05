@@ -1,0 +1,3 @@
+M6 log line
+PAD_M6_OK
+not a snap

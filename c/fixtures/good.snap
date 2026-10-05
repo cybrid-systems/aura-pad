@@ -1,0 +1,16 @@
+SNAP v1 pad
+TITLE kid pad (Soft)
+CURSOR line=2 col=1
+SAY there is no line there
+LEGEND K=magic-word S=name T=quote C=note N=number P=paren Q=ask M=change d=born-here r=used-here
+ROWS n=3
+T (define (hello x) (+ x 1)) ; hi
+H PKKKKKK.PSSSSS.SP.PS.S.NPP.CCCC
+M .........ddddd.................
+T (define (bye y) (hello y))
+H PKKKKKK.PSSS.SP.PSSSSS.SPP
+M .................rrrrr....
+T (hello 3)
+H PSSSSS.NP
+M .rrrrr...
+END

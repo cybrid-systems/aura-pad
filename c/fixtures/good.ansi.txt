@@ -1,0 +1,6 @@
+\e[1m== kid pad (Soft) ==\e[0m
+\e[2m  1 | \e[0m\e[0;36m(\e[0;1;35mdefine\e[0;0m \e[0;36m(\e[0;0;1;4mhello\e[0;0m x\e[0;36m)\e[0;0m \e[0;36m(\e[0;0m+ x \e[0;33m1\e[0;36m))\e[0;0m \e[0;2;37m; hi\e[0m
+\e[2m  2 | \e[0m\e[0;36m(\e[0;1;35mdefine\e[0;0m \e[0;36m(\e[0;0mbye y\e[0;36m)\e[0;0m \e[0;36m(\e[0;0;4mhello\e[0;0m y\e[0;36m))\e[0m
+\e[2m  3 | \e[0m\e[0;36m(\e[0;0;4;7mh\e[0;0;4mello\e[0;0m \e[0;33m3\e[0;36m)\e[0m
+  say: \e[1;33mthere is no line there\e[0m
+  key: \e[1;35mmagic-word\e[0m \e[0mname\e[0m \e[32mquote\e[0m \e[2;37mnote\e[0m \e[33mnumber\e[0m \e[36mparen\e[0m \e[1;34mask\e[0m \e[1;31mchange\e[0m \e[1;4mborn-here\e[0m \e[4mused-here\e[0m

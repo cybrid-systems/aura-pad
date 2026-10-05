@@ -1,0 +1,10 @@
+== kid pad (Soft) ==
+  1 | (define (hello x) (+ x 1)) ; hi
+    | .........ddddd.................
+  2 | (define (bye y) (hello y))
+    | .................rrrrr....
+  3 | (hello 3)
+    |  ^
+    | .rrrrr...
+  say: there is no line there
+  key: K=magic-word S=name T=quote C=note N=number P=paren Q=ask M=change d=born-here r=used-here
