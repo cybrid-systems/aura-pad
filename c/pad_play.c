@@ -110,6 +110,10 @@ int main(int argc, char **argv) {
     char line[PAD_MAX_COLS + 64];
     size_t ln = 0;
     int overflow = 0, keys = 0;
+    PadSnap prev;
+    memset(&prev, 0, sizeof(prev));
+    prev.dirty_n = -1;
+    int have_prev = 0;
     for (;;) {
         struct pollfd fds[2] = {{from, POLLIN, 0}, {to >= 0 ? STDIN_FILENO : -1, POLLIN, 0}};
         if (poll(fds, 2, -1) < 0) {
@@ -145,8 +149,23 @@ int main(int argc, char **argv) {
                 line[ln] = '\0';
                 if (ln > 0 && line[ln - 1] == '\r') line[ln - 1] = '\0';
                 /* an over-long line poisons its block: feed a non-wire line */
-                if (pad_reader_line(&rd, overflow ? "#overflow" : line) && !final_only)
-                    pad_blit(stdout, &rd.last, mode);
+                if (pad_reader_line(&rd, overflow ? "#overflow" : line) && !final_only) {
+                    pad_blit_dirty(stdout, have_prev ? &prev : NULL, &rd.last, mode);
+                    pad_snap_free(&prev);
+                    /* shallow-keep row pointers would dangle; re-blit path
+                     * only needs metadata + row strings Soft already owns
+                     * in rd.last, so copy by re-parsing is heavy — instead
+                     * snapshot fields we compare (title/say/cursor/nrows)
+                     * and strdup rows Soft sent. */
+                    prev = rd.last;
+                    for (int r = 0; r < prev.nrows; r++) {
+                        prev.t[r] = prev.t[r] ? strdup(prev.t[r]) : NULL;
+                        prev.h[r] = prev.h[r] ? strdup(prev.h[r]) : NULL;
+                        prev.m[r] = prev.m[r] ? strdup(prev.m[r]) : NULL;
+                    }
+                    have_prev = 1;
+                    /* rd.last still owns its own copies; we duplicated. */
+                }
                 ln = 0;
                 overflow = 0;
             }
@@ -158,6 +177,7 @@ int main(int argc, char **argv) {
     waitpid(pid, &status, 0);
     term_restore();
     pad_reader_finish(&rd);
+    pad_snap_free(&prev);
     int ok = rd.accepted > 0;
     if (ok && final_only)
         pad_blit(stdout, &rd.last, mode);
