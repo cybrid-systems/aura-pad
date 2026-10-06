@@ -46,6 +46,12 @@
 #      once); an engine NO gets a kid reason; tab types (tab-size) spaces
 #                                                     -> M11G_ACC 1..4 OK
 #                                                                   -> PAD_M11_RULES_OK
+#  10. M11h the helper repairs its own idea with intend: (intend goal gen
+#      verify fix max); the verifier never evals generated code (aura#4359),
+#      it tries the idea in a child world and answers in kid words; the
+#      intend-history timeline equals the Soft log; a passing idea comes
+#      back as one robot KEEP                         -> M11H_ACC 1..2 OK
+#                                                                   -> PAD_M11_FIX_OK
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$ROOT/out/m11"
@@ -57,13 +63,15 @@ python3 "$ROOT/scripts/paren_check.py" \
   "$ROOT"/soft/pad/world.aura "$ROOT"/soft/pad/m11_test.aura "$ROOT"/soft/pad/m11_cases.aura \
   "$ROOT"/soft/pad/m11e_cases.aura "$ROOT"/soft/pad/m11f_cases.aura \
   "$ROOT"/soft/pad/kid_rules.aura "$ROOT"/soft/pad/m11g_cases.aura \
-  "$ROOT"/soft/pad/m11g_wire.aura
+  "$ROOT"/soft/pad/m11g_wire.aura \
+  "$ROOT"/soft/pad/fix_loop.aura "$ROOT"/soft/pad/m11h_cases.aura \
+  "$ROOT"/soft/pad/m11h_wire.aura
 
 echo "smoke_m11: Soft tests (AURA_MUTATE_TYPE_GATE=hard)"
 T="$ROOT/out/m11/m11_test.txt"
 AURA_MUTATE_TYPE_GATE=hard bash "$ROOT/scripts/run_soft.sh" /workspace/aura-pad/soft/pad/m11_test.aura \
   </dev/null >"$T" 2>"$ROOT/out/m11/m11_test.err"
-grep -E '^(M11[A-Z_]*|M11GATE|M11STATS|M11TXN|KEEP robot|DROP robot|REJECT robot|CARD robot|BLAST|EWHOROWS|TIME|OPEN|SAVE|WORLD|WIN|NOWIN|RULE|TESTS|PAD_M11_TEST)' "$T" || true
+grep -E '^(M11[A-Z_]*|M11GATE|M11STATS|M11TXN|KEEP robot|DROP robot|REJECT robot|CARD robot|BLAST|EWHOROWS|TIME|OPEN|SAVE|WORLD|WIN|NOWIN|RULE|FIX|FIXED|GAVEUP|TESTS|PAD_M11_TEST)' "$T" || true
 if ! grep -q '^PAD_M11_TEST_OK$' "$T" || grep -q 'WANT=' "$T" \
    || soft_errs "$T" "$ROOT/out/m11/m11_test.err"; then
   grep -E 'WANT=|FAIL' "$T" >&2 || true
@@ -203,3 +211,23 @@ if [[ "$fail" -ne 0 ]]; then
   echo "smoke_m11: PAD_M11_RULES_OK checks failed" >&2; exit 1
 fi
 echo "smoke_m11: PAD_M11_RULES_OK"
+
+fail=0
+for n in 1 2; do
+  grep -qx "M11H_ACC $n OK" "$T" || { echo "smoke_m11: missing: M11H_ACC $n OK" >&2; fail=1; }
+done
+for want in 'T H1_TAG=FIXED OK' 'T H1_VERDICT=agree OK' 'T H1_STATUS=ok OK' \
+            "T H1_STRIP=try 1: passes 2 of 3 checks | try 2: the helper's bye gives hello 2 things, it wants 1 | try 3: ok OK" \
+            'T H1_FIXER_ERR1=passes 2 of 3 checks OK' 'T H1_HELLO_ROOT=6 OK' 'T H1_ONE_UNDO=1 OK' \
+            'T H1_UNDO_CODE=yes OK' 'T H1_UNDO_HELLO=4 OK' \
+            'T H2_TAG=GAVEUP OK' 'T H2_STATUS=failed OK' 'T H2_CODE_SAME=yes OK' 'T H2_HELLO_ROOT=4 OK' \
+            'T H2_ALREADY=ALREADY OK'; do
+  grep -qF -- "$want" "$T" || { echo "smoke_m11: missing: $want" >&2; fail=1; }
+done
+if grep -q '^M11_FIX_DISAGREE' "$T"; then
+  echo "smoke_m11: intend timeline disagreed with the Soft log" >&2; fail=1
+fi
+if [[ "$fail" -ne 0 ]]; then
+  echo "smoke_m11: PAD_M11_FIX_OK checks failed" >&2; exit 1
+fi
+echo "smoke_m11: PAD_M11_FIX_OK"
