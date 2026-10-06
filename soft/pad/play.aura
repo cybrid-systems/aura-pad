@@ -33,7 +33,8 @@
               (car (cdr r)))))
       (*pad-play-line-base* line)))
 
-(pad:play-reset! *play-start*)
+;; PAD_PAGE=big starts on the twelve-row page (scripts/bench_editors.sh)
+(pad:play-reset! (if (equal? (getenv "PAD_PAGE") "big") *lc-big-page* *play-start*))
 (pad:play-emit!)
 (let loop ()
   (let ((line (read-line)))
