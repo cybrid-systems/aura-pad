@@ -1,0 +1,197 @@
+;; aura-pad M11g test cases (the kid changes editor rules live), loaded
+;; by m11_test.aura after m11f_cases.aura (m11:run-all calls these
+;; sections). Prints T lines and M11G_ACC n OK. Soft reserved: never
+;; bind quote.
+
+;; A page whose editor rules are its own defines.
+(define *m11-rules-page*
+  (string-append
+    "(define (tab-size) 2)\n"
+    "(define (say-max) 120)\n"
+    "(define (indent n) (* n (tab-size)))\n"
+    "(define (hello x) (+ x 1))\n"
+    "; kids change rules: tab 4\n"
+    "(indent 2)\n"
+    "(hello 3)"))
+
+(define (m11:rules-fresh!)
+  (pad:play-reset! *m11-rules-page*)
+  (pad:who-reset!)
+  (set! *pen-undo* (list))
+  (set! *robot-undo* (list))
+  (set! *who-keep-codes* (list))
+  (pad:play-snap)
+  (m11:expect-str "CHECK" (car (pad:who-check!)) "ok")
+  (pad:time-start! "start")
+  #t)
+
+(define (m11:rkeys! ks)
+  (if (null? ks) 0 (begin (pad:kr-line! (car ks)) (m11:rkeys! (cdr ks)))))
+(define (m11:rule-out! tag)
+  (newline) (display (pad:kr-line *kr-last*)) (display " say=\"") (display *pl-say*) (display "\"") (newline)
+  *kr-last*)
+(define (m11:page-len) (string-length (pad:v-src (pad:es-L *pl-st*))))
+(define (m11:tab-now) (try (tab-size) (catch (e) -1)))
+
+(define (m11:sec-g1)
+  ;; 1. The kid types "tab 4": one typed engine write under the kid's
+  ;;    fingerprint, live at once (indent uses it, tab types 4 spaces),
+  ;;    the row shows the new rule, ctrl-o says the kid wrote it (engine
+  ;;    and pad agree), ctrl-z takes it back, and the time machine walks
+  ;;    the rule back and forth.
+  (m11:acc-begin!)
+  (m11:rules-fresh!)
+  (let* ((code0 (pad:q-code))
+         (L0 (pad:es-L *pl-st*))
+         (g0 (pad:pen-gen)))
+    (m11:expect "G1_TAB0" (m11:tab-now) 2)
+    (m11:rkeys! (list "RULE tab 4"))
+    (m11:rule-out! "G1_OUT")
+    (m11:expect-str "G1_LINE" (pad:kr-line *kr-last*) "RULE verdict=KEEP word=tab name=tab-size value=4 used=1 eng=1")
+    (m11:expect-str "G1_SAY" *pl-say* "tab jumps 4 spaces now (was 2), indent uses it. ctrl-z puts it back")
+    (m11:expect "G1_TAB_LIVE" (m11:tab-now) 4)
+    (m11:expect "G1_INDENT_LIVE" (indent 2) 8)
+    (m11:expect "G1_GEN_UP" (- (pad:pen-gen) g0) 1)
+    (m11:expect-true "G1_CODE" (string-contains? (pad:q-code) "(lambda () 4)"))
+    (m11:expect-str "G1_ROW0" (m11:row-src 0) "(define tab-size (lambda () 4))")
+    (m11:expect "G1_UNDO_DEPTH" (length *robot-undo*) 1)
+    (m11:expect-str "G1_STRIP" (pad:time-strip) "start | [kid: tab 4]")
+    (m11:expect "G1_FP" (hash-ref (query:node-provenance (pad:ew-nid "tab-size")) "author-fingerprint") 1)
+    (m11:rkeys! (list "IN 15"))
+    (m11:expect-str "G1_WHO_SAY" *pl-say* "you wrote tab-size")
+    (m11:expect-str "G1_WHO_VERDICT" (caddr (pad:ew-ask!)) "agree")
+    ;; ctrl-z
+    (m11:rkeys! (list "IN 26"))
+    (m11:expect-str "G1_UNDO_SAY" *pl-say* "tab jumps 2 spaces again")
+    (m11:expect "G1_UNDO_TAB" (m11:tab-now) 2)
+    (m11:expect "G1_UNDO_INDENT" (indent 2) 4)
+    (m11:expect-true "G1_UNDO_CODE" (string=? (pad:q-code) code0))
+    (m11:expect-true "G1_UNDO_PAGE" (eq? (pad:es-L *pl-st*) L0))
+    (m11:expect-str "G1_UNDO_STRIP" (pad:time-strip) "[start]")
+    ;; again, then tab types (tab-size) spaces; ctrl-t / ctrl-n
+    (m11:rkeys! (list "RULE tab 4"))
+    (m11:expect-str "G1_AGAIN" (car *kr-last*) "KEEP")
+    (let ((n0 (m11:page-len)))
+      (m11:rkeys! (list "IN 9"))
+      (m11:expect "G1_TAB_TYPES_4" (- (m11:page-len) n0) 4))
+    (m11:rkeys! (list "IN 20"))
+    (newline) (display (pad:time-line *time-last*)) (newline)
+    (m11:expect-str "G1_BACK_SAY" *pl-say* "back to step 1 of 2: tab-size like before your tab 4")
+    (m11:expect-str "G1_BACK_VERDICT" (pad:nth *time-last* 5) "agree")
+    (m11:expect "G1_BACK_TAB" (m11:tab-now) 2)
+    (m11:expect-true "G1_BACK_CODE" (string=? (pad:q-code) code0))
+    (let ((n0 (m11:page-len)))
+      (m11:rkeys! (list "IN 9"))
+      (m11:expect "G1_TAB_TYPES_2" (- (m11:page-len) n0) 2))
+    (m11:rkeys! (list "IN 14"))
+    (m11:expect-str "G1_FWD_VERDICT" (pad:nth *time-last* 5) "agree")
+    (m11:expect "G1_FWD_TAB" (m11:tab-now) 4)
+    (m11:expect-str "G1_FWD_ROW0" (m11:row-src 0) "(define tab-size (lambda () 4))")
+    (m11:expect "G1_NO_DISAGREE" *kr-disagree* 0))
+  (m11:acc-end! "M11G" 1)
+  #t)
+
+;; One refused kid command: the say, and nothing moved.
+(define (m11:rule-no! tag cmd want-tag want-say)
+  (let ((code0 (pad:q-code)) (g0 (pad:pen-gen)) (u0 (length *robot-undo*))
+        (s0 (pad:time-strip)) (r0 *kr-refused*))
+    (m11:rkeys! (list (string-append "RULE " cmd)))
+    (m11:rule-out! (string-append tag "_OUT"))
+    (m11:expect-str (string-append tag "_VERDICT") (car *kr-last*) "REJECT")
+    (m11:expect-str (string-append tag "_TAG") (pad:nth *kr-last* 6) want-tag)
+    (m11:expect-str (string-append tag "_SAY") *pl-say* want-say)
+    (m11:expect (string-append tag "_COUNTED") (- *kr-refused* r0) 1)
+    (m11:expect-true (string-append tag "_CODE_SAME") (string=? (pad:q-code) code0))
+    (m11:expect (string-append tag "_GEN_SAME") (- (pad:pen-gen) g0) 0)
+    (m11:expect (string-append tag "_NO_UNDO") (- (length *robot-undo*) u0) 0)
+    (m11:expect-str (string-append tag "_STRIP_SAME") (pad:time-strip) s0)
+    #t))
+
+(define (m11:sec-g2)
+  ;; 2. The kid's command is gated in Soft with kid words: out of range,
+  ;;    not a number, no such rule, already that value, a page without
+  ;;    the rule. Nothing reaches the engine.
+  (m11:acc-begin!)
+  (m11:rules-fresh!)
+  (m11:rule-no! "G2_RANGE" "tab 40" "out-of-range" "tab can jump 1 to 8 spaces")
+  (m11:rule-no! "G2_ZERO" "tab 0" "out-of-range" "tab can jump 1 to 8 spaces")
+  (m11:rule-no! "G2_WORDS" "tab lots" "not-number" "tab needs a number, like tab 1")
+  (m11:rule-no! "G2_HALF" "tab 2.5" "not-number" "tab needs a number, like tab 1")
+  (m11:rule-no! "G2_NORULE" "jump 3" "no-rule" "there is no rule called jump, try tab or say")
+  (m11:rule-no! "G2_SAME" "tab 2" "same" "tab jumps 2 spaces already")
+  (m11:expect "G2_TAB" (m11:tab-now) 2)
+  (m11:fresh!)
+  (m11:rule-no! "G2_NODEF" "tab 3" "no-def" "this page has no tab rule yet")
+  (m11:acc-end! "M11G" 2)
+  #t)
+
+(define (m11:sec-g3)
+  ;; 3. A helper proposes rule bodies through the same path: a good one
+  ;;    is kept (ctrl-o: the helper wrote it); a body whose value breaks
+  ;;    the rule table is undone right after the KEEP; a type-breaking
+  ;;    body is refused by the engine with a kid reason (hard gate); a
+  ;;    locked word or a name that is not a rule never gets written.
+  (m11:acc-begin!)
+  (m11:rules-fresh!)
+  (let ((code0 (pad:q-code)) (h0 *kr-healed*))
+    (pad:kr-propose! "helper" "tab-size" "(lambda () 40)" "wide tabs")
+    (m11:rule-out! "G3_BIG_OUT")
+    (m11:expect-str "G3_BIG" (car *kr-last*) "HEAL")
+    (m11:expect-str "G3_BIG_SAY" *pl-say* "the helper's tab-size gave 40, tab can jump 1 to 8 spaces, the old rule is back")
+    (m11:expect "G3_BIG_HEALED" (- *kr-healed* h0) 1)
+    (m11:expect "G3_BIG_TAB" (m11:tab-now) 2)
+    (m11:expect-true "G3_BIG_CODE" (string=? (pad:q-code) code0))
+    (m11:expect "G3_BIG_NO_UNDO" (length *robot-undo*) 0)
+    (m11:expect-str "G3_BIG_STRIP" (pad:time-strip) "[start]")
+    (m11:expect-str "G3_BIG_ROW0" (m11:row-src 0) "(define (tab-size) 2)")
+    (m11:expect-str "G3_BIG_REASON" (pad:nth *kr-last* 6) "agree")
+    (if (string=? *m11-gate* "hard")
+        (let ((d0 *kr-dropped*))
+          (pad:kr-propose! "helper" "tab-size" "(lambda () \"wide\")" "word tabs")
+          (m11:rule-out! "G3_WORD_OUT")
+          (m11:expect-str "G3_WORD" (car *kr-last*) "DROP")
+          (m11:expect-str "G3_WORD_SAY" *pl-say* "the helper's tab-size does not fit (indent 2), the old rule stays")
+          (m11:expect-str "G3_WORD_KIND" (pad:nth *why-last* 1) "type")
+          (m11:expect "G3_WORD_DROPPED" (- *kr-dropped* d0) 1)
+          (m11:expect "G3_WORD_TAB" (m11:tab-now) 2)
+          (m11:expect "G3_WORD_INDENT" (indent 3) 6)
+          (m11:expect-true "G3_WORD_CODE" (string=? (pad:q-code) code0)))
+        (begin (newline) (display "M11GATE rule_type=skipped (needs AURA_MUTATE_TYPE_GATE=hard)") (newline)))
+    (pad:kr-propose! "helper" "tab-size" "(lambda () (display 4))" "show")
+    (m11:expect-str "G3_LOCKED" (car *kr-last*) "REJECT")
+    (m11:expect-str "G3_LOCKED_SAY" *pl-say* "that change uses a word the pad keeps locked")
+    (pad:kr-propose! "helper" "hello" "(lambda (x) x)" "same")
+    (m11:expect-str "G3_NOTRULE" (car *kr-last*) "REJECT")
+    (m11:expect-str "G3_NOTRULE_SAY" *pl-say* "hello is not an editor rule, try tab or say")
+    (m11:expect-true "G3_STILL_CODE" (string=? (pad:q-code) code0))
+    (pad:kr-propose! "helper" "tab-size" "(lambda () 3)" "roomy")
+    (m11:rule-out! "G3_GOOD_OUT")
+    (m11:expect-str "G3_GOOD" (car *kr-last*) "KEEP")
+    (m11:expect "G3_GOOD_TAB" (m11:tab-now) 3)
+    (m11:expect-str "G3_GOOD_STRIP" (pad:time-strip) "start | [helper: roomy]")
+    (m11:expect-str "G3_GOOD_WHO" (car (pad:ew-ask!))
+                    (string-append "EWHO row=0 name=tab-size who=helper why=roomy change="
+                                   (number->string (pad:nth (pad:ew-prov "tab-size") 3))
+                                   " soft=helper verdict=agree")))
+  (m11:acc-end! "M11G" 3)
+  #t)
+
+(define (m11:sec-g4)
+  ;; 4. The say rule: the kid makes the say line short, the next long
+  ;;    sentence is cut live; setting it back shows whole sentences.
+  (m11:acc-begin!)
+  (m11:rules-fresh!)
+  (m11:rkeys! (list "RULE say 30"))
+  (m11:expect-str "G4_KEEP" (car *kr-last*) "KEEP")
+  (m11:expect "G4_SAYMAX" (try (say-max) (catch (e) -1)) 30)
+  (m11:expect-str "G4_KEEP_SAY_CUT" *pl-say* "the say line keeps 30 lette...")
+  (m11:rkeys! (list "RULE jump 3"))
+  (m11:expect-str "G4_CUT" *pl-say* "there is no rule called jum...")
+  (m11:rkeys! (list "RULE say 120"))
+  (m11:expect-str "G4_BACK" (car *kr-last*) "KEEP")
+  (m11:rkeys! (list "RULE jump 3"))
+  (m11:expect-str "G4_WHOLE" *pl-say* "there is no rule called jump, try tab or say")
+  (m11:expect-str "G4_STRIP" (pad:time-strip) "start | kid: say 30 | [kid: say 120]")
+  (m11:expect "G4_NO_DISAGREE" *kr-disagree* 0)
+  (m11:acc-end! "M11G" 4)
+  #t)

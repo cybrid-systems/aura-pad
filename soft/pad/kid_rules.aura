@@ -1,0 +1,312 @@
+;; aura-pad M11g -- the kid changes editor rules live.
+;; Editor rules are ordinary page defines, e.g.
+;;   (define (tab-size) 2)     ; how many spaces tab (IN 9) types
+;;   (define (say-max) 120)    ; how many letters the say line keeps
+;; The kid types "tab 4" (host line "RULE tab 4"). Soft owns the whole
+;; path:
+;;   gate     Soft rule table: known rule word, a whole number, inside
+;;            the rule's range, not the value it already has, the define
+;;            is on the page (engine define-lookup), aura not busy.
+;;            A NO is one kid sentence ("tab can jump 1 to 8 spaces").
+;;   write    ast:snapshot, then ONE typed transaction
+;;            (typed-mutate-atomic (mutate:rebind "tab-size" "(lambda () 4)"
+;;            "tab 4")) under author fingerprint kid=1 (eng_who.aura).
+;;   keep     pad:robot-commit! (robot.aura): the row is projected, a
+;;            ctrl-z entry, who stamps (kid), a time-machine step
+;;            (time.aura: ctrl-t / ctrl-n walk the rule back and forth).
+;;   verify   Soft calls the rule right after the KEEP (it is live). A
+;;            value outside the table's range (a helper proposed
+;;            (lambda () 40)) is undone at once with pad:robot-undo!:
+;;            "the old rule is back".
+;; A helper / macro / law may propose a rule body too: pen gate
+;; (pen.aura) + the rule table, the same write / keep / verify. An engine
+;; NO (AURA_MUTATE_TYPE_GATE=hard: (lambda () "wide") where indent adds
+;; (tab-size)) heals the snapshot and says why.aura's kid reason.
+;; The engine checks Soft's "used by" count with query:calls (taken
+;; before the transaction, aura#4364); a mismatch prints
+;; M11_RULES_DISAGREE.
+;; Rules act on the notebook face (pad:kr-line!) only, at human speed:
+;; tab types (tab-size) spaces, the say line is cut to (say-max) letters.
+;; Nothing here is on the pad's own key path (play.aura).
+;; Loaded after robot.aura and time.aura. Soft reserved: never bind quote.
+
+(define *kr-keeps* 0)
+(define *kr-refused* 0)    ; Soft gate NO
+(define *kr-dropped* 0)    ; engine NO
+(define *kr-healed* 0)     ; kept, verify failed, undone
+(define *kr-disagree* 0)
+(define *kr-last* #f)      ; (verdict word name value used-soft used-engine reason)
+
+;; (word name lo hi now-words can-words unit read)
+(define *kr-rules*
+  (list (list "tab" "tab-size" 1 8 "tab jumps " "tab can jump " " spaces"
+              (lambda () (tab-size)))
+        (list "say" "say-max" 20 200 "the say line keeps " "the say line can keep " " letters"
+              (lambda () (say-max)))))
+
+(define (pad:kr-find-by k key rules)
+  (cond
+    ((null? rules) #f)
+    ((string=? (list-ref (car rules) k) key) (car rules))
+    (#t (pad:kr-find-by k key (cdr rules)))))
+(define (pad:kr-rule word) (pad:kr-find-by 0 word *kr-rules*))
+(define (pad:kr-rule-named name) (pad:kr-find-by 1 name *kr-rules*))
+(define (pad:kr-words rules)
+  (cond
+    ((null? rules) "")
+    ((null? (cdr rules)) (car (car rules)))
+    ((null? (cddr rules)) (string-append (car (car rules)) " or " (car (cadr rules))))
+    (#t (string-append (car (car rules)) ", " (pad:kr-words (cdr rules))))))
+
+;; The rule's live value (calls the page define), or #f.
+(define (pad:kr-value rule)
+  (try ((list-ref rule 7)) (catch (e) #f)))
+(define (pad:kr-ok-value? rule v)
+  (and (number? v) (integer? v) (>= v (list-ref rule 2)) (<= v (list-ref rule 3))))
+(define (pad:kr-num-str v)
+  (cond
+    ((number? v) (number->string v))
+    ((string? v) (string-append "\"" v "\""))
+    (#t "nothing")))
+(define (pad:kr-now rule v)
+  (string-append (list-ref rule 4) (pad:kr-num-str v) (list-ref rule 6)))
+(define (pad:kr-range rule)
+  (string-append (list-ref rule 5) (number->string (list-ref rule 2)) " to "
+                 (number->string (list-ref rule 3)) (list-ref rule 6)))
+
+;; "tab  4" -> ("tab" "4")
+(define (pad:kr-parts s)
+  (pad:kr-nonempty (string-split s " ")))
+(define (pad:kr-nonempty xs)
+  (cond
+    ((null? xs) (list))
+    ((string=? (car xs) "") (pad:kr-nonempty (cdr xs)))
+    (#t (cons (car xs) (pad:kr-nonempty (cdr xs))))))
+
+;; Soft gate for a kid rule command. Returns (tag rule value).
+(define (pad:kr-gate parts)
+  (let* ((rule (if (pair? parts) (pad:kr-rule (car parts)) #f))
+         (v (if (and rule (pair? (cdr parts))) (string->number (cadr parts)) #f)))
+    (cond
+      ((null? parts) (list "no-rule" #f #f))
+      ((not rule) (list "no-rule" #f #f))
+      ((not (and (pair? (cdr parts)) (null? (cddr parts)) (number? v) (integer? v)))
+       (list "not-number" rule #f))
+      ((not (pad:kr-ok-value? rule v)) (list "out-of-range" rule v))
+      ((not (pad:ws-engine-born? (list-ref rule 1))) (list "no-def" rule v))
+      ((let ((now (pad:kr-value rule))) (and (number? now) (= now v))) (list "same" rule v))
+      ((not (pad:m-safe?)) (list "not-safe" rule v))
+      (#t (list "ok" rule v)))))
+
+(define (pad:kr-gate-say tag rule v word)
+  (cond
+    ((string=? tag "no-rule")
+     (string-append "there is no rule called " word ", try " (pad:kr-words *kr-rules*)))
+    ((string=? tag "not-number")
+     (string-append (car rule) " needs a number, like " (car rule) " "
+                    (number->string (list-ref rule 2))))
+    ((string=? tag "out-of-range") (pad:kr-range rule))
+    ((string=? tag "no-def") (string-append "this page has no " (car rule) " rule yet"))
+    ((string=? tag "same") (string-append (pad:kr-now rule v) " already"))
+    ((string=? tag "not-safe") "aura is busy, try again")
+    (#t (pad:robot-say tag))))
+
+;; --- used by: Soft call sites, engine query:calls checks the count ---
+(define (pad:kr-site-words L pts acc)
+  (if (null? pts)
+      (reverse acc)
+      (let* ((l (car (pad:v-linecol L (car pts))))
+             (src (pad:why-row-src l))
+             (d (pad:why-row-def src))
+             (w (if d d src)))
+        (pad:kr-site-words L (cdr pts) (if (member w acc) acc (cons w acc))))))
+;; (soft-count engine-count words)
+(define (pad:kr-used-by name)
+  (let* ((L (pad:es-L *pl-st*))
+         (toks (pad:hl-tokens (pad:v-src L)))
+         (pts (pad:blast-sites toks name #f #f (list))))
+    (list (length pts) (pad:blast-eng-calls name) (pad:kr-site-words L pts (list)))))
+(define (pad:kr-used-say u)
+  (cond
+    ((null? (caddr u)) "nothing else uses it")
+    ((null? (cdr (caddr u))) (string-append (car (caddr u)) " uses it"))
+    (#t (string-append (pad:robot-names-str (caddr u)) " use it"))))
+(define (pad:kr-check-used! u name)
+  (if (= (car u) (cadr u))
+      "agree"
+      (begin
+        (set! *kr-disagree* (+ *kr-disagree* 1))
+        (newline)
+        (display "M11_RULES_DISAGREE name=") (display name)
+        (display " soft=") (display (number->string (car u)))
+        (display " eng=") (display (number->string (cadr u)))
+        (newline)
+        "disagree")))
+
+;; --- write: snapshot + one typed transaction under who's fingerprint ---
+;; Returns ("applied" snap code0 g0 t0) or ("refused" why-answer g0 t0).
+(define (pad:kr-apply! who name lam why)
+  (pad:who-sync! "kid" "typed" *who-gen*)
+  (let* ((g0 (pad:pen-gen))
+         (t0 (pad:pen-total))
+         (ops (list (list name lam)))
+         (code0 (pad:q-code))
+         (snap (ast:snapshot "rule"))
+         (sx (pad:robot-sexprs ops why))
+         (fp (pad:ew-set! who))
+         (r (try (typed-mutate-atomic sx) (catch (e) #f)))
+         (fp-back (pad:ew-set! "kid")))
+    (if (eq? r #t)
+        (list "applied" snap code0 g0 t0)
+        (let ((w (pad:why-probe! who ops why)))
+          (pad:robot-heal! snap)
+          (list "refused" w g0 t0)))))
+
+;; Kid words for an engine NO: a type / arity NO names the line aura
+;; blames (a caller of the rule, e.g. "(indent 2)"); else why.aura's words.
+(define (pad:kr-drop-why w who name)
+  (cond
+    ((not (and (pair? w) (string? (pad:nth w 3)))) "aura said no")
+    ((and (member (pad:nth w 1) (list "type" "arity")) (> (pad:why-line (pad:nth w 2)) 0))
+     (string-append (pad:why-owner who name) " does not fit " (pad:why-where (pad:nth w 2))))
+    (#t (pad:nth w 3))))
+
+;; Write, keep, verify. Returns (verdict reason say gen-delta total-delta used).
+(define (pad:kr-write! who rule lam why v0)
+  (let* ((name (list-ref rule 1))
+         (u (pad:kr-used-by name))
+         (agree (pad:kr-check-used! u name))
+         (a (pad:kr-apply! who name lam why)))
+    (if (string=? (car a) "refused")
+        (let ((w (cadr a)))
+          (set! *kr-dropped* (+ *kr-dropped* 1))
+          (list "DROP" "refused"
+                (string-append (pad:kr-drop-why w who name) ", the old rule stays")
+                (- (pad:pen-gen) (caddr a)) (- (pad:pen-total) (pad:nth a 3)) u))
+        (let* ((ops (list (list name lam)))
+               (k (pad:robot-commit! who ops why (pad:nth a 1) (pad:nth a 2)
+                                     (pad:nth a 3) (pad:nth a 4)))
+               (v (pad:kr-value rule)))
+          (if (pad:kr-ok-value? rule v)
+              (begin
+                (set! *kr-keeps* (+ *kr-keeps* 1))
+                (list "KEEP" "row"
+                      (string-append (pad:kr-now rule v) " now (was " (pad:kr-num-str v0) "), "
+                                     (pad:kr-used-say u) ". ctrl-z puts it back")
+                      (pad:nth k 3) (pad:nth k 4) u))
+              (let ((back (pad:robot-undo!)))
+                (set! *kr-healed* (+ *kr-healed* 1))
+                (list "HEAL" back
+                      (string-append (pad:why-owner who name) " gave " (pad:kr-num-str v) ", "
+                                     (pad:kr-range rule) ", the old rule is back")
+                      (- (pad:pen-gen) (pad:nth a 3)) (- (pad:pen-total) (pad:nth a 4)) u)))))))
+
+(define (pad:kr-done! r word name)
+  (set! *kr-last* (list (car r) word name (pad:kr-value-of-name name)
+                        (if (pair? (pad:nth r 5)) (car (pad:nth r 5)) -1)
+                        (if (pair? (pad:nth r 5)) (cadr (pad:nth r 5)) -1)
+                        (cadr r)))
+  (set! *pl-say* (pad:nth r 2))
+  r)
+(define (pad:kr-value-of-name name)
+  (let ((rule (pad:kr-rule-named name))) (if rule (pad:kr-value rule) #f)))
+
+;; The kid's command: "tab 4". Returns (verdict reason say gen+ total+ used)
+;; and shows say in the say line.
+(define (pad:kr-cmd! text)
+  (let* ((parts (pad:kr-parts text))
+         (g (pad:kr-gate parts))
+         (rule (cadr g))
+         (v (caddr g)))
+    (if (not (string=? (car g) "ok"))
+        (begin
+          (set! *kr-refused* (+ *kr-refused* 1))
+          (pad:kr-done! (list "REJECT" (car g)
+                              (pad:kr-gate-say (car g) rule v (if (pair? parts) (car parts) ""))
+                              0 0 (list))
+                        (if (pair? parts) (car parts) "") (if rule (list-ref rule 1) "")))
+        (pad:kr-done! (pad:kr-write! "kid" rule (string-append "(lambda () " (number->string v) ")")
+                                     (string-append (car rule) " " (number->string v))
+                                     (pad:kr-value rule))
+                      (car rule) (list-ref rule 1)))))
+
+;; A helper / macro / law proposes a rule body: pen gate + rule table,
+;; then the same write / keep / verify.
+(define (pad:kr-propose! who name lam why)
+  (let* ((rule (pad:kr-rule-named name))
+         (g (cond
+              ((not rule) "no-rule")
+              ((not (pad:why-brackets-ok? lam)) "brackets")
+              (#t (pad:pen-gate who name lam)))))
+    (if (not (string=? g "ok"))
+        (begin
+          (set! *kr-refused* (+ *kr-refused* 1))
+          (pad:kr-done! (list "REJECT" g
+                              (if (string=? g "no-rule")
+                                  (string-append name " is not an editor rule, try "
+                                                 (pad:kr-words *kr-rules*))
+                                  (pad:robot-say g))
+                              0 0 (list))
+                        "" name))
+        (pad:kr-done! (pad:kr-write! who rule lam why (pad:kr-value rule)) (car rule) name))))
+
+;; --- the notebook face with live rules ---
+(define (pad:kr-spaces! n)
+  (if (<= n 0) "ok" (begin (pad:robot-line! "IN 32") (pad:kr-spaces! (- n 1)))))
+(define (pad:kr-tab)
+  (let* ((rule (pad:kr-rule "tab")) (v (pad:kr-value rule)))
+    (if (pad:kr-ok-value? rule v) v 2)))
+(define (pad:kr-say-max)
+  (let* ((rule (pad:kr-rule "say")) (v (pad:kr-value rule)))
+    (if (pad:kr-ok-value? rule v) v 0)))
+(define (pad:kr-clip! n)
+  (if (and (> n 3) (string? *pl-say*) (> (string-length *pl-say*) n))
+      (set! *pl-say* (string-append (substring *pl-say* 0 (- n 3)) "..."))
+      #f))
+;; ctrl-z when the newest robot KEEP is a rule change: the same
+;; pad:robot-undo!, said in rule words ("tab jumps 2 spaces again").
+(define (pad:kr-undo-rule)
+  (if (null? *robot-undo*)
+      #f
+      (let ((names (pad:nth (car *robot-undo*) 4)))
+        (if (and (pair? names) (null? (cdr names))) (pad:kr-rule-named (car names)) #f))))
+(define (pad:kr-undo! rule)
+  (let ((r (pad:robot-undo!)))
+    (pad:play-ok! (if (string=? r "agree")
+                      (string-append (pad:kr-now rule (pad:kr-value rule)) " again")
+                      (pad:robot-undo-say r)))))
+
+;; "RULE tab 4" -> the kid's rule command; IN 9 types (tab-size) spaces;
+;; ctrl-z on a rule change says it in rule words;
+;; everything else is pad:robot-line!. Then the say line is cut to
+;; (say-max) letters.
+(define (pad:kr-line! line)
+  (let ((r (cond
+             ((not (and (string? line) (null? *pl-esc*))) (pad:robot-line! line))
+             ((string-prefix? line "RULE ")
+              (pad:kr-cmd! (substring line 5 (string-length line)))
+              (set! *pl-keys* (+ *pl-keys* 1))
+              "ok")
+             ((string=? line "IN 9") (pad:kr-spaces! (pad:kr-tab)))
+             ((and (string=? line "IN 26") (not *robot-pending*) (pad:kr-undo-rule))
+              (pad:kr-undo! (pad:kr-undo-rule)))
+             (#t (pad:robot-line! line)))))
+    (pad:kr-clip! (pad:kr-say-max))
+    r))
+
+;; RULE verdict=KEEP word=tab name=tab-size value=4 used=1 eng=1
+;; (*kr-last* = (verdict word name value used-soft used-engine reason))
+(define (pad:kr-line x)
+  (if (not x)
+      "RULE none"
+      (string-append "RULE verdict=" (car x) " word=" (cadr x) " name=" (caddr x)
+                     " value=" (pad:kr-num-str (pad:nth x 3))
+                     " used=" (number->string (pad:nth x 4))
+                     " eng=" (number->string (pad:nth x 5)))))
+
+(define (pad:kr-stats-str)
+  (string-append "rule_keeps=" (number->string *kr-keeps*)
+                 " rule_refused=" (number->string *kr-refused*)
+                 " rule_dropped=" (number->string *kr-dropped*)
+                 " rule_healed=" (number->string *kr-healed*)
+                 " rule_disagree=" (number->string *kr-disagree*)))
