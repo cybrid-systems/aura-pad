@@ -29,6 +29,9 @@
 # → M10 who wrote this (ctrl-o row stamps kid/helper/macro/law, pen
 # undo = ast:restore + re-project agree, engine query:dirty-nodes rows ⊆
 # Soft DIRTY ∪ cursor; M10_ACC 1..4 OK, PAD_M10_OK). C unchanged.
+# → gap round: one Soft entry per key (play_in.aura), flat line scanner,
+# C cell-diff tty update with IL/DL (Soft tests PAD_GAP_TEST_OK, batched
+# lines == byte lines, term model TERM_MODEL_OK; PAD_GAP_OK).
 # Ends with PAD_SMOKE_OK.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -100,5 +103,8 @@ bash "$ROOT/scripts/smoke_m9.sh"
 
 echo "smoke: m10 who wrote this + engine dirty"
 bash "$ROOT/scripts/smoke_m10.sh"
+
+echo "smoke: gap round (one Soft entry per key + C cell-diff tty update)"
+bash "$ROOT/scripts/smoke_gap.sh"
 
 echo "smoke: PAD_SMOKE_OK"

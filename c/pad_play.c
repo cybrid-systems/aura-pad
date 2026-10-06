@@ -1,6 +1,7 @@
 /* pad_play: interactive thin viewport. Spawns the Soft play child
- * (scripts/soft_play.sh -> soft/pad/play.aura), forwards every raw key
- * byte as "IN <byte>" without interpreting it, and blits each SNAP block
+ * (scripts/soft_play.sh -> soft/pad/play.aura), forwards the raw key
+ * bytes of each read() as one "IN <b1> <b2> ..." line without
+ * interpreting them, and blits each SNAP block
  * Soft sends back. Soft owns the keymap, the gate, the buffer, the cursor
  * and the kid words; ctrl-q quits because Soft decides it means quit.
  * stdin EOF closes the child's stdin; child EOF ends the viewport.
@@ -93,6 +94,10 @@ int main(int argc, char **argv) {
     if (mode < 0)
         mode = isatty(STDOUT_FILENO) && getenv("NO_COLOR") == NULL;
     signal(SIGPIPE, SIG_IGN);
+    /* One write() per frame: a tty stdout is line-buffered by default,
+     * which made every frame ~45 writes; the blit fflush()es at its end. */
+    static char obuf[1 << 16];
+    setvbuf(stdout, obuf, _IOFBF, sizeof(obuf));
 
     int to = -1, from = -1;
     pid_t pid = spawn(script, &to, &from);
@@ -127,12 +132,18 @@ int main(int argc, char **argv) {
                 close(to); /* Soft sees EOF and finishes */
                 to = -1;
             } else {
-                for (ssize_t i = 0; i < k; i++) {
-                    char msg[16];
-                    int m = snprintf(msg, sizeof(msg), "IN %u\n", kb[i]);
-                    if (write(to, msg, (size_t)m) != m) { close(to); to = -1; break; }
-                    keys++;
-                }
+                /* One line per read(): "IN b1 b2 ... bn". An arrow key
+                 * arrives as one read, so Soft gets one line per key
+                 * (one pipe write, one Soft entry) instead of three.
+                 * The bytes stay uninterpreted; Soft splits them. */
+                char msg[8 + sizeof(kb) * 4];
+                int m = 2;
+                memcpy(msg, "IN", 2);
+                for (ssize_t i = 0; i < k; i++)
+                    m += snprintf(msg + m, sizeof(msg) - (size_t)m, " %u", kb[i]);
+                msg[m++] = '\n';
+                if (write(to, msg, (size_t)m) != m) { close(to); to = -1; }
+                keys += (int)k;
             }
         }
         if (fds[0].revents & (POLLIN | POLLHUP)) {

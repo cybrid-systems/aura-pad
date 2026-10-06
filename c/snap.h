@@ -38,9 +38,14 @@ void pad_reader_free(PadReader *rd);
 void pad_snap_free(PadSnap *s);
 /* Draw s. ansi=1 colors + reverse-video cursor; 0 = plain text + caret. */
 void pad_blit(FILE *o, const PadSnap *s, int ansi);
-/* Interactive redraw: if Soft marked DIRTY and prev is set, only those
- * rows (plus title/say/legend when they change). Else full pad_blit.
- * Never edits Soft's letters — C only chooses which rows to paint. */
+/* Interactive redraw. No prev or no DIRTY: full pad_blit. On a tty:
+ * Emacs update_frame style, only the cells that differ between Soft's
+ * previous and new frame (plus one insert/delete line for a shifted row
+ * block). On a stream: whole rows Soft marked DIRTY or the cursor rows.
+ * Never edits Soft's letters — C only chooses which bytes to write. */
 void pad_blit_dirty(FILE *o, const PadSnap *prev, const PadSnap *s, int ansi);
+/* Treat the output as a terminal (1), a stream (0) or ask isatty (-1).
+ * pad_view --replay uses 1 so the tty update path can be checked. */
+void pad_force_tty(int on);
 
 #endif

@@ -9,10 +9,11 @@
  *   SNAP v1 pad / TITLE / CURSOR line= col= / SAY / LEGEND /
  *   optional DIRTY lines=<csv> / ROWS n=
  *   then n x (T text, H tape, M marks) with |T| == |H| == |M|, then END.
- * Soft may mark dirty rows so the interactive viewport redraws less;
- * C never invents which rows changed. Non-SNAP lines between blocks are
- * skipped (Soft logs may share stdout). A bad or truncated block is
- * dropped whole; the last complete one wins.
+ * Soft may mark dirty rows so the interactive viewport redraws less; on
+ * a terminal C also compares Soft's previous and new cells to write only
+ * what differs (it never decides what a cell holds). Non-SNAP lines
+ * between blocks are skipped (Soft logs may share stdout). A bad or
+ * truncated block is dropped whole; the last complete one wins.
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -271,6 +272,10 @@ int pad_reader_file(PadReader *rd, FILE *fp) {
 
 /* ---- drawing: pure copy of Soft's decisions ---- */
 
+static int g_force_tty = -1;
+void pad_force_tty(int on) { g_force_tty = on; }
+static int out_tty(FILE *o) { return g_force_tty >= 0 ? g_force_tty : isatty(fileno(o)); }
+
 static void sgr(FILE *o, int ansi, const char *code) {
     if (ansi)
         fprintf(o, "\033[%sm", code);
@@ -329,7 +334,7 @@ static void draw_legend(FILE *o, int ansi, const char *legend) {
 }
 
 void pad_blit(FILE *o, const PadSnap *s, int ansi) {
-    if (ansi && isatty(fileno(o)))
+    if (ansi && out_tty(o))
         fputs("\033[2J\033[H", o);
     sgr(o, ansi, "1");
     fprintf(o, "== %s ==", s->title);
@@ -376,20 +381,11 @@ static int row_dirty(const PadSnap *s, int r) {
     return 0;
 }
 
-void pad_blit_dirty(FILE *o, const PadSnap *prev, const PadSnap *s, int ansi) {
-    if (!ansi || !prev || s->dirty_n < 0 || prev->nrows != s->nrows) {
-        pad_blit(o, s, ansi);
-        return;
-    }
-    /* Home without wipe; redraw title when Soft changed it. */
-    if (isatty(fileno(o)))
-        fputs("\033[H", o);
+/* Non-tty ANSI stream (tests, pipes): whole dirty rows, no positioning. */
+static void blit_dirty_stream(FILE *o, const PadSnap *prev, const PadSnap *s, int ansi) {
     if (strcmp(prev->title, s->title) != 0 || strcmp(prev->say, s->say) != 0 ||
         strcmp(prev->legend, s->legend) != 0 || prev->cur_line != s->cur_line ||
         prev->cur_col != s->cur_col || s->dirty_n > 0) {
-        /* Title line always refreshed so keys=/say stay honest. */
-        if (isatty(fileno(o)))
-            fputs("\033[H\033[2K", o);
         sgr(o, ansi, "1");
         fprintf(o, "== %s ==", s->title);
         sgr(o, ansi, "0");
@@ -401,8 +397,6 @@ void pad_blit_dirty(FILE *o, const PadSnap *prev, const PadSnap *s, int ansi) {
             prev->h[r] && s->h[r] && strcmp(prev->h[r], s->h[r]) == 0 &&
             prev->m[r] && s->m[r] && strcmp(prev->m[r], s->m[r]) == 0)
             continue;
-        if (isatty(fileno(o)))
-            fprintf(o, "\033[%d;1H\033[2K", r + 2); /* +1 title, 1-based */
         const char *tt = s->t[r], *hh = s->h[r], *mm = s->m[r];
         size_t n = strlen(tt);
         sgr(o, ansi, "2");
@@ -417,9 +411,6 @@ void pad_blit_dirty(FILE *o, const PadSnap *prev, const PadSnap *s, int ansi) {
         sgr(o, ansi, "0");
         fputc('\n', o);
     }
-    /* say + legend under the rows */
-    if (isatty(fileno(o)))
-        fprintf(o, "\033[%d;1H\033[J", s->nrows + 2);
     fputs("  say: ", o);
     sgr(o, ansi, "1;33");
     fputs(s->say, o);
@@ -427,4 +418,197 @@ void pad_blit_dirty(FILE *o, const PadSnap *prev, const PadSnap *s, int ansi) {
     fputc('\n', o);
     draw_legend(o, ansi, s->legend);
     fflush(o);
+}
+
+/* ---- tty update: Emacs update_frame style, on Soft's own cells ----
+ * The screen holds the previous frame Soft sent. C compares that frame's
+ * cells with the new frame's cells (letter, HL class, mark, cursor flag)
+ * and writes only what differs: per row the span from the first to the
+ * last changed cell, "\e[K" when the row got shorter, title/say/legend
+ * only when their text changed. A row block shifted by one (a line
+ * inserted or deleted above unchanged rows) moves with one insert/delete
+ * line inside a scroll region, like Emacs scrolling_window, and only the
+ * gutter numbers are rewritten. C never decides what a cell holds. */
+enum { GUT = 6 }; /* "%3d | " */
+
+typedef struct {
+    const char *t, *h, *m;
+    int cur;  /* cursor column on this row, or -1 */
+    int num;  /* gutter number shown; -1 blank row, -2 unknown (repaint) */
+} RowView;
+
+static RowView row_view(const PadSnap *s, int r) {
+    RowView v = {"", "", "", -1, -1};
+    if (r < 0 || r >= s->nrows || !s->t[r] || !s->h[r] || !s->m[r])
+        return v;
+    v.t = s->t[r]; v.h = s->h[r]; v.m = s->m[r];
+    v.cur = r == s->cur_line ? s->cur_col : -1;
+    v.num = r + 1;
+    return v;
+}
+
+static size_t row_width(const RowView *v) {
+    size_t n = strlen(v->t);
+    return (v->cur >= 0 && (size_t)v->cur == n) ? n + 1 : n;
+}
+
+/* Cell i of a row as drawn; 0 when past the row's end. */
+static int row_cell(const RowView *v, size_t i, char *ch, char *hl, char *mk, int *cur) {
+    size_t n = strlen(v->t);
+    if (i < n) {
+        *ch = v->t[i]; *hl = v->h[i]; *mk = v->m[i];
+    } else if (v->cur >= 0 && (size_t)v->cur == n && i == n) {
+        *ch = ' '; *hl = '.'; *mk = '.';
+    } else
+        return 0;
+    *cur = v->cur >= 0 && (size_t)v->cur == i;
+    return 1;
+}
+
+static int cell_same(const RowView *a, const RowView *b, size_t i) {
+    char c1 = 0, h1 = 0, m1 = 0, c2 = 0, h2 = 0, m2 = 0;
+    int u1 = 0, u2 = 0;
+    int p1 = row_cell(a, i, &c1, &h1, &m1, &u1);
+    int p2 = row_cell(b, i, &c2, &h2, &m2, &u2);
+    if (!p1 || !p2)
+        return p1 == p2;
+    return c1 == c2 && u1 == u2 && m1 == m2 && (h1 == h2 || hl_sgr(h1) == hl_sgr(h2));
+}
+
+static int rows_same_text(const PadSnap *a, int i, const PadSnap *b, int j) {
+    if (i < 0 || j < 0 || i >= a->nrows || j >= b->nrows)
+        return 0;
+    if (!a->t[i] || !b->t[j] || !a->h[i] || !b->h[j] || !a->m[i] || !b->m[j])
+        return 0;
+    return strcmp(a->t[i], b->t[j]) == 0 && strcmp(a->h[i], b->h[j]) == 0 &&
+           strcmp(a->m[i], b->m[j]) == 0;
+}
+
+static void draw_gutter(FILE *o, int ansi, int num) {
+    sgr(o, ansi, "2");
+    fprintf(o, "%3d | ", num);
+    sgr(o, ansi, "0");
+}
+
+/* Repaint screen row r (0-based, under the title) from old to new. */
+static int row_update(FILE *o, int ansi, int r, const RowView *old, const RowView *nw) {
+    int wrote = 0;
+    RowView blank = {"", "", "", -1, nw->num};
+    if (old->num == -2) { /* unknown screen content: whole line */
+        fprintf(o, "\033[%d;1H\033[2K", r + 2);
+        draw_gutter(o, ansi, nw->num);
+        old = &blank;
+        wrote = 1;
+    } else if (old->num != nw->num) {
+        fprintf(o, "\033[%d;1H", r + 2);
+        draw_gutter(o, ansi, nw->num);
+        wrote = 1;
+    }
+    size_t wo = row_width(old), wn = row_width(nw);
+    size_t w = wo > wn ? wo : wn, a = 0, b = 0;
+    int any = 0;
+    for (size_t i = 0; i < w; i++)
+        if (!cell_same(old, nw, i)) {
+            if (!any) a = i;
+            b = i;
+            any = 1;
+        }
+    if (!any)
+        return wrote;
+    fprintf(o, "\033[%d;%dH", r + 2, GUT + 1 + (int)a);
+    Attr pen = {NULL, 0, 0};
+    for (size_t i = a; i <= b && i < wn; i++) {
+        char ch, hl, mk;
+        int cur;
+        row_cell(nw, i, &ch, &hl, &mk, &cur);
+        draw_cell(o, ansi, &pen, ch, hl, mk, cur);
+    }
+    if (pen.code)
+        sgr(o, ansi, "0");
+    if (wo > wn && b >= wn)
+        fputs("\033[K", o);
+    return 1;
+}
+
+static void blit_dirty_tty(FILE *o, const PadSnap *prev, const PadSnap *s, int ansi) {
+    int np = prev->nrows, nn = s->nrows, wrote = 0;
+    if (strcmp(prev->title, s->title) != 0) {
+        fputs("\033[H\033[2K", o);
+        sgr(o, ansi, "1");
+        fprintf(o, "== %s ==", s->title);
+        sgr(o, ansi, "0");
+        wrote = 1;
+    }
+    /* Shift detection: first differing row k, then does the rest line up
+     * one row down (insert at k) or one row up (delete at k)? */
+    int mn = np < nn ? np : nn, k = 0;
+    while (k < mn && rows_same_text(prev, k, s, k))
+        k++;
+    int keep = 0, ins = 0, del = 0;
+    for (int i = k; i < mn; i++) keep += rows_same_text(prev, i, s, i);
+    if (nn >= np)
+        for (int i = k + 1; i < nn; i++) ins += rows_same_text(prev, i - 1, s, i);
+    if (nn <= np)
+        for (int i = k; i < nn; i++) del += rows_same_text(prev, i + 1, s, i);
+    int shift = 0; /* +1 insert line at k, -1 delete line at k */
+    if (k < mn && ins >= 2 && ins > keep + 1 && ins >= del) shift = 1;
+    else if (k < mn && del >= 2 && del > keep + 1) shift = -1;
+    int map[PAD_MAX_ROWS]; /* screen row -> prev row shown there */
+    for (int i = 0; i < nn; i++)
+        map[i] = i < np ? i : -2;
+    if (shift) {
+        int bot = (np > nn ? np : nn) + 1; /* last row line, 1-based */
+        fprintf(o, "\033[2;%dr\033[%d;1H%s\033[r", bot, k + 2, shift > 0 ? "\033[L" : "\033[M");
+        for (int i = k; i < nn; i++) {
+            int j = shift > 0 ? (i == k ? -1 : i - 1) : i + 1;
+            map[i] = (j >= 0 && j < np) ? j : -1;
+        }
+        wrote = 1;
+    }
+    for (int r = 0; r < nn; r++) {
+        RowView old = row_view(prev, map[r]);
+        if (map[r] == -2) old.num = -2;
+        if (map[r] == -1) old.num = -1;
+        RowView nw = row_view(s, r);
+        wrote |= row_update(o, ansi, r, &old, &nw);
+    }
+    int moved = np != nn;
+    if (moved || strcmp(prev->say, s->say) != 0) {
+        fprintf(o, "\033[%d;1H\033[2K  say: ", nn + 2);
+        sgr(o, ansi, "1;33");
+        fputs(s->say, o);
+        sgr(o, ansi, "0");
+        wrote = 1;
+    }
+    if (moved || strcmp(prev->legend, s->legend) != 0) {
+        fprintf(o, "\033[%d;1H\033[2K", nn + 3);
+        draw_legend(o, ansi, s->legend);
+        if (moved)
+            fputs("\033[J", o);
+        wrote = 1;
+    }
+    if (wrote) /* park the terminal cursor under the legend, as pad_blit does */
+        fprintf(o, "\033[%d;1H", nn + 4);
+    fflush(o);
+}
+
+void pad_blit_dirty(FILE *o, const PadSnap *prev, const PadSnap *s, int ansi) {
+    if (!ansi || !prev || s->dirty_n < 0) {
+        pad_blit(o, s, ansi);
+        return;
+    }
+    if (out_tty(o)) {
+        if (prev->nrows < 0 || s->nrows > PAD_MAX_ROWS - 4 ||
+            (prev->nrows != s->nrows && abs(prev->nrows - s->nrows) > 1)) {
+            pad_blit(o, s, ansi);
+            return;
+        }
+        blit_dirty_tty(o, prev, s, ansi);
+        return;
+    }
+    if (prev->nrows != s->nrows) {
+        pad_blit(o, s, ansi);
+        return;
+    }
+    blit_dirty_stream(o, prev, s, ansi);
 }
