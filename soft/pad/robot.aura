@@ -1,8 +1,9 @@
 ;; aura-pad M11a -- "undo the robot": one AI proposal = ONE typed engine
 ;; transaction, one key takes it all back.
-;; Needs ws.aura, pen.aura, who.aura, who_pen.aura, eng_who.aura (and what
-;; they load). The transaction runs under the writer's engine fingerprint
-;; (pad:ew-set!, M11b); the fingerprint goes back to kid right after.
+;; Needs ws.aura, pen.aura, who.aura, who_pen.aura, eng_who.aura, why.aura
+;; (and what they load). The transaction runs under the writer's engine
+;; fingerprint (pad:ew-set!, M11b); the fingerprint goes back to kid right
+;; after.
 ;;
 ;; A robot proposal is a list of (name lam) edits plus one reason. It is
 ;; applied with typed-mutate-atomic: every edit is a mutate:rebind sexpr,
@@ -16,7 +17,8 @@
 ;;   eval-current and puts every row of the change back at once.
 ;; - A refused transaction still gets ast:restore + eval-current (a
 ;;   failed batch can leave stale node ids, aura#4361); the page is not
-;;   touched.
+;;   touched. Before that heal, why.aura (M11c) replays the edits one at a
+;;   time to get aura's reason and says it in kid words.
 ;; - The Soft pen gate (pad:pen-gate) checks every edit first; a gate NO
 ;;   never takes a snapshot and never calls the engine.
 ;; Lives in the notebook session (M9 stack), not in play.aura: the play
@@ -30,6 +32,8 @@
 (define *robot-undos* 0)
 (define *robot-max-ops* 4)
 (define *robot-last-sexprs* (list))
+(define *robot-diags* (list))   ; typecheck-incremental messages after the last KEEP
+(define *robot-tc-raw* "")      ; and its raw text
 
 ;; "s" -> "\"s\"" with " and \ escaped, built from char codes (a Soft
 ;; file literal loses a backslash, aura#4348).
@@ -67,13 +71,17 @@
   (if (null? ops)
       "ok"
       (let ((g (pad:pen-gate who (car (car ops)) (cadr (car ops)))))
-        (if (string=? g "ok") (pad:robot-gate-each who (cdr ops)) g))))
+        (cond
+          ((not (string=? g "ok")) g)
+          ((not (pad:why-brackets-ok? (cadr (car ops)))) "brackets")
+          (#t (pad:robot-gate-each who (cdr ops)))))))
 
 (define (pad:robot-say reason)
   (cond
     ((string=? reason "nothing") "the helper did not change anything")
     ((string=? reason "twice") "the helper tried to change one name twice")
     ((string=? reason "refused") "aura said no to the whole change, nothing moved")
+    ((string=? reason "brackets") "the helper's brackets do not match")
     (#t (pad:pen-say reason))))
 
 (define (pad:robot-names-str xs)
@@ -96,8 +104,13 @@
     (pad:ws-eval!)
     ok))
 
-;; One robot step. Returns (verdict reason say gen-delta total-delta tags).
+;; One robot step. Returns (verdict reason say gen-delta total-delta tags)
+;; and shows say in the say line.
 (define (pad:robot-step! who ops why)
+  (let ((r (pad:robot-try! who ops why)))
+    (set! *pl-say* (pad:nth r 2))
+    r))
+(define (pad:robot-try! who ops why)
   (pad:who-sync! "kid" "typed" *who-gen*)
   (let* ((g0 (pad:pen-gen))
          (t0 (pad:pen-total))
@@ -126,14 +139,19 @@
                 (set! *who-gen* g1)
                 (pad:who-sync! who why g1)
                 (set! *robot-keeps* (+ *robot-keeps* 1))
+                (set! *robot-tc-raw* (try (typecheck-incremental) (catch (e) "")))
+                (set! *robot-diags* (pad:why-diags *robot-tc-raw*))
                 (list "KEEP" "row"
-                      (string-append "the " who " changed " (pad:robot-names-str (pad:robot-names ops))
-                                     ", ctrl-z takes it all back")
+                      (if (null? *robot-diags*)
+                          (string-append "the " who " changed " (pad:robot-names-str (pad:robot-names ops))
+                                         ", ctrl-z takes it all back")
+                          (string-append "aura warns: " (pad:why-kid (car *robot-diags*) who
+                                                                     (pad:robot-names-str (pad:robot-names ops)))))
                       (- g1 g0) (- t1 t0) (cadr pr)))
-              (begin
+              (let ((w (pad:why-probe! who ops why)))
                 (pad:robot-heal! snap)
                 (set! *robot-refused* (+ *robot-refused* 1))
-                (list "DROP" "refused" (pad:robot-say "refused")
+                (list "DROP" "refused" (pad:nth w 3)
                       (- (pad:pen-gen) g0) (- (pad:pen-total) t0) (list))))))))
 
 ;; ctrl-z: undo the last robot KEEP as one unit. Returns
