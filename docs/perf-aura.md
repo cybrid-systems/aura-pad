@@ -126,6 +126,89 @@ plugin VM). What it does not get for free is engine-checked rollback
 and AST dirty sets for the user's own code. That is where Aura
 differs, not in keystroke latency.
 
+### Aura-native path behind capability detection (aura#4357, #4358, #4356)
+
+The three Aura capabilities this round asked for are filed:
+
+- [aura#4357](https://github.com/cybrid-systems/aura/issues/4357):
+  a relower that really specialises, plus a sub-ms `mutate:rebind`. On
+  `c69e644` the strategy is `:none`, 3000 calls take 258 ms from a file
+  and 230 ms from the workspace, and a rebind costs 14–19 ms.
+- [aura#4358](https://github.com/cybrid-systems/aura/issues/4358):
+  non-blocking stdin / idle scheduling. There is no poll primitive,
+  `fiber:yield` takes 0 ms (it is a no-op outside serve-async), and
+  `eval:async` runs inline (199 vs 210 ms).
+- [comment on aura#4356](https://github.com/cybrid-systems/aura/issues/4356#issuecomment-6013301394):
+  the requirement (settle on a fiber while main waits for the next
+  key), plus a proposal for a fiber-safe hand-back channel. Today
+  `channel:send`/`try-recv` touch the string heap unlocked on both ends.
+
+What the pad already does about them (`e707c35`):
+
+| capability | probe at startup | when present | today on `c69e644` |
+|---|---|---|---|
+| stdin poll (#4358) | `primitive:describe "char-ready?"` returns a non-empty description (an unknown name gives `()`, so the probe is safe) | the early frame turns on by default (`PAD_DEFER=0` turns it off). When a key is already waiting, the early frame is the key's only frame and the settle is skipped: the cached rows take the early frame's rows and `*lc-L*` stays behind, so the next key goes through `play-cmd!` + `play-snap`, which re-matches every row against what the screen shows | absent, so the path stays off |
+| specialising relower (#4357) | `compile:relower-strategy` needs a workspace, and `set-code` inside the pad file is unsafe (#4355). So it is probed only in `aura_facts.aura` (`cap_relower=`) | reported. Nothing switches on by itself, because the pad would first have to move into the workspace | `none` |
+| fiber-safe heap / channel (#4356) | none. Running the race to find out can corrupt the heap or crash | stays off; this needs a deliberate change once Aura documents the guarantee | off |
+
+The skip path is tested now, without the primitive.
+`PAD_TEST_PENDING=k` makes every k-th early frame see a fake waiting
+key.
+- `AP_POLL_SKIP` (`aura_perf_test.aura`): 262 keys, 10 skips; after
+  every key whose settle ran, the cached body equals a whole-page
+  render.
+- `POLL_SKIP_OK` (`smoke_aura_perf.sh`): play.aura on the random
+  stream writes 252 frames, against 248 plain and 257 deferred. The C
+  cell diff equals a full repaint after every frame (TERM_MODEL_OK),
+  and the last frame's rows equal the plain path's rows.
+
+So both paths end on identical frames. The poll path writes fewer
+frames, and it never leaves a stale row on screen once the queued key
+is handled.
+
+### Where an insert's ~3 ms go (in-process profile)
+
+These numbers come from instrumenting a copy of `play_in.aura`
+(`out/aura-perf2/`, not committed). The key is typed at row 6, col 9 of
+the twelve-row page, as in the pty bench. Each figure is the mean per
+key over 100 insert + backspace pairs, summed from the millisecond
+timer:
+
+| section of `pad:play-step!` | µs per key |
+|---|---|
+| dispatch (parse the line, keymap memo, cursor/name checks) | 385 |
+| new row and lines lists, undo entry | 340 |
+| re-lex from the first changed token (`pad:lc-scan`) | 1295 |
+| keep check (end state + def-carry vs row l+1) | 290 |
+| row strings, `*lc-recv*` / `*lc-rowv*` splice | 285 |
+| commit (`set!` of the caches) | 205 |
+| frame string | 185 |
+| write | 45 |
+
+The in-process total is 2.9–3.2 ms per key. The pty bench adds about
+1 ms for C, the pipe and the pty. The costs are spread over about 150
+Soft operations and 2–3 closure calls. A Soft closure call costs
+0.30–0.36 ms however small or large its body (`fsmall` vs `fbig`
+probe), so `pad:lc-scan` is about a quarter call and three quarters
+scan steps and token/tape building. There is no single allocation to
+cut. Measured negatives:
+
+- **Native `take` instead of `(reverse (drop (reverse x) k))`** for
+  the six list prefixes on the key path is *slower*: 4.0–4.4 instead
+  of 2.9–3.1 ms per key in-process. Not shipped.
+- The cost of `list` / `reverse` / `append` does not grow with heap
+  size (0.15 ms per call from a small heap up to +3M live pairs).
+- Deep `let*` chains, many locals and global reads cost nothing
+  measurable next to a call.
+
+To go further the pad needs cheaper Soft calls
+([aura#4350](https://github.com/cybrid-systems/aura/issues/4350)) or a
+relower that specialises the key path
+([aura#4357](https://github.com/cybrid-systems/aura/issues/4357)).
+Without them the remaining choice is to inline `pad:lc-scan`'s common
+case (append at the end of a row) into `play-step!`. That saves about
+one call (~0.3 ms) but duplicates the tokenizer, so it is not done.
+
 ## 3. Measured: pty bench (`out/bench/editors_aura.txt`)
 
 Same harness as [`perf-emacs.md`](perf-emacs.md): same box and
@@ -150,6 +233,26 @@ quiet. The string rows now have 12 samples each (they had 5). Before =
 - vim and Emacs are still 3–17× faster on every row (cursor vs Emacs 2.7×, string open vs vim 17×). The early frame
   narrows the string rows; it does not close the gap.
 
+### Re-run at `e707c35` (capability round, `out/bench/editors_aura2.txt`)
+
+Same harness, two runs, measured 17:49–18:20 (UTC+8). The box was
+shared: other agents' `aura --serve-async` and `aura_build` jobs were
+running, with load average 1.1–1.6 on 8 cores. They were left alone.
+Run 2 is slower for every editor, vim and Emacs included.
+
+| ms per key (run 1 / run 2) | pad | pad `PAD_DEFER=1` first / done | vim | emacs -nw |
+|---|---|---|---|---|
+| insert | 3.9 / 4.0 | 3.8 / 4.1 | 0.32 / 0.42 | 0.66 / 0.78 |
+| cursor | 1.79 / 1.91 | 1.75 / 1.87 | 0.25 / 0.25 | 0.64 / 0.80 |
+| string open (`"`) | 5.5 / 5.8 | **3.8 / 4.2** first, 5.8 / 6.5 done | 0.47 / 0.83 | 0.91 / 1.09 |
+| string close (backspace) | 5.6 / 5.7 | **4.4 / 4.0** first, 6.2 / 6.0 done | 0.51 / 0.48 | 0.53 / 0.72 |
+
+This matches the earlier table within noise, which is expected: the
+capability round changed no step on the default key path, because with
+no poll primitive the settle-skip branch never runs. Insert stays at
+4 ms, 9–12× vim and 5–6× Emacs. Per the profile above, nothing on the
+pad side cuts that by a large factor before #4350 / #4357 land.
+
 ## Issues filed this round
 
 - [aura#4355](https://github.com/cybrid-systems/aura/issues/4355): a
@@ -158,4 +261,11 @@ quiet. The string rows now have 12 samples each (they had 5). Before =
 - [aura#4356](https://github.com/cybrid-systems/aura/issues/4356): on
   the CLI, a thread fiber that allocates strings while main is in
   `read-line` corrupts strings or SIGSEGVs (the main thread skips the
-  fiber body mutex).
+  fiber body mutex). Capability comment (hand-back channel proposal):
+  [#4356 comment](https://github.com/cybrid-systems/aura/issues/4356#issuecomment-6013301394).
+- [aura#4357](https://github.com/cybrid-systems/aura/issues/4357):
+  relower strategy `:none`, workspace runs at file speed, `mutate:rebind`
+  14–19 ms (repro inline in the issue).
+- [aura#4358](https://github.com/cybrid-systems/aura/issues/4358): no
+  non-blocking stdin poll / idle scheduling in Soft (repro inline
+  in the issue).

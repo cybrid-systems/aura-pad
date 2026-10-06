@@ -10,6 +10,8 @@ invents a replacement API for any of them.
 
 | Aura issue | What is wrong | Pad rule until it lands |
 |------------|---------------|-------------------------|
+| [aura#4358](https://github.com/cybrid-systems/aura/issues/4358) | No non-blocking stdin poll in Soft (`char-ready?` or similar); `fiber:yield` is a no-op outside serve-async and `eval:async` runs synchronously, so the play loop cannot see that a key is waiting or do idle work between keys | Early frame stays opt-in (`PAD_DEFER=1`). `play.aura` probes `primitive:describe "char-ready?"` at startup; when it exists, the early frame turns on by default and a waiting key skips the settle (`*pi-pending*`). The skip path is tested now with a fake poll (`PAD_TEST_PENDING`, `AP_POLL_SKIP`, `POLL_SKIP_OK`) |
+| [aura#4357](https://github.com/cybrid-systems/aura/issues/4357) | `compile:relower-strategy` answers `:none`; workspace code runs at file speed; one `mutate:rebind` costs 14–19 ms (more than a whole key); file mode has no workspace before `set-code` | No per-key rebind or workspace specialisation. `aura_facts.aura` reports `cap_relower` so a specialising relower shows up in the smoke output |
 | [aura#4356](https://github.com/cybrid-systems/aura/issues/4356) | CLI fibers are OS threads (`fiber:spawn-backend` 2). The main thread does not take the fiber body mutex, and `read-line` pushes to the string heap unlocked, so a fiber allocating strings while main waits in `read-line` corrupts strings or SIGSEGVs | No fiber runs while the play loop is in `read-line`; the early frame and settle stay on the main thread (`perf-aura.md`) |
 | [aura#4355](https://github.com/cybrid-systems/aura/issues/4355) | A top-level unbound-variable error re-runs earlier top-level forms; closures defined before a `set-code` can be invalid afterwards | Keep `set-code` out of files that hold pad closures (`aura_facts.aura` is separate); M9/M10 use it only on their notebook paths |
 | [aura#4354](https://github.com/cybrid-systems/aura/issues/4354) | `(define base f)` then `(define (f x) ... (base x))` inside a LOADED file: `base` runs the new `f` (infinite loop). Inline in the main file it works | Never save-and-redefine a procedure in a loaded file; wrappers get a new name (`pad:pi-line!` in `play_in.aura`) |
@@ -83,6 +85,9 @@ Soft cost numbers (named-let entry, `map integer->char`) went to #4350.
 first byte 5.5 → 3.5–3.8 ms; settled frames byte for byte the plain
 stream). Measured why rebind/relower and CLI fibers give no per-key gain.
 Gate `PAD_AURA_PERF_OK`. Filed #4355, #4356.
+Capability round: filed #4357 (relower/rebind) and #4358 (stdin poll),
+and commented on #4356 (fiber-safe hand-back channel). The pad switches
+the poll path on by itself when `char-ready?` appears.
 
 ## M11 — aura notebook
 
