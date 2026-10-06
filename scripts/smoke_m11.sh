@@ -38,6 +38,14 @@
 #      idea that beats the page comes back, as a robot KEEP (rebind, never
 #      workspace :merge)                               -> M11F_ACC 1..2 OK
 #                                                                   -> PAD_M11_WORLD_OK
+#   9. M11g the kid changes editor rules live: rules are page defines
+#      ((tab-size), (say-max)); "tab 4" passes a Soft rule gate (kid
+#      words on NO), is one typed-mutate-atomic under fingerprint kid=1,
+#      a robot KEEP (ctrl-z, who stamps, time-machine step), is verified
+#      by calling the rule (a helper's out-of-range body is undone at
+#      once); an engine NO gets a kid reason; tab types (tab-size) spaces
+#                                                     -> M11G_ACC 1..4 OK
+#                                                                   -> PAD_M11_RULES_OK
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$ROOT/out/m11"
@@ -47,13 +55,14 @@ python3 "$ROOT/scripts/paren_check.py" \
   "$ROOT"/soft/pad/robot.aura "$ROOT"/soft/pad/eng_who.aura "$ROOT"/soft/pad/why.aura \
   "$ROOT"/soft/pad/blast.aura "$ROOT"/soft/pad/time.aura "$ROOT"/soft/pad/ws.aura \
   "$ROOT"/soft/pad/world.aura "$ROOT"/soft/pad/m11_test.aura "$ROOT"/soft/pad/m11_cases.aura \
-  "$ROOT"/soft/pad/m11e_cases.aura "$ROOT"/soft/pad/m11f_cases.aura
+  "$ROOT"/soft/pad/m11e_cases.aura "$ROOT"/soft/pad/m11f_cases.aura \
+  "$ROOT"/soft/pad/kid_rules.aura "$ROOT"/soft/pad/m11g_cases.aura
 
 echo "smoke_m11: Soft tests (AURA_MUTATE_TYPE_GATE=hard)"
 T="$ROOT/out/m11/m11_test.txt"
 AURA_MUTATE_TYPE_GATE=hard bash "$ROOT/scripts/run_soft.sh" /workspace/aura-pad/soft/pad/m11_test.aura \
   </dev/null >"$T" 2>"$ROOT/out/m11/m11_test.err"
-grep -E '^(M11[A-Z_]*|M11GATE|M11STATS|M11TXN|KEEP robot|DROP robot|REJECT robot|CARD robot|BLAST|EWHOROWS|TIME|OPEN|SAVE|WORLD|WIN|NOWIN|TESTS|PAD_M11_TEST)' "$T" || true
+grep -E '^(M11[A-Z_]*|M11GATE|M11STATS|M11TXN|KEEP robot|DROP robot|REJECT robot|CARD robot|BLAST|EWHOROWS|TIME|OPEN|SAVE|WORLD|WIN|NOWIN|RULE|TESTS|PAD_M11_TEST)' "$T" || true
 if ! grep -q '^PAD_M11_TEST_OK$' "$T" || grep -q 'WANT=' "$T" \
    || soft_errs "$T" "$ROOT/out/m11/m11_test.err"; then
   grep -E 'WANT=|FAIL' "$T" >&2 || true
@@ -168,3 +177,28 @@ if [[ "$fail" -ne 0 ]]; then
   echo "smoke_m11: PAD_M11_WORLD_OK checks failed" >&2; exit 1
 fi
 echo "smoke_m11: PAD_M11_WORLD_OK"
+
+fail=0
+for n in 1 2 3 4; do
+  grep -qx "M11G_ACC $n OK" "$T" || { echo "smoke_m11: missing: M11G_ACC $n OK" >&2; fail=1; }
+done
+for want in 'T G1_LINE=RULE verdict=KEEP word=tab name=tab-size value=4 used=1 eng=1 OK' \
+            'T G1_TAB_LIVE=4 OK' 'T G1_INDENT_LIVE=8 OK' 'T G1_FP=1 OK' 'T G1_WHO_SAY=you wrote tab-size OK' \
+            'T G1_WHO_VERDICT=agree OK' 'T G1_UNDO_CODE=yes OK' 'T G1_UNDO_TAB=2 OK' \
+            'T G1_TAB_TYPES_4=4 OK' 'T G1_BACK_VERDICT=agree OK' 'T G1_BACK_TAB=2 OK' \
+            'T G1_TAB_TYPES_2=2 OK' 'T G1_FWD_TAB=4 OK' \
+            'T G2_RANGE_SAY=tab can jump 1 to 8 spaces OK' 'T G2_RANGE_GEN_SAME=0 OK' \
+            'T G2_NORULE_SAY=there is no rule called jump, try tab or say OK' \
+            "T G3_BIG_SAY=the helper's tab-size gave 40, tab can jump 1 to 8 spaces, the old rule is back OK" \
+            'T G3_BIG_CODE=yes OK' \
+            "T G3_WORD_SAY=the helper's tab-size does not fit (indent 2), the old rule stays OK" \
+            'T G3_WORD_CODE=yes OK' 'T G3_GOOD_TAB=3 OK' 'T G4_SAYMAX=30 OK'; do
+  grep -qF -- "$want" "$T" || { echo "smoke_m11: missing: $want" >&2; fail=1; }
+done
+if grep -q '^M11_RULES_DISAGREE' "$T"; then
+  echo "smoke_m11: rule call sites disagreed with the engine" >&2; fail=1
+fi
+if [[ "$fail" -ne 0 ]]; then
+  echo "smoke_m11: PAD_M11_RULES_OK checks failed" >&2; exit 1
+fi
+echo "smoke_m11: PAD_M11_RULES_OK"
