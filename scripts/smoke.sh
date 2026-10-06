@@ -34,7 +34,8 @@
 # undoes it whole (PAD_M11_UNDO_OK); ctrl-o answers from engine node
 # provenance under agent fingerprints, cross-checked with the Soft stamps
 # (PAD_M11_WHO_OK); a refused proposal is explained in kid words from
-# aura's own reason (PAD_M11_WHY_OK). C unchanged.
+# aura's own reason (PAD_M11_WHY_OK); a blast radius card lists what a
+# proposal would move before KEEP (PAD_M11_BLAST_OK). C unchanged.
 # → gap round: one Soft entry per key (play_in.aura), flat line scanner,
 # C cell-diff tty update with IL/DL (Soft tests PAD_GAP_TEST_OK, batched
 # lines == byte lines, term model TERM_MODEL_OK; PAD_GAP_OK).
@@ -113,7 +114,7 @@ bash "$ROOT/scripts/smoke_m9.sh"
 echo "smoke: m10 who wrote this + engine dirty"
 bash "$ROOT/scripts/smoke_m10.sh"
 
-echo "smoke: m11 Aura-unique features (robot txn undo, engine who, kid why)"
+echo "smoke: m11 Aura-unique features (robot txn undo, engine who, kid why, blast card)"
 bash "$ROOT/scripts/smoke_m11.sh"
 
 echo "smoke: gap round (one Soft entry per key + C cell-diff tty update)"

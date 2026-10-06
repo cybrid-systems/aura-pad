@@ -20,6 +20,11 @@
 #      false "unbound" diagnostics for notebook defines are dropped
 #      (aura#4363)                                    -> M11C_ACC 1..3 OK
 #                                                                   -> PAD_M11_WHY_OK
+#   6. M11d blast radius card: the proposal waits in a snapshot, the say
+#      line lists the places it would move (Soft call sites == query:calls,
+#      dirty defines == the changed names), enter keeps, ctrl-z says no
+#                                                     -> M11D_ACC 1..3 OK
+#                                                                   -> PAD_M11_BLAST_OK
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$ROOT/out/m11"
@@ -27,13 +32,14 @@ soft_errs() { grep -qiE 'error:|unbound variable' "$@"; }
 
 python3 "$ROOT/scripts/paren_check.py" \
   "$ROOT"/soft/pad/robot.aura "$ROOT"/soft/pad/eng_who.aura "$ROOT"/soft/pad/why.aura \
+  "$ROOT"/soft/pad/blast.aura \
   "$ROOT"/soft/pad/m11_test.aura "$ROOT"/soft/pad/m11_cases.aura
 
 echo "smoke_m11: Soft tests (AURA_MUTATE_TYPE_GATE=hard)"
 T="$ROOT/out/m11/m11_test.txt"
 AURA_MUTATE_TYPE_GATE=hard bash "$ROOT/scripts/run_soft.sh" /workspace/aura-pad/soft/pad/m11_test.aura \
   </dev/null >"$T" 2>"$ROOT/out/m11/m11_test.err"
-grep -E '^(M11[A-Z_]*|M11GATE|M11STATS|M11TXN|KEEP robot|DROP robot|REJECT robot|EWHOROWS|TESTS|PAD_M11_TEST)' "$T" || true
+grep -E '^(M11[A-Z_]*|M11GATE|M11STATS|M11TXN|KEEP robot|DROP robot|REJECT robot|CARD robot|BLAST|EWHOROWS|TESTS|PAD_M11_TEST)' "$T" || true
 if ! grep -q '^PAD_M11_TEST_OK$' "$T" || grep -q 'WANT=' "$T" \
    || soft_errs "$T" "$ROOT/out/m11/m11_test.err"; then
   grep -E 'WANT=|FAIL' "$T" >&2 || true
@@ -93,3 +99,20 @@ if [[ "$fail" -ne 0 ]]; then
   echo "smoke_m11: PAD_M11_WHY_OK checks failed" >&2; exit 1
 fi
 echo "smoke_m11: PAD_M11_WHY_OK"
+
+fail=0
+for n in 1 2 3; do
+  grep -qx "M11D_ACC $n OK" "$T" || { echo "smoke_m11: missing: M11D_ACC $n OK" >&2; fail=1; }
+done
+for want in 'T D1_SITES=hello:3/4:+1.bye:2/2:+0 OK' 'T D1_VERDICT=agree OK' 'T D1_PAGE_WAITS=yes OK' \
+            'T D1_ENGINE_HAS_IT=yes OK' 'T D2_CODE_BACK=yes OK' 'T D2_VERDICT=agree OK' \
+            "T D2_SAY=changing add moves 3 places: greet, (greet (add 1 2)), (add 2 3). enter keeps, ctrl-z says no OK"; do
+  grep -qF -- "$want" "$T" || { echo "smoke_m11: missing: $want" >&2; fail=1; }
+done
+if grep -q '^M11_BLAST_DISAGREE' "$T"; then
+  echo "smoke_m11: blast card disagreed with the engine" >&2; fail=1
+fi
+if [[ "$fail" -ne 0 ]]; then
+  echo "smoke_m11: PAD_M11_BLAST_OK checks failed" >&2; exit 1
+fi
+echo "smoke_m11: PAD_M11_BLAST_OK"

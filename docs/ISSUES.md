@@ -10,6 +10,9 @@ invents a replacement API for any of them.
 
 | Aura issue | What is wrong | Pad rule until it lands |
 |------------|---------------|-------------------------|
+| [aura#4365](https://github.com/cybrid-systems/aura/issues/4365) | `serialize-workspace` / `deserialize-workspace` round-trip code and the mutation log, but every record comes back `author=0 composite=0` (the wire record lacks `author_fingerprint` / `composite_transaction_id`) | M11e (time machine + open-is-restore) must not trust `author=` / `composite=` after a reload; who/why for reopened history comes from `sum=` and Soft stamps |
+| [aura#4364](https://github.com/cybrid-systems/aura/issues/4364) | `query:calls name` keeps the call sites of a body replaced by `mutate:rebind` (and adds the new ones), so its count only grows until `set-code`; `eval-current` does not refresh it | The M11d blast card checks what the engine added (calls after minus before must equal the call sites in the new bodies) instead of the stale total (`blast.aura`) |
+| [aura#4363](https://github.com/cybrid-systems/aura/issues/4363) | `typecheck-incremental` reports a global value define (`(define pet "cat")`) as `unbound variable`, and its type never reaches the post-mutate gate (`(+ x pet)` commits under hard, fails at run time). After a refused rebind it still shows diagnostics from the refused body | Kid reasons come from the mutate refusal text (`why.aura`, M11c). `unbound variable: X` diagnostics are dropped when `define-lookup` finds `X` |
 | [aura#4362](https://github.com/cybrid-systems/aura/issues/4362) | `mutate:atomic-batch` skips the post-mutate type/arity gate in both gate modes: a batch commits a rebind that `mutate:rebind` refuses. `typed-mutate-atomic` gates, but returns only `#t`/`#f` | AI proposals go through `typed-mutate-atomic` (`robot.aura`, M11a) under `AURA_MUTATE_TYPE_GATE=hard`; never `mutate:atomic-batch` for kid code |
 | [aura#4358](https://github.com/cybrid-systems/aura/issues/4358) | No non-blocking stdin poll in Soft (`char-ready?` or similar); `fiber:yield` is a no-op outside serve-async and `eval:async` runs synchronously, so the play loop cannot see that a key is waiting or do idle work between keys | Early frame stays opt-in (`PAD_DEFER=1`). `play.aura` probes `primitive:describe "char-ready?"` at startup; when it exists, the early frame turns on by default and a waiting key skips the settle (`*pi-pending*`). The skip path is tested now with a fake poll (`PAD_TEST_PENDING`, `AP_POLL_SKIP`, `POLL_SKIP_OK`) |
 | [aura#4357](https://github.com/cybrid-systems/aura/issues/4357) | `compile:relower-strategy` answers `:none`; workspace code runs at file speed; one `mutate:rebind` costs 14–19 ms (more than a whole key); file mode has no workspace before `set-code` | No per-key rebind or workspace specialisation. `aura_facts.aura` reports `cap_relower` so a specialising relower shows up in the smoke output |
@@ -90,13 +93,18 @@ Capability round: filed #4357 (relower/rebind) and #4358 (stdin poll),
 and commented on #4356 (fiber-safe hand-back channel). The pad switches
 the poll path on by itself when `char-ready?` appears.
 
-## M11a–d — Aura-unique features (in progress)
+## M11a–d — Aura-unique features (done)
 
 [`m11.md`](m11.md), from the ranked list in [`aura-vs-rust.md`](aura-vs-rust.md).
 M11a "undo the robot" is done (`PAD_M11_UNDO_OK`): one AI proposal is one
 `typed-mutate-atomic` transaction, and ctrl-z undoes it whole. Filed #4362.
 M11b engine "who wrote this" is done (`PAD_M11_WHO_OK`): agent fingerprints
 plus `query:node-provenance` answer ctrl-o and agree with the Soft stamps.
+M11c "why did it break" is done (`PAD_M11_WHY_OK`): a refused proposal is
+replayed per edit and aura's reason becomes one kid sentence. Filed #4363.
+M11d "blast radius" is done (`PAD_M11_BLAST_OK`): the card lists the places
+a proposal would move before KEEP, checked against `query:calls` and dirty
+defines (engine call count stale after rebind, filed #4364). Next: time machine + open-is-restore (`serialize-workspace`).
 
 ## M11 — aura notebook
 
