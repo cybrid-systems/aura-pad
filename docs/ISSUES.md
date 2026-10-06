@@ -10,7 +10,9 @@ invents a replacement API for any of them.
 
 | Aura issue | What is wrong | Pad rule until it lands |
 |------------|---------------|-------------------------|
-| [aura#4365](https://github.com/cybrid-systems/aura/issues/4365) | `serialize-workspace` / `deserialize-workspace` round-trip code and the mutation log, but every record comes back `author=0 composite=0` (the wire record lacks `author_fingerprint` / `composite_transaction_id`) | M11e (time machine + open-is-restore) must not trust `author=` / `composite=` after a reload; who/why for reopened history comes from `sum=` and Soft stamps |
+| [aura#4367](https://github.com/cybrid-systems/aura/issues/4367) | After `deserialize-workspace` the tree is renumbered (a rebind changed a body's size), but the restored log's `target=` and `query:node-provenance` keep the old node ids: moved defines read "nobody", kept ids keep old provenance by coincidence. The mutation id counter is not restored either | M11e never joins the reopened log to a define by node id: who comes from the row's pad stamp, confirmed by a reopened rebind record whose `sum=` is the stamp's why; old vs new is decided by author fingerprint, not by id (`pad:time-eng-of`, `time.aura`) |
+| [aura#4366](https://github.com/cybrid-systems/aura/issues/4366) | `deserialize-workspace` returns `#f` and skips the mutation-log restore when the reloaded program's value is a pair (it reads a list result of `eval-current` as a `set-code` parse error). The code is already swapped in, so the workspace is half restored | The notebook source ends with a trailing `#t` form (`pad:ws-source`, `ws.aura`), so the program's value is never a pair and an M11e open gets its log back |
+| [aura#4365](https://github.com/cybrid-systems/aura/issues/4365) | `serialize-workspace` / `deserialize-workspace` round-trip code and the mutation log, but every record comes back `author=0 composite=0` (the wire record lacks `author_fingerprint` / `composite_transaction_id`) | M11e (time machine + open-is-restore) never trusts `author=` / `composite=` after a reload: ctrl-o on a define last written before the open takes who from the pad stamp whose why equals the record's `sum=` (`pad:time-who-at`, `time.aura`) |
 | [aura#4364](https://github.com/cybrid-systems/aura/issues/4364) | `query:calls name` keeps the call sites of a body replaced by `mutate:rebind` (and adds the new ones), so its count only grows until `set-code`; `eval-current` does not refresh it | The M11d blast card checks what the engine added (calls after minus before must equal the call sites in the new bodies) instead of the stale total (`blast.aura`) |
 | [aura#4363](https://github.com/cybrid-systems/aura/issues/4363) | `typecheck-incremental` reports a global value define (`(define pet "cat")`) as `unbound variable`, and its type never reaches the post-mutate gate (`(+ x pet)` commits under hard, fails at run time). After a refused rebind it still shows diagnostics from the refused body | Kid reasons come from the mutate refusal text (`why.aura`, M11c). `unbound variable: X` diagnostics are dropped when `define-lookup` finds `X` |
 | [aura#4362](https://github.com/cybrid-systems/aura/issues/4362) | `mutate:atomic-batch` skips the post-mutate type/arity gate in both gate modes: a batch commits a rebind that `mutate:rebind` refuses. `typed-mutate-atomic` gates, but returns only `#t`/`#f` | AI proposals go through `typed-mutate-atomic` (`robot.aura`, M11a) under `AURA_MUTATE_TYPE_GATE=hard`; never `mutate:atomic-batch` for kid code |
@@ -93,7 +95,7 @@ Capability round: filed #4357 (relower/rebind) and #4358 (stdin poll),
 and commented on #4356 (fiber-safe hand-back channel). The pad switches
 the poll path on by itself when `char-ready?` appears.
 
-## M11a–d — Aura-unique features (done)
+## M11a–e — Aura-unique features (done)
 
 [`m11.md`](m11.md), from the ranked list in [`aura-vs-rust.md`](aura-vs-rust.md).
 M11a "undo the robot" is done (`PAD_M11_UNDO_OK`): one AI proposal is one
@@ -104,7 +106,11 @@ M11c "why did it break" is done (`PAD_M11_WHY_OK`): a refused proposal is
 replayed per edit and aura's reason becomes one kid sentence. Filed #4363.
 M11d "blast radius" is done (`PAD_M11_BLAST_OK`): the card lists the places
 a proposal would move before KEEP, checked against `query:calls` and dirty
-defines (engine call count stale after rebind, filed #4364). Next: time machine + open-is-restore (`serialize-workspace`).
+defines (engine call count stale after rebind, filed #4364).
+M11e time machine + open-is-restore is done (`PAD_M11_TIME_OK`): every
+KEEP is a step on a strip (ctrl-t / ctrl-n), checked with `ast:diff`; a
+book saves with `serialize-workspace` and reopens with its story and who
+(#4365 workaround; filed #4366, #4367). Next: sandbox worlds for AI tries.
 
 ## M11 — aura notebook
 
