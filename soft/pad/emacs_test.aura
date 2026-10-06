@@ -8,8 +8,13 @@
 ;;      starts inside a string) color exactly like the whole page
 ;;   3. seeded random typing (quotes, comments, enter, backspace, moves):
 ;;      every lc frame == the M6 whole-page oracle pad:snap-text
-;;   3b. closing a just-opened string reuses the pre-open rows (*lc-altv*)
-;;   4. PERF_EMACS: us/key on the twelve-row page; gate < 16000 us
+;;   3b. string open/close (jit-lock-context / syntax-ppss): the walk
+;;       below an edit stops at the first row whose start state and carry
+;;       match the cache; closing (and re-opening) a string brings the
+;;       rows below back from the tail memo / per-row alt without a
+;;       re-lex; the direct no-quote entry == pad:lc-scan
+;;   4. PERF_EMACS: us/key on the twelve-row page; gate < 16000 us for
+;;      insert, cursor, the first string open and the close after it
 ;; Ends PAD_PERF_EMACS_OK. No HTTP. Soft reserved: never bind quote.
 (load "/workspace/aura-pad/soft/pad/buffer.aura")
 (load "/workspace/aura-pad/soft/pad/lines.aura")
@@ -148,6 +153,25 @@
 (et:type-run! "NINE" *et-nine* 70 5)
 (et:type-run! "START" *play-start* 50 17)
 
+(et:type-run! "BIG" *lc-big-page* 60 29)
+;; quote-heavy typing on the big page (strings open and close often)
+(define *et-type-keys-q* *et-type-keys*)
+(set! *et-type-keys* (list 34 34 97 32 "back" "enter" "left" "right" "end" "home"
+                           "next-line" "prev-line" 59 "back" "undo" 104))
+(set! *et-nkeys* (length *et-type-keys*))
+(et:type-run! "BIGQ" *lc-big-page* 70 31)
+(et:type-run! "NINEQ" *et-nine* 60 37)
+(set! *et-type-keys* *et-type-keys-q*)
+(set! *et-nkeys* (length *et-type-keys*))
+
+;; direct no-quote entry (pad:lc-entry2) == the scanner from inside a string
+(define (et:triv-ok s)
+  (let ((codes (map char->integer (string->list s))))
+    (equal? (pad:lc-entry2 codes s #t) (pad:lc-scan s codes 0 (list) (list) (list) #t))))
+(et:check "TRIV_ENTRY"
+          (and (et:triv-ok "") (et:triv-ok "abc def") (et:triv-ok "(f x) ; y")
+               (et:triv-ok "ends with \\") (et:triv-ok "a \\ b") (et:triv-ok "x\"y")))
+
 ;; --- 3b. closing a just-opened string reuses the pre-open rows ---
 (pad:play-reset! *lc-big-page*)
 (pad:play-snap)
@@ -160,6 +184,37 @@
 (pad:play-cmd! "back")
 (et:check "ALT_CLOSE" (string=? (et:strip-dirty (pad:play-snap)) (et:oracle)))
 (et:check "ALT_CLOSE_RETOK" (<= (- *lc-retok* et-r0) 1))
+(define et-r1 *lc-retok*)
+(pad:play-cmd! 34)
+(et:check "MEMO_REOPEN" (string=? (et:strip-dirty (pad:play-snap)) (et:oracle)))
+(et:check "MEMO_REOPEN_RETOK" (<= (- *lc-retok* et-r1) 1))
+(pad:play-cmd! "back")
+(et:check "MEMO_RECLOSE" (string=? (et:strip-dirty (pad:play-snap)) (et:oracle)))
+;; open a string on row 1: the walk re-lexes the rows below it and stops
+;; nowhere (no row below closes it); then close: all rows come back
+(pad:play-reset! *lc-big-page*)
+(pad:play-snap)
+(pad:play-cmd! "next-line")
+(pad:play-cmd! "end")
+(pad:play-snap)
+(pad:play-cmd! 34)
+(et:check "OPEN_ROW1" (string=? (et:strip-dirty (pad:play-snap)) (et:oracle)))
+(define et-r2 *lc-retok*)
+(pad:play-cmd! "back")
+(et:check "CLOSE_ROW1" (string=? (et:strip-dirty (pad:play-snap)) (et:oracle)))
+(et:check "CLOSE_ROW1_RETOK" (<= (- *lc-retok* et-r2) 1))
+;; a carry change (row 0 stops ending in `define`) touches row 1 only:
+;; row 2 starts in the cached state with the cached carry, so the walk
+;; stops there (no re-lex below row 0)
+(pad:play-reset! "(define\nfoo 1)\n(foo)\n(bar foo)")
+(pad:play-cmd! "end")
+(pad:play-snap)
+(define et-r3 *lc-retok*)
+(pad:play-cmd! "back")
+(et:check "CARRY_STOP" (string=? (et:strip-dirty (pad:play-snap)) (et:oracle)))
+(et:check "CARRY_STOP_RETOK" (<= (- *lc-retok* et-r3) 1))
+(pad:play-cmd! 101)
+(et:check "CARRY_BACK" (string=? (et:strip-dirty (pad:play-snap)) (et:oracle)))
 
 ;; --- 4. PERF_EMACS: us per key, twelve-row page (harness subtracted) ---
 (define (et:now) (current-time-ms))
@@ -194,9 +249,9 @@
         (et:goto! 4 18)
         (let* ((t0 (et:now)) (a (et:key 34)) (t1 (et:now)) (b (et:key "back")) (t2 (et:now)))
           (et:cold (- n 1) (+ acc-o (- t1 t0)) (+ acc-c (- t2 t1)))))))
-(define et-oc (et:cold 3 0 0))
-(define et-open1 (quotient (* 1000 (car et-oc)) 3))
-(define et-close1 (quotient (* 1000 (cadr et-oc)) 3))
+(define et-oc (et:cold 6 0 0))
+(define et-open1 (quotient (* 1000 (car et-oc)) 6))
+(define et-close1 (quotient (* 1000 (cadr et-oc)) 6))
 (define *et-frame-us* 16000)
 
 (display "PERF_EMACS rows=12 insert_us_key=") (display et-ins)
@@ -211,6 +266,7 @@
 (newline)
 (display "EMACS_TEST checks=") (display *et-checks*)
 (display " fail=") (display *et-fail*) (newline)
-(if (and (= *et-fail* 0) (< et-ins *et-frame-us*) (< et-cur *et-frame-us*))
+(if (and (= *et-fail* 0) (< et-ins *et-frame-us*) (< et-cur *et-frame-us*)
+         (< et-open1 *et-frame-us*) (< et-close1 *et-frame-us*))
     (begin (display "PAD_PERF_EMACS_OK") (newline))
     (begin (display "PAD_PERF_EMACS_FAIL") (newline)))
