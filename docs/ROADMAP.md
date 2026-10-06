@@ -129,15 +129,19 @@ Acceptance tests:
 
 ## Latency track (runs alongside M8–M10)
 
-Goal: insert < 16 ms on kid pages (one 60 fps frame). Today ~33–35 ms on
-Aura `c69e644` (~23–30 ms on `73c012c`; see `perf.md`).
+Goal: insert < 16 ms on kid pages (one 60 fps frame). **Met** with the
+Emacs ports: insert ~3.6 ms and cursor ~1.3 ms on the twelve-row page on
+Aura `c69e644`, down from ~33–35 / 17–19 ms (see `perf.md`,
+`perf-emacs.md`). Still over a frame: opening a string above many rows
+(~24 ms).
 
 | lever | owner | expected |
 |-------|-------|----------|
 | Soft call cost independent of define count | Aura #4343 closed, still linear: #4350 | ~3× on every pad path |
 | `vector-set!` / `set-car!` O(1) | Aura #4346 closed, still scales: #4350 | lets the cache update in place |
 | Load only play-path files in `play.aura` | pad | fewer defines → cheaper calls (measure) |
-| Tokenize tape + syms in one pass | pad | ~2 ms/key |
+| Tokenize tape + syms in one pass | pad | done (`pad:lc-scan`): row 15 → 3 ms |
+| Emacs ports: direct commands, try_cursor_movement, try_window_id, syntax-ppss carry | pad | done: insert 33 → 3.6 ms, cursor 13 → 1.3 ms |
 | Skip SNAP rows C already has (wire v2, still fail closed) | pad + C reader only | smaller frames, no C logic |
 
 Each lever lands with a before/after line in `perf.md`.
