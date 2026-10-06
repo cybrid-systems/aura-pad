@@ -1,0 +1,180 @@
+;; aura-pad M11f -- sandbox worlds for AI tries.
+;; The helper brings up to *world-max* ideas for one goal. Each idea runs
+;; in its own child workspace (workspace :create / :switch): the child
+;; starts as a copy of the root program, the idea goes in as one typed
+;; transaction (typed-mutate-atomic, like M11a), and the kid's goal
+;; checks run there. The kid's page and the root program never change
+;; while the helper tries. Only an idea that passes strictly more checks
+;; than the page does now comes back, and it comes back as an M11a KEEP
+;; in root (mutate:rebind of the winning defines, pad:robot-step!): one
+;; ctrl-z, who stamps, a time-machine step. workspace :merge is never
+;; used: it concatenates source and leaves duplicate defines.
+;;
+;; Checks against the engine:
+;; - per idea, the defines that differ between the root code and the
+;;   child's query:code (Soft split of both canonical programs, as in
+;;   time.aura) must be exactly the idea's names, and
+;;   workspace:conflicts-with must list every one of them (it also lists
+;;   unchanged dependents, so it is a superset check);
+;; - root query:code and the page object are unchanged after the tries;
+;; - after the KEEP, root query:code equals the winner's child code and
+;;   the goal score in root equals the winner's score.
+;; A mismatch prints M11_WORLD_DISAGREE.
+;;
+;; A child's rebind changes the shared top-level bindings, and after a
+;; child eval-current root's own eval-current does not put root's back
+;; (aura#4368). So after every idea: workspace :switch 0, then
+;; ast:restore of the root snapshot + one eval-current.
+;; Goal: ((label thunk want) ...); a check passes when (thunk) is equal?
+;; to want; a thunk that raises fails. Workspace ids start at 0 and 0 is
+;; false in Soft, so ids are tested with number?.
+;; Loaded after robot.aura and time.aura. Soft reserved: never bind quote.
+
+(define *world-max* 3)
+(define *world-last* #f)    ; (base tries winner verdict root-same)
+(define *world-races* 0)
+(define *world-kept* 0)
+(define *world-disagree* 0)
+(define *world-children* 0)
+
+(define (pad:world-pass? chk)
+  (let ((got (try ((cadr chk)) (catch (e) "world-raised"))))
+    (equal? got (caddr chk))))
+(define (pad:world-score goal)
+  (cond
+    ((null? goal) 0)
+    ((pad:world-pass? (car goal)) (+ 1 (pad:world-score (cdr goal))))
+    (#t (pad:world-score (cdr goal)))))
+
+(define (pad:world-subset? a b)
+  (cond ((null? a) #t) ((member (car a) b) (pad:world-subset? (cdr a) b)) (#t #f)))
+
+;; Back to root, root bindings back (aura#4368).
+(define (pad:world-home! snap)
+  (try (workspace :switch 0) (catch (e) #f))
+  (pad:robot-heal! snap))
+
+;; One idea in its own world. Returns
+;; (k status score eng-names conflicts child-code why ops)
+;; status: "tried" | "gate" (Soft gate said no) | "refused" | "no-world".
+(define (pad:world-run1 k who why ops goal code0 snap)
+  (let ((g (pad:robot-gate who ops)))
+    (if (not (string=? g "ok"))
+        (list k "gate" -1 (list) (list) "" why ops)
+        (let ((c (try (workspace :create (string-append "try-" (number->string k))) (catch (e) #f))))
+          (if (not (number? c))
+              (list k "no-world" -1 (list) (list) "" why ops)
+              (begin
+                (set! *world-children* (+ *world-children* 1))
+                (try (workspace :switch c) (catch (e) #f))
+                (pad:ew-set! who)
+                (let* ((r (try (typed-mutate-atomic (pad:robot-sexprs ops why)) (catch (e) #f)))
+                       (fp (pad:ew-set! "kid"))
+                       (score (if (eq? r #t) (pad:world-score goal) -1))
+                       (code (pad:q-code))
+                       (eng (pad:time-changed-in (pad:time-defs code) (pad:time-defs code0)
+                                                 (pad:time-changed-in (pad:time-defs code0) (pad:time-defs code) (list)))))
+                  (pad:world-home! snap)
+                  (let ((cf (try (workspace:conflicts-with c) (catch (e) (list)))))
+                    (list k (if (eq? r #t) "tried" "refused") score eng (if (list? cf) cf (list))
+                          code why ops)))))))))
+
+(define (pad:world-run-all who tries goal code0 snap k)
+  (if (or (null? tries) (> k *world-max*))
+      (list)
+      (cons (pad:world-run1 k who (car (car tries)) (cadr (car tries)) goal code0 snap)
+            (pad:world-run-all who (cdr tries) goal code0 snap (+ k 1)))))
+
+;; Engine check of one tried idea: (names-ok conflicts-ok).
+(define (pad:world-idea-ok? t)
+  (or (not (string=? (pad:nth t 1) "tried"))
+      (let ((names (pad:robot-names (pad:nth t 7))))
+        (and (pad:time-same-set? (pad:nth t 3) names)
+             (pad:world-subset? names (pad:nth t 4))))))
+(define (pad:world-ideas-ok? ts)
+  (cond ((null? ts) #t) ((pad:world-idea-ok? (car ts)) (pad:world-ideas-ok? (cdr ts))) (#t #f)))
+
+;; Best tried idea with a score strictly above base (first one on a tie).
+(define (pad:world-best ts base best)
+  (cond
+    ((null? ts) best)
+    ((and (string=? (pad:nth (car ts) 1) "tried")
+          (> (pad:nth (car ts) 2) (if best (pad:nth best 2) base)))
+     (pad:world-best (cdr ts) base (car ts)))
+    (#t (pad:world-best (cdr ts) base best))))
+
+(define (pad:world-n-of n m)
+  (string-append (number->string n) " of " (number->string m)))
+
+;; Race the helper's ideas. tries: ((why ops) ...). Returns (tag say verdict)
+;; and shows say in the say line.
+(define (pad:world-race! who tries goal)
+  (if *robot-pending* (pad:robot-drop!) #f)
+  (pad:who-sync! "kid" "typed" *who-gen*)
+  (set! *world-races* (+ *world-races* 1))
+  (let* ((L0 (pad:es-L *pl-st*))
+         (code0 (pad:q-code))
+         (snap (ast:snapshot "world"))
+         (base (pad:world-score goal))
+         (ts (pad:world-run-all who tries goal code0 snap 1))
+         (same (and (eq? (pad:es-L *pl-st*) L0) (string=? (pad:q-code) code0)))
+         (ideas-ok (pad:world-ideas-ok? ts))
+         (win (pad:world-best ts base #f))
+         (n (length goal))
+         (k (pad:world-keep! who win)))
+    (let* ((keep-ok (or (not win)
+                        (and (string=? (car k) "KEEP")
+                             (string=? (pad:q-code) (pad:nth win 5))
+                             (= (pad:world-score goal) (pad:nth win 2)))))
+           (v (if (and same ideas-ok keep-ok) "agree" "disagree"))
+           (say (cond
+                  ((not win)
+                   (string-append "the " who " tried " (number->string (length ts))
+                                  " ideas in its own worlds, none did better than your page ("
+                                  (pad:world-n-of base n) " checks), nothing changed"))
+                  ((not (string=? (car k) "KEEP")) (pad:nth k 2))
+                  (#t (string-append "the " who " tried " (number->string (length ts))
+                                     " ideas in its own worlds: idea " (number->string (car win))
+                                     " passes " (pad:world-n-of (pad:nth win 2) n)
+                                     " checks (your page " (pad:world-n-of base n)
+                                     "), kept it. ctrl-z takes it back")))))
+      (set! *world-last* (list base ts win v same))
+      (if (string=? v "disagree")
+          (begin
+            (set! *world-disagree* (+ *world-disagree* 1))
+            (newline) (display "M11_WORLD_DISAGREE ") (display (pad:world-line *world-last*)) (newline))
+          #f)
+      (set! *pl-say* say)
+      (list (if win "WIN" "NOWIN") say v))))
+
+;; KEEP the winner in root through the M11a path.
+(define (pad:world-keep! who win)
+  (if (not win)
+      (list "NONE" "" "")
+      (let ((r (pad:robot-step! who (pad:nth win 7) (pad:nth win 6))))
+        (if (string=? (car r) "KEEP") (set! *world-kept* (+ *world-kept* 1)) #f)
+        r)))
+
+;; WORLD base=1 ideas=1:tried:2:hello/hello.bye,2:refused:-1,3:gate:-1 win=1 same=yes verdict=agree
+(define (pad:world-idea-str t)
+  (string-append (number->string (car t)) ":" (pad:nth t 1) ":" (number->string (pad:nth t 2))
+                 (if (string=? (pad:nth t 1) "tried")
+                     (string-append ":" (pad:ws-names-str (pad:nth t 3)) "/" (pad:ws-names-str (pad:nth t 4)))
+                     "")))
+(define (pad:world-ideas-str ts)
+  (cond
+    ((null? ts) "")
+    ((null? (cdr ts)) (pad:world-idea-str (car ts)))
+    (#t (string-append (pad:world-idea-str (car ts)) "," (pad:world-ideas-str (cdr ts))))))
+(define (pad:world-line x)
+  (string-append "WORLD base=" (number->string (car x))
+                 " ideas=" (pad:world-ideas-str (cadr x))
+                 " win=" (if (caddr x) (number->string (car (caddr x))) "none")
+                 " same=" (pad:who-bool (pad:nth x 4))
+                 " verdict=" (pad:nth x 3)))
+
+(define (pad:world-stats-str)
+  (string-append "races=" (number->string *world-races*)
+                 " kept=" (number->string *world-kept*)
+                 " children=" (number->string *world-children*)
+                 " wdisagree=" (number->string *world-disagree*)))
