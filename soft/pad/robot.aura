@@ -1,9 +1,9 @@
 ;; aura-pad M11a -- "undo the robot": one AI proposal = ONE typed engine
 ;; transaction, one key takes it all back.
 ;; Needs ws.aura, pen.aura, who.aura, who_pen.aura, eng_who.aura, why.aura,
-;; blast.aura (and what they load). The transaction runs under the
-;; writer's engine fingerprint (pad:ew-set!, M11b); the fingerprint goes
-;; back to kid right after.
+;; blast.aura (and what they load); time.aura (M11e) is loaded after it.
+;; The transaction runs under the writer's engine fingerprint (pad:ew-set!,
+;; M11b); the fingerprint goes back to kid right after.
 ;;
 ;; A robot proposal is a list of (name lam) edits plus one reason. It is
 ;; applied with typed-mutate-atomic: every edit is a mutate:rebind sexpr,
@@ -163,6 +163,7 @@
     (pad:pen-set-page! (car pr))
     (set! *who-gen* g1)
     (pad:who-sync! who why g1)
+    (pad:time-note! who why (pad:robot-names ops))
     (set! *robot-keeps* (+ *robot-keeps* 1))
     (set! *robot-tc-raw* (try (typecheck-incremental) (catch (e) "")))
     (set! *robot-diags* (pad:why-diags *robot-tc-raw*))
@@ -240,6 +241,7 @@
         (set! *who-gen* (pad:pen-gen))
         (pad:who-sync! "kid" "typed" *who-gen*)
         (set! *robot-undos* (+ *robot-undos* 1))
+        (pad:time-undone!)
         (let ((code-ok (string=? (pad:q-code) code0))
               (page-ok (eq? (pad:es-L *pl-st*) L0)))
           (if (and code-ok page-ok)
@@ -260,6 +262,8 @@
 ;; Notebook key face: IN 26 (ctrl-z) undoes the last robot change, IN 15
 ;; (ctrl-o) answers "who wrote this" from the engine (eng_who.aura, M11b);
 ;; while a blast card waits (M11d), enter keeps it and ctrl-z drops it;
+;; ctrl-t (IN 20) / ctrl-n (IN 14) step the time machine (time.aura, M11e),
+;; and after a book is opened ctrl-o answers via pad:time-who-key!;
 ;; every other line goes to pad:play-line!.
 (define (pad:robot-line! line)
   (cond
@@ -269,7 +273,9 @@
     ((and *robot-pending* (string=? line "IN 26"))
      (pad:play-ok! (pad:nth (pad:robot-drop!) 2)))
     ((string=? line "IN 26") (pad:play-ok! (pad:robot-undo-say (pad:robot-undo!))))
-    ((string=? line "IN 15") (pad:ew-key!))
+    ((string=? line "IN 15") (if *time-reopened* (pad:time-who-key!) (pad:ew-key!)))
+    ((string=? line "IN 20") (pad:time-key! #t))
+    ((string=? line "IN 14") (pad:time-key! #f))
     (#t (pad:play-line! line))))
 
 (define (pad:robot-line-out! r who)

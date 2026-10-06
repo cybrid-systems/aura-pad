@@ -1,0 +1,393 @@
+;; aura-pad M11e -- time machine + open-is-restore.
+;; Every robot KEEP (robot.aura pad:robot-commit!) adds one step to a
+;; history strip: an ast:snapshot taken right after the KEEP, the page
+;; object, its who stamps, and who / why / which names. ctrl-t (IN 20)
+;; steps back, ctrl-n (IN 14) steps forward: ast:restore + one
+;; eval-current (aura#4349), the step's own page and stamps come back.
+;; Before each move ast:diff (target snapshot vs now) says which defines
+;; differ; Soft knows which names the skipped steps changed. The two must
+;; match, and the engine code after the move must equal the code the step
+;; was taken with, or the move prints M11_TIME_DISAGREE.
+;;
+;; Save = serialize-workspace (code + mutation log) plus a small Soft
+;; sidecar (page rows as char codes, who stamps, the strip's who / why).
+;; Open = deserialize-workspace + the sidecar: no set-code, the log comes
+;; back with its change reasons (sum=). aura#4365 / aura#4367: reopened
+;; records say author=0 and point at old node ids, so ctrl-o after an open
+;; recovers who from the pad stamp whose why equals a record's reason
+;; (pad:time-eng-of). aura#4366: the notebook source ends in #t so the
+;; reopened program's value is not a pair (ws.aura).
+;;
+;; Loaded after robot.aura (robot calls pad:time-note! / pad:time-undone!
+;; at run time). Every loop is a top-level function with its data as
+;; parameters (no named let captures an outer local, docs/m10.md).
+;; Soft reserved: never bind quote.
+
+(define *time-on* #f)
+(define *time-steps* (list))   ; oldest first: (snap L S who why names code gen)
+(define *time-at* 0)
+(define *time-story* (list))   ; saved steps before an open: ((who why names) ...)
+(define *time-reopened* #f)
+(define *time-open-recs* (list)) ; the reopened log, captured at the open
+(define *time-moves* 0)
+(define *time-disagree* 0)
+(define *time-last* #f)        ; (from to eng-names soft-names code-ok verdict)
+
+(define (pad:time-step snap L S who why names)
+  (list snap L S who why names (pad:q-code) (pad:pen-gen)))
+
+;; Start the strip at the page as it is now (after a check or an open).
+(define (pad:time-start! label)
+  (let ((snap (try (ast:snapshot "time") (catch (e) #f))))
+    (set! *time-steps* (list (pad:time-step snap (pad:es-L *pl-st*) *who-S* label "" (list))))
+    (set! *time-at* 0)
+    (set! *time-on* (number? snap))   ; the first id is 0, and 0 is false in Soft
+    (set! *time-reopened* #f)
+    (set! *time-open-recs* (list))
+    (set! *time-story* (list))
+    *time-on*))
+
+(define (pad:time-take xs n)
+  (if (or (<= n 0) (null? xs)) (list) (cons (car xs) (pad:time-take (cdr xs) (- n 1)))))
+
+;; After a robot KEEP: a step in the future is cut (a new branch).
+(define (pad:time-note! who why names)
+  (if (not *time-on*)
+      #f
+      (let ((snap (try (ast:snapshot "time") (catch (e) #f))))
+        (set! *time-steps*
+              (append (pad:time-take *time-steps* (+ *time-at* 1))
+                      (list (pad:time-step snap (pad:es-L *pl-st*) *who-S* who why names))))
+        (set! *time-at* (- (length *time-steps*) 1))
+        #t)))
+
+;; After ctrl-z took the newest KEEP back: that step is gone too.
+(define (pad:time-undone!)
+  (if (and *time-on* (> *time-at* 0) (= *time-at* (- (length *time-steps*) 1)))
+      (begin
+        (set! *time-steps* (pad:time-take *time-steps* *time-at*))
+        (set! *time-at* (- *time-at* 1))
+        #t)
+      #f))
+
+;; --- ast:diff in define names ---
+;; Top-level defines of a canonical program "(begin (define n ...) ...)":
+;; ((name . text) ...) in program order.
+(define (pad:time-defs-in code toks depth name start acc)
+  (if (null? toks)
+      (reverse acc)
+      (let* ((t (car toks)) (k (car t)) (txt (pad:hl-nth t 3)) (p (cadr t)))
+        (cond
+          ((and (string=? k "P") (string=? txt "("))
+           (pad:time-defs-in code (cdr toks) (+ depth 1) (if (= depth 1) #f name)
+                             (if (= depth 1) p start) acc))
+          ((and (string=? k "P") (string=? txt ")"))
+           (if (and (= depth 2) name)
+               (pad:time-defs-in code (cdr toks) 1 #f 0
+                                 (cons (cons name (substring code start (+ p 1))) acc))
+               (pad:time-defs-in code (cdr toks) (- depth 1) name start acc)))
+          ((and (= depth 2) (not name) (string=? txt "define") (pair? (cdr toks)))
+           (pad:time-defs-in code (cddr toks) depth (pad:hl-nth (cadr toks) 3) start acc))
+          (#t (pad:time-defs-in code (cdr toks) depth name start acc))))))
+(define (pad:time-defs code)
+  (pad:time-defs-in code (pad:hl-tokens code) 0 #f 0 (list)))
+
+(define (pad:time-text-of name ds)
+  (cond
+    ((null? ds) #f)
+    ((string=? (car (car ds)) name) (cdr (car ds)))
+    (#t (pad:time-text-of name (cdr ds)))))
+
+;; Names whose define text differs between a and b (or is in one only).
+(define (pad:time-changed-in xs other acc)
+  (cond
+    ((null? xs) acc)
+    ((let ((o (pad:time-text-of (car (car xs)) other)))
+       (and o (string=? o (cdr (car xs)))))
+     (pad:time-changed-in (cdr xs) other acc))
+    ((member (car (car xs)) acc) (pad:time-changed-in (cdr xs) other acc))
+    (#t (pad:time-changed-in (cdr xs) other (append acc (list (car (car xs))))))))
+
+;; ast:diff snap -> names that differ between that snapshot and now.
+;; (:same . code) has one part; (:removed . old) (:added . new) has two.
+(define (pad:time-diff-names snap)
+  (let ((d (try (ast:diff snap) (catch (e) #f))))
+    (cond
+      ((not (pair? d)) #f)
+      ((null? (cdr d)) (list))
+      (#t (let ((a (pad:time-defs (cdr (car d))))
+                (b (pad:time-defs (cdr (cadr d)))))
+            (pad:time-changed-in b a (pad:time-changed-in a b (list))))))))
+
+;; Names the steps lo+1 .. hi changed (Soft side), unique.
+(define (pad:time-names-add xs acc)
+  (cond
+    ((null? xs) acc)
+    ((member (car xs) acc) (pad:time-names-add (cdr xs) acc))
+    (#t (pad:time-names-add (cdr xs) (append acc (list (car xs)))))))
+(define (pad:time-soft-names steps i lo hi acc)
+  (cond
+    ((null? steps) acc)
+    ((and (> i lo) (<= i hi))
+     (pad:time-soft-names (cdr steps) (+ i 1) lo hi (pad:time-names-add (pad:nth (car steps) 5) acc)))
+    (#t (pad:time-soft-names (cdr steps) (+ i 1) lo hi acc))))
+
+(define (pad:time-same-set? a b)
+  (and (= (length a) (length b)) (pad:time-all-in? a b)))
+(define (pad:time-all-in? a b)
+  (cond ((null? a) #t) ((member (car a) b) (pad:time-all-in? (cdr a) b)) (#t #f)))
+
+;; --- moving ---
+(define (pad:time-step-word i)
+  (string-append "step " (number->string (+ i 1)) " of " (number->string (length *time-steps*))))
+
+(define (pad:time-move-say from to names)
+  (let* ((st (list-ref *time-steps* (if (< to from) from to)))
+         (what (pad:why-owner (pad:nth st 3) (pad:nth st 4)))
+         (ns (if (null? names) "nothing" (pad:robot-names-str names))))
+    (cond
+      ((and (< to from) (= (- from to) 1))
+       (string-append "back to " (pad:time-step-word to) ": " ns " like before " what))
+      ((< to from)
+       (string-append "back to " (pad:time-step-word to) ": " ns " like before the last "
+                      (number->string (- from to)) " changes"))
+      ((= (- to from) 1)
+       (string-append "forward to " (pad:time-step-word to) ": " what " is back (" ns ")"))
+      (#t (string-append "forward to " (pad:time-step-word to) ": " ns " come back")))))
+
+;; Go to step i. Returns (tag say verdict).
+(define (pad:time-go! i)
+  (cond
+    ((not *time-on*) (list "NONE" "the time machine is off" "none"))
+    ((< i 0)
+     (list "NONE" (if *time-reopened*
+                      "this is where the book was opened, older steps are only in the story"
+                      "this is the start, there is nothing older")
+           "none"))
+    ((>= i (length *time-steps*)) (list "NONE" "this is the newest step" "none"))
+    ((= i *time-at*) (list "NONE" "you are already here" "none"))
+    (#t
+     (if *robot-pending* (pad:robot-drop!) #f)
+     (let* ((from *time-at*)
+            (st (list-ref *time-steps* i))
+            (eng (pad:time-diff-names (car st)))
+            (soft (pad:time-soft-names *time-steps* 0 (min from i) (max from i) (list))))
+       (pad:robot-heal! (car st))
+       (pad:pen-set-page! (pad:nth st 1))
+       (set! *who-L* (pad:nth st 1))
+       (set! *who-S* (pad:nth st 2))
+       (set! *who-gen* (pad:pen-gen))
+       (set! *robot-undo* (list))
+       (set! *time-at* i)
+       (set! *time-moves* (+ *time-moves* 1))
+       (let* ((code-ok (string=? (pad:q-code) (pad:nth st 6)))
+              (names-ok (and (list? eng) (pad:time-same-set? eng soft)))
+              (v (if (and code-ok names-ok) "agree" "disagree")))
+         (set! *time-last* (list from i (if (list? eng) eng (list)) soft code-ok v))
+         (if (string=? v "disagree")
+             (begin
+               (set! *time-disagree* (+ *time-disagree* 1))
+               (newline) (display "M11_TIME_DISAGREE ") (display (pad:time-line *time-last*)) (newline))
+             #f)
+         (list "TIME" (pad:time-move-say from i (if (list? eng) eng soft)) v))))))
+
+(define (pad:time-back!) (pad:time-go! (- *time-at* 1)))
+(define (pad:time-forward!) (pad:time-go! (+ *time-at* 1)))
+
+;; TIME from=2 to=1 eng=hello.bye soft=hello.bye code=yes verdict=agree
+(define (pad:time-line x)
+  (string-append "TIME from=" (number->string (+ (car x) 1)) " to=" (number->string (+ (cadr x) 1))
+                 " eng=" (pad:ws-names-str (caddr x)) " soft=" (pad:ws-names-str (pad:nth x 3))
+                 " code=" (pad:who-bool (pad:nth x 4)) " verdict=" (pad:nth x 5)))
+
+(define (pad:time-key! back)
+  (let ((r (if back (pad:time-back!) (pad:time-forward!))))
+    (if (string=? (car r) "TIME") (begin (newline) (display (pad:time-line *time-last*)) (newline)) #f)
+    (pad:play-ok! (cadr r))))
+
+;; --- the strip ---
+(define (pad:time-label who why)
+  (if (string=? why "") who (string-append who ": " why)))
+(define (pad:time-story-strs xs)
+  (if (null? xs) (list)
+      (cons (pad:time-label (car (car xs)) (cadr (car xs))) (pad:time-story-strs (cdr xs)))))
+(define (pad:time-step-strs steps i)
+  (if (null? steps) (list)
+      (let ((s (pad:time-label (pad:nth (car steps) 3) (pad:nth (car steps) 4))))
+        (cons (if (= i *time-at*) (string-append "[" s "]") s)
+              (pad:time-step-strs (cdr steps) (+ i 1))))))
+;; "start | helper: closer | [macro: flip]"; saved steps first after an open.
+(define (pad:time-strip)
+  (string-join (append (pad:time-story-strs *time-story*) (pad:time-step-strs *time-steps* 0)) " | "))
+
+;; --- save / open ---
+(define (pad:time-row-line row)
+  (if (null? row) "ROW" (string-append "ROW " (pad:ws-nums row))))
+(define (pad:time-rows-text L)
+  (if (null? L) "" (string-append (pad:time-row-line (car L)) "\n" (pad:time-rows-text (cdr L)))))
+(define (pad:time-stamps-text S i)
+  (cond
+    ((null? S) "")
+    ((car S)
+     (string-append "STAMP " (number->string i) " " (car (car S)) " "
+                    (number->string (caddr (car S))) " " (cadr (car S)) "\n"
+                    (pad:time-stamps-text (cdr S) (+ i 1))))
+    (#t (pad:time-stamps-text (cdr S) (+ i 1)))))
+(define (pad:time-story-line who names why)
+  (string-append "STEP " who " " (if (null? names) "-" (string-join names ".")) " " why "\n"))
+(define (pad:time-story-text xs)
+  (if (null? xs) ""
+      (string-append (pad:time-story-line (car (car xs)) (caddr (car xs)) (cadr (car xs)))
+                     (pad:time-story-text (cdr xs)))))
+(define (pad:time-steps-text steps i)
+  (cond
+    ((null? steps) "")
+    ((and (> i 0) (<= i *time-at*))
+     (string-append (pad:time-story-line (pad:nth (car steps) 3) (pad:nth (car steps) 5) (pad:nth (car steps) 4))
+                    (pad:time-steps-text (cdr steps) (+ i 1))))
+    (#t (pad:time-steps-text (cdr steps) (+ i 1)))))
+
+;; Save to base.aw (engine) + base.pad (Soft). Returns (tag say).
+(define (pad:time-save! base)
+  (if *robot-pending*
+      (list "NOSAVE" "keep or drop the helper's idea first")
+      (begin
+        (pad:who-sync! "kid" "typed" *who-gen*)
+        (let* ((side (string-append "PADBOOK 1\n"
+                                    (pad:time-rows-text (pad:es-L *pl-st*))
+                                    (pad:time-stamps-text *who-S* 0)
+                                    (pad:time-story-text *time-story*)
+                                    (pad:time-steps-text *time-steps* 0)))
+               (aw (try (serialize-workspace (string-append base ".aw")) (catch (e) #f)))
+               (pd (try (write-file (string-append base ".pad") side) (catch (e) #f))))
+          (if (and (eq? aw #t) pd (not (pad:eng-err? pd)))
+              (list "SAVE" "the book is saved, with its story")
+              (list "NOSAVE" "the book could not be saved"))))))
+
+(define (pad:time-nums xs)
+  (if (null? xs) (list) (cons (string->number (car xs)) (pad:time-nums (cdr xs)))))
+(define (pad:time-rest xs n)
+  (if (or (<= n 0) (null? xs)) xs (pad:time-rest (cdr xs) (- n 1))))
+(define (pad:time-read-rows lines)
+  (cond
+    ((null? lines) (list))
+    ((string-prefix? (car lines) "ROW")
+     (cons (pad:time-nums (cdr (string-split (car lines) " "))) (pad:time-read-rows (cdr lines))))
+    (#t (pad:time-read-rows (cdr lines)))))
+(define (pad:time-put xs i v)
+  (cond
+    ((null? xs) (list))
+    ((= i 0) (cons v (cdr xs)))
+    (#t (cons (car xs) (pad:time-put (cdr xs) (- i 1) v)))))
+(define (pad:time-read-stamps lines S)
+  (cond
+    ((null? lines) S)
+    ((string-prefix? (car lines) "STAMP ")
+     (let ((f (string-split (car lines) " ")))
+       (pad:time-read-stamps (cdr lines)
+                             (pad:time-put S (string->number (cadr f))
+                                           (list (caddr f) (string-join (pad:time-rest f 4) " ")
+                                                 (string->number (pad:nth f 3)))))))
+    (#t (pad:time-read-stamps (cdr lines) S))))
+(define (pad:time-read-story lines)
+  (cond
+    ((null? lines) (list))
+    ((string-prefix? (car lines) "STEP ")
+     (let ((f (string-split (car lines) " ")))
+       (cons (list (cadr f) (string-join (pad:time-rest f 3) " ")
+                   (if (string=? (caddr f) "-") (list) (string-split (caddr f) ".")))
+             (pad:time-read-story (cdr lines)))))
+    (#t (pad:time-read-story (cdr lines)))))
+
+;; Open base.aw + base.pad: the engine comes back with its log (no
+;; set-code), the page and stamps from the sidecar. Returns (tag say).
+(define (pad:time-open! base)
+  (let* ((side (try (read-file (string-append base ".pad")) (catch (e) #f)))
+         (lines (if (string? side) (string-split side "\n") (list))))
+    (if (not (and (pair? lines) (string=? (car lines) "PADBOOK 1")))
+        (list "NOOPEN" "that book has no pad story")
+        (let ((d (try (deserialize-workspace (string-append base ".aw")) (catch (e) #f))))
+          (if (not (eq? d #t))
+              (list "NOOPEN" "aura could not open that book")
+              (let ((L (pad:time-read-rows lines)))
+                (set! *robot-pending* #f)
+                (set! *robot-undo* (list))
+                (pad:play-reset! (pad:v-src L))
+                (set! *who-L* (pad:es-L *pl-st*))
+                (set! *who-S* (pad:time-read-stamps lines (pad:who-falses (length *who-L*))))
+                (set! *who-hist* (list))
+                (set! *who-gen* (pad:pen-gen))
+                (pad:time-start! "opened")
+                (set! *time-story* (pad:time-read-story lines))
+                (set! *time-reopened* #t)
+                (set! *time-open-recs* (pad:ew-records))
+                (set! *pl-say* (string-append "the book is open: " (number->string (length *time-story*))
+                                              " saved steps, aura has the whole story"))
+                (list "OPEN" *pl-say*)))))))
+
+;; --- who after an open (aura#4365, aura#4367) ---
+;; The reopened log keeps every change reason (sum=) but says author=0
+;; (aura#4365), and the reload renumbers the tree while log targets and
+;; node provenance keep the old ids (aura#4367), so nothing joins the log
+;; to a define by node id. A define last written before the open takes
+;; who from the pad stamp of its row, and aura confirms it: the log must
+;; hold a rebind whose reason is the stamp's why. A write after the open
+;; has a real author (fingerprint != 0; reopened records say 0): plain
+;; M11b. Its mutation id may repeat a reopened one (the id counter is not
+;; restored), so ids never decide old vs new.
+(define (pad:time-sum-last recs why best)
+  (cond
+    ((null? recs) best)
+    ((and (string=? (caddr (car recs)) "rebind") (string=? (pad:nth (car recs) 3) why))
+     (pad:time-sum-last (cdr recs) why (car (car recs))))
+    (#t (pad:time-sum-last (cdr recs) why best))))
+
+(define (pad:time-eng-of name st)
+  (let ((e (pad:ew-prov name)))
+    (cond
+      ((and e (> (pad:nth e 3) 0) (not (= (pad:nth e 5) 0))) e)
+      ((not st) (list name "nobody" "" 0 0 0))
+      ((string=? (car st) "kid") (list name "kid" "" 0 0 0))
+      (#t (let ((id (pad:time-sum-last *time-open-recs* (cadr st) 0)))
+            (if (> id 0)
+                (list name (car st) (cadr st) id 0 0)
+                (list name "someone" "" 0 0 0)))))))
+
+(define (pad:time-who-at l)
+  (let* ((wl (pad:es-L *pl-st*))
+         (toks (pad:hl-tokens (pad:v-src wl)))
+         (name (pad:ew-row-name wl toks (pad:ws-soft-defs toks) l))
+         (st (pad:who-stamp-of l))
+         (e (if name (pad:time-eng-of name st) #f)))
+    (list st e (pad:ew-verdict st e))))
+
+;; ctrl-o after an open. Returns (tag say verdict).
+(define (pad:time-who-ask!)
+  (pad:who-sync! "kid" "typed" *who-gen*)
+  (set! *ew-asks* (+ *ew-asks* 1))
+  (let* ((l (pad:es-l *pl-st*))
+         (x (pad:time-who-at l))
+         (v (caddr x))
+         (old (and (cadr x) (> (pad:nth (cadr x) 3) 0) (= (pad:nth (cadr x) 5) 0)))
+         (tag (string-append (pad:ew-tag l x) (if old " reopened=yes author=0" ""))))
+    (if (string=? v "disagree")
+        (begin
+          (set! *ew-disagree* (+ *ew-disagree* 1))
+          (newline) (display "M11_WHO_DISAGREE ") (display tag) (newline))
+        #f)
+    (list tag
+          (string-append (pad:ew-say v (car x) (cadr x))
+                         (if (and old (string=? v "agree")) ", from the saved book" ""))
+          v)))
+
+(define (pad:time-who-key!)
+  (let ((r (pad:time-who-ask!)))
+    (newline) (display (car r)) (newline)
+    (pad:play-ok! (cadr r))))
+
+(define (pad:time-stats-str)
+  (string-append "steps=" (number->string (length *time-steps*))
+                 " at=" (number->string (+ *time-at* 1))
+                 " moves=" (number->string *time-moves*)
+                 " story=" (number->string (length *time-story*))
+                 " disagree=" (number->string *time-disagree*)))
