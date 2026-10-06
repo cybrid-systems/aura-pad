@@ -1,6 +1,7 @@
 ;; aura-pad M11 tests: Aura-unique features on the notebook stack
 ;; (robot.aura: one AI proposal = one typed engine transaction, ctrl-z
-;; undoes it; eng_who.aura: engine who-wrote-this; why.aura: kid reasons).
+;; undoes it; eng_who.aura: engine who-wrote-this; why.aura: kid reasons;
+;; blast.aura: blast radius card before KEEP).
 ;; std modules first (aura#4351), via std.aura. Cases live in
 ;; m11_cases.aura; this file makes one top-level call.
 ;; Soft reserved: never bind quote.
@@ -21,6 +22,7 @@
 (load "/workspace/aura-pad/soft/pad/who_pen.aura")
 (load "/workspace/aura-pad/soft/pad/eng_who.aura")
 (load "/workspace/aura-pad/soft/pad/why.aura")
+(load "/workspace/aura-pad/soft/pad/blast.aura")
 (load "/workspace/aura-pad/soft/pad/robot.aura")
 (load "/workspace/aura-pad/soft/pad/m11_cases.aura")
 (m11:run-all)

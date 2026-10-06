@@ -1,0 +1,227 @@
+;; aura-pad M11d -- "blast radius" card before KEEP.
+;; Needs ws.aura, who_pen.aura, why.aura (and what they load). Loaded
+;; before robot.aura, whose card path (pad:robot-card!) calls it.
+;;
+;; The helper's proposal is applied as one typed transaction inside an
+;; ast:snapshot (M11a) but NOT kept yet: the page does not change, and
+;; the say line shows what the change would move:
+;;   "changing add moves 3 places: greet, (greet (add 1 2)), (add 2 3).
+;;    enter keeps, ctrl-z says no"
+;; Enter keeps it (rows projected, ctrl-z undo entry, stamps); ctrl-z
+;; drops it (ast:restore + eval-current, nothing moved).
+;; Soft finds the places from the page the KEEP would give (call sites =
+;; a name right after "(" that is not a define head). The engine checks
+;; that answer:
+;;   query:calls name        -> the engine's call sites of name; their
+;;                              number must equal the Soft count. After a
+;;                              rebind the engine keeps the replaced body's
+;;                              sites too (aura#4364), so then the engine
+;;                              must have added exactly the call sites the
+;;                              new bodies hold (taken before and after)
+;;   query:dirty-subtree     -> per page define (query:defines name): the
+;;                              defines whose dirty count grew must be
+;;                              changed names, and every changed name must
+;;                              be dirty now (query:dirty-nodes marks only
+;;                              the rebound define node and the root)
+;; c69e644 has no node -> row query, so rows come from Soft and the engine
+;; confirms the counts; a mismatch prints M11_BLAST_DISAGREE.
+;; Soft reserved: never bind quote.
+
+(define *blast-cards* 0)
+(define *blast-disagree* 0)
+(define *blast-last* #f)
+(define *blast-max-shown* 3)
+
+;; token start points of the call sites of name
+(define (pad:blast-sites toks name prev prev2 acc)
+  (if (null? toks)
+      (reverse acc)
+      (let* ((t (car toks))
+             (hit (and (string=? (pad:hl-nth t 3) name)
+                       prev (string=? (car prev) "P") (string=? (pad:hl-nth prev 3) "(")
+                       (not (and prev2 (string=? (car prev2) "K")
+                                 (string=? (pad:hl-nth prev2 3) "define"))))))
+        (pad:blast-sites (cdr toks) name t prev (if hit (cons (cadr t) acc) acc)))))
+
+(define (pad:blast-rows L points)
+  (if (null? points)
+      (list)
+      (cons (car (pad:v-linecol L (car points))) (pad:blast-rows L (cdr points)))))
+
+(define (pad:blast-insert x xs)
+  (cond
+    ((null? xs) (list x))
+    ((= x (car xs)) xs)
+    ((< x (car xs)) (cons x xs))
+    (#t (cons (car xs) (pad:blast-insert x (cdr xs))))))
+(define (pad:blast-sorted xs acc)
+  (if (null? xs) acc (pad:blast-sorted (cdr xs) (pad:blast-insert (car xs) acc))))
+(define (pad:blast-minus xs ys)
+  (cond
+    ((null? xs) (list))
+    ((member (car xs) ys) (pad:blast-minus (cdr xs) ys))
+    (#t (cons (car xs) (pad:blast-minus (cdr xs) ys)))))
+
+;; rows where the changed defines start
+(define (pad:blast-def-rows L toks names)
+  (if (null? names)
+      (list)
+      (let ((ds (pad:find-defs-in toks (car names)))
+            (rest (pad:blast-def-rows L toks (cdr names))))
+        (if (null? ds) rest (cons (car (pad:v-linecol L (car ds))) rest)))))
+
+;; ((name soft engine engine-before new-body-sites) ...)
+;; e0s = engine counts before the transaction (pad:blast-eng-before)
+(define (pad:blast-counts toks names e0s ops)
+  (if (null? names)
+      (list)
+      (cons (list (car names)
+                  (length (pad:blast-sites toks (car names) #f #f (list)))
+                  (pad:blast-eng-calls (car names))
+                  (if (null? e0s) -1 (car e0s))
+                  (pad:blast-new-sites ops (car names)))
+            (pad:blast-counts toks (cdr names) (if (null? e0s) e0s (cdr e0s)) ops))))
+;; call sites of name inside the proposal's new bodies
+(define (pad:blast-new-sites ops name)
+  (if (null? ops)
+      0
+      (+ (length (pad:blast-sites (pad:hl-tokens (cadr (car ops))) name #f #f (list)))
+         (pad:blast-new-sites (cdr ops) name))))
+(define (pad:blast-eng-before names)
+  (if (null? names) (list) (cons (pad:blast-eng-calls (car names)) (pad:blast-eng-before (cdr names)))))
+(define (pad:blast-eng-calls name)
+  (try
+    (let ((r (query:calls name)))
+      (if (and (or (pair? r) (null? r)) (not (pad:eng-err? r))) (length r) -1))
+    (catch (e) -1)))
+(define (pad:blast-all-points toks names)
+  (if (null? names)
+      (list)
+      (append (pad:blast-sites toks (car names) #f #f (list)) (pad:blast-all-points toks (cdr names)))))
+
+;; --- engine dirty per page define ---
+;; ((name . dirty-count) ...) for the defines the page writes
+(define (pad:blast-dirty-of names)
+  (if (null? names)
+      (list)
+      (cons (cons (car names) (pad:who-sum-subs (pad:q-defines-of (car names))))
+            (pad:blast-dirty-of (cdr names)))))
+(define (pad:blast-dirty-now)
+  (pad:blast-dirty-of (pad:ws-soft-defs (pad:hl-tokens (pad:v-src (pad:es-L *pl-st*))))))
+(define (pad:blast-count-of name xs)
+  (cond
+    ((null? xs) 0)
+    ((string=? (car (car xs)) name) (cdr (car xs)))
+    (#t (pad:blast-count-of name (cdr xs)))))
+(define (pad:blast-grown now before)
+  (cond
+    ((null? now) (list))
+    ((> (cdr (car now)) (pad:blast-count-of (car (car now)) before))
+     (cons (car (car now)) (pad:blast-grown (cdr now) before)))
+    (#t (pad:blast-grown (cdr now) before))))
+(define (pad:blast-dirty-names now)
+  (cond
+    ((null? now) (list))
+    ((> (cdr (car now)) 0) (cons (car (car now)) (pad:blast-dirty-names (cdr now))))
+    (#t (pad:blast-dirty-names (cdr now)))))
+(define (pad:blast-subset? xs ys)
+  (cond
+    ((null? xs) #t)
+    ((member (car xs) ys) (pad:blast-subset? (cdr xs) ys))
+    (#t #f)))
+;; same count, or (aura#4364) the engine added exactly the new sites
+(define (pad:blast-count-ok? c)
+  (let ((soft (cadr c)) (eng (caddr c)) (e0 (pad:nth c 3)) (new (pad:nth c 4)))
+    (and (>= eng 0)
+         (or (= soft eng)
+             (and (>= e0 0) (= (- eng e0) new))))))
+(define (pad:blast-counts-ok? cs)
+  (cond
+    ((null? cs) #t)
+    ((pad:blast-count-ok? (car cs)) (pad:blast-counts-ok? (cdr cs)))
+    (#t #f)))
+
+;; kid name for row l of page L: the define it starts, the row when
+;; short, else "line N"
+(define (pad:blast-row-name L l)
+  (let* ((src (pad:v-src (list (list-ref L l))))
+         (d (pad:why-row-def src)))
+    (cond
+      (d d)
+      ((<= (string-length src) 18) src)
+      (#t (string-append "line " (number->string (+ l 1)))))))
+(define (pad:blast-row-names L rows)
+  (if (null? rows) (list) (cons (pad:blast-row-name L (car rows)) (pad:blast-row-names L (cdr rows)))))
+
+;; The card: (names use-rows use-names counts grown dirty-now verdict)
+;; L1 = the page the KEEP would give; before = (dirty counts, engine
+;; call counts) taken before the transaction (pad:blast-before).
+(define (pad:blast-before names)
+  (list (pad:blast-dirty-now) (pad:blast-eng-before names)))
+(define (pad:blast-card ops L1 before)
+  (set! *blast-cards* (+ *blast-cards* 1))
+  (let* ((names (pad:robot-names ops))
+         (toks (pad:hl-tokens (pad:v-src L1)))
+         (defs (pad:blast-def-rows L1 toks names))
+         (uses (pad:blast-minus (pad:blast-sorted (pad:blast-rows L1 (pad:blast-all-points toks names)) (list))
+                                defs))
+         (d0 (car before))
+         (counts (pad:blast-counts toks names (cadr before) ops))
+         (d1 (pad:blast-dirty-now))
+         (grown (pad:blast-grown d1 d0))
+         (dirty (pad:blast-dirty-names d1))
+         (ok (and (pad:blast-counts-ok? counts)
+                  (pad:blast-subset? grown names)
+                  (pad:blast-subset? names dirty)))
+         (card (list names uses (pad:blast-row-names L1 uses) counts grown dirty
+                     (if ok "agree" "disagree"))))
+    (set! *blast-last* card)
+    (if ok
+        #f
+        (begin
+          (set! *blast-disagree* (+ *blast-disagree* 1))
+          (newline) (display "M11_BLAST_DISAGREE ") (display (pad:blast-line card)) (newline)))
+    card))
+
+(define (pad:blast-first xs n)
+  (if (or (null? xs) (<= n 0)) (list) (cons (car xs) (pad:blast-first (cdr xs) (- n 1)))))
+(define (pad:blast-commas xs)
+  (cond
+    ((null? xs) "")
+    ((null? (cdr xs)) (car xs))
+    (#t (string-append (car xs) ", " (pad:blast-commas (cdr xs))))))
+
+;; Kid words for a card.
+(define (pad:blast-say card)
+  (let* ((names (car card))
+         (shown (caddr card))
+         (n (length shown))
+         (more (- n *blast-max-shown*)))
+    (string-append
+      "changing " (pad:robot-names-str names)
+      (cond
+        ((= n 0) " moves nothing else")
+        ((= n 1) (string-append " moves 1 place: " (car shown)))
+        (#t (string-append " moves " (number->string n) " places: "
+                           (pad:blast-commas (pad:blast-first shown *blast-max-shown*))
+                           (if (> more 0) (string-append " and " (number->string more) " more") ""))))
+      ". enter keeps, ctrl-z says no")))
+
+;; sites=name:soft/engine:+engine-added (engine total is stale after a
+;; rebind, aura#4364)
+;; BLAST names=hello.bye uses=6.7.11 sites=hello:3/4:+1.bye:2/2:+0 grown=hello.bye dirty=hello.bye verdict=agree
+(define (pad:blast-counts-str cs)
+  (if (null? cs)
+      ""
+      (string-append (car (car cs)) ":" (number->string (cadr (car cs))) "/"
+                     (number->string (caddr (car cs)))
+                     ":+" (number->string (- (caddr (car cs)) (pad:nth (car cs) 3)))
+                     (if (null? (cdr cs)) "" ".")
+                     (pad:blast-counts-str (cdr cs)))))
+(define (pad:blast-line card)
+  (string-append "BLAST names=" (pad:ws-names-str (car card))
+                 " uses=" (pad:who-nums-str (cadr card))
+                 " sites=" (pad:blast-counts-str (pad:nth card 3))
+                 " grown=" (pad:ws-names-str (pad:nth card 4))
+                 " dirty=" (pad:ws-names-str (pad:nth card 5))
+                 " verdict=" (pad:nth card 6)))
