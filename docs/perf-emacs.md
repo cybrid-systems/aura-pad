@@ -105,7 +105,9 @@ The existing 147 M7 checks and the host DIRTY audit still pass.
 
 ## Honest floor
 
-A twelve-row insert now costs about 3.6 ms:
+In-Soft numbers. The pty numbers, which add the read loop, `display`,
+the pipe and the C diff, are in the gap round section below. A
+twelve-row insert now costs about 3.6 ms:
 
 - ~4 Soft calls (`play-cmd!`, `play-snap`, `lc-line!`, `lc-scan`) ≈ 1.1 ms;
 - re-lexing the row tail ≈ 0.5 ms;
@@ -130,6 +132,74 @@ The remaining floor is Aura's per-call cost (#4350: calls *and*
 primitives get slower as the program defines more names). Removing that
 would cut these numbers about 3× again.
 
+## Gap round: where the pty milliseconds went, and what changed
+
+The in-Soft numbers above exclude the terminal path. On the pty bench
+(below) the pad was ~8 ms per insert and ~7 ms per cursor key while the
+in-Soft gate said ~4 / ~1.5 ms. Breakdown, measured on this box
+(`out/gap/STATE.txt`, ms per key, insert / cursor):
+
+| piece | how measured | ms |
+|---|---|---|
+| C `pad_play` + pipes + pty + docker | Soft replaced by a child that replays captured frames | 0.29 / 0.26 |
+| + a resident aura process (read-line, display a 1 KB frame, pad loaded) | same, child is aura | 0.45 / 0.54 |
+| Soft key protocol: `play-line!` wrapper → key-step → table lookups | in-process timers | ~2.0 per IN line (backspace 2.5; an arrow is 3 lines, ~1.5 each) |
+| Soft command (gate + apply) | in-process | 0.62 |
+| Soft frame (`play-snap` / `lc-line!`) | in-process | 3.2 |
+| emit (`play-emit!` + `display`) | in-process | 0.45 / 0.2 |
+| terminal write volume | `scripts/term_model.py` over the same streams | full repaint 595–1 222 B/frame |
+
+So the process boundary, pipes and docker cost ~0.3–0.5 ms, and the
+rest was Soft. The per-key Soft protocol was the surprise: an arrow
+key went through three `IN` lines, each a chain of four closure calls
+(~0.27 ms each with the pad loaded).
+
+Changes (Emacs analogue in brackets; C still decides nothing about
+text or keys):
+
+- **One Soft entry per key** [`command_loop_1` direct commands].
+  `c/pad_play.c` sends one `IN b1 b2 … bn` line per `read()`, so an arrow
+  is one line. `soft/pad/play_in.aura` `pad:play-step!` looks the line up
+  with builtins. A single byte uses a memo of the idle key-step result
+  (`*pi-kb*`/`*pi-kc*`). A whole arrow sequence uses `*pi-seq-lines*`.
+  Left/right/home/end on one row with the same name under the cursor,
+  and typing or backspace inside a row, are done inline. They go
+  straight to `pad:lc-line!` (only row l changed, so no `try_window_id`
+  check is needed). Anything else, such as a split escape, several keys
+  in one read or byte 15, still goes through the old byte-by-byte path,
+  one frame per command. `gap_test.aura` checks that every frame is
+  byte-identical to the old path (260 keys; batched lines equal
+  single-byte lines).
+- **Flat line scanner** [jit-lock fontifies one line]. `pad:lc-scan` is
+  now one named let with a token-mode variable, where it used to enter
+  an inner named let per token. Entering one of the pad's large named
+  lets costs ~0.1–0.25 ms with the pad loaded. A tiny one costs ~20 µs
+  (aura#4350 comment). A step costs ~0.02 ms. Codes become strings with
+  `list->string` (chars are ints; `map integer->char` over 10 codes
+  took 115 µs vs 4 µs). The name walk is skipped when the tape letter at
+  the cursor is not S/K/Q/M.
+- **C writes only changed cells** [`update_frame` / `update_window_line`,
+  `scrolling_window`]. On a tty, `c/snap.c` compares Soft's previous and
+  new cells (char, highlight class, mark, cursor) per DIRTY row. It
+  rewrites the first..last changed cell and uses `\e[K` when a row got
+  shorter. Title, say and legend are rewritten only when they change.
+  A block shifted by ±1 row (enter/join) is moved with IL/DL inside a
+  scroll region. `stdout` is fully buffered, so one `write()` goes out
+  per frame. `pad_view --replay` + `scripts/term_model.py` check that
+  the diff screens equal full repaints. Write volume per frame went from
+  595–1 222 bytes to 88–106 bytes (pty median 81 B per insert, 83 B per
+  cursor key).
+
+Where an insert's ~4.5 ms goes now (pty): ~0.45 ms process, pipes and C
+(above). The rest is Soft. `pad:lc-line!` takes ~2.3 ms: the prefix-cut
+walk, the scan and the row walk, three named-let entries plus list and
+string builtins. The `play-step!` entry and the frame string take
+~0.5 ms, and ~3 closure calls (`play-step!`, `lc-line!`, `lc-scan`)
+take ~0.8 ms. A cursor key (~1.9 ms) is ~0.5 ms process plus one Soft
+entry, the frame string and `display`. Each of those is a Soft cost
+that is ~3× lower with an empty workspace (Aura #4350), so the floor
+is still Soft call cost, not the C side or the terminal.
+
 ## Same-harness comparison with vim and Emacs
 
 `scripts/bench_editors.sh` runs all three editors on this box, inside
@@ -145,35 +215,41 @@ backspace) also waits 1.2 s for deferred output.
 bash scripts/bench_editors.sh | tee out/bench/editors.txt   # not a smoke
 ```
 
-Medians, two runs (`out/bench/editors.txt`, 2026-10-06, vim 9.2,
-GNU Emacs 30.2, pad = `pad_play --ansi` → Soft `play.aura`):
+Medians, two runs each, same box, vim 9.2, GNU Emacs 30.2, pad =
+`pad_play --ansi` → Soft `play.aura`. "before" = tree `94b1fa0`
+(`out/bench/editors_before_gap.txt`), "after" = tree `93dfd3c`
+(`out/bench/editors_gap.txt`); vim and Emacs columns from the after run:
 
-| ms per key (done) | aura-pad | vim `-u NONE`, syntax on | `emacs -nw -Q` (font-lock) |
-|---|---|---|---|
-| insert | 7.9 / 8.2 | 0.34 / 0.32 | 0.65 / 0.67 |
-| cursor | 6.8 / 7.0 | 0.23 / 0.26 | 0.60 / 0.64 |
-| string open (`"`) | 8.3 / 8.7 | 0.44 / 0.45 | 0.90 / 0.96 |
-| string close (backspace) | 12.3 / 10.1 | 0.41 / 0.49 | 0.59 / 0.48 |
+| ms per key (done) | aura-pad before | aura-pad after | vim `-u NONE`, syntax on | `emacs -nw -Q` (font-lock) |
+|---|---|---|---|---|
+| insert | 7.9 / 8.2 | **4.6 / 4.5** | 0.33 / 0.36 | 0.68 / 0.70 |
+| cursor | 6.8 / 7.0 | **1.8 / 1.9** | 0.24 / 0.25 | 0.64 / 0.66 |
+| string open (`"`) | 8.3 / 8.7 | **7.2 / 7.3** | 0.47 / 0.34 | 1.02 / 0.75 |
+| string close (backspace) | 12.3 / 10.1 | **6.6 / 6.4** | 0.41 / 0.40 | 0.55 / 0.60 |
+| bytes to the terminal per key (insert / cursor) | ~600–1 200 per frame | 81 / 83 | 44 / 1 | 16 / 65 |
 
 What this does and does not show:
 
-- vim and Emacs are **10–30× faster per key** than aura-pad on this box.
-  aura-pad is under one frame; it is not close to them.
-- It measures bytes on a pty, not photons. Every editor here draws
-  differently: vim and Emacs send minimal cursor-addressed updates, the
-  pad sends a full SNAP block through a pipe to `pad_play`, which parses
-  and redraws. The pad number includes the Soft read loop, the
-  escape-sequence decode (an arrow key is three `IN` lines, two of them
-  `pending`), the SNAP `display`, the pipe and the C parse + blit. The
-  in-Soft numbers above (insert ~4 ms, cursor ~1.3–1.7 ms) exclude all
-  of that, which is why they are lower than the pty numbers.
+- vim and Emacs are still **3–21× faster per key** than aura-pad on this
+  box. Before this round the gap was 10–30×. aura-pad is well under one
+  60 fps frame, but it does not match them.
+- It measures bytes on a pty, not photons. All three now send
+  cursor-addressed diffs of similar size (pad 81–83 B per key). The
+  pad number still includes the Soft read loop, the SNAP `display`, the
+  pipe and the C parse + diff, ~0.45 ms of it outside Soft (see the gap
+  round section).
+- Startup (`startup_ms`) is not a per-key number. It was 0.42 s before
+  and 1.4–1.7 s in the after run, which built a 256-entry key table at
+  load. That table is now a memo filled on first use (`4075523`). One
+  pad-only rerun gives startup 0.43 s and the same per-key numbers
+  (insert 4.6 ms, cursor 1.8 ms, 80 / 82 B).
 - The work per key is not the same. The pad recomputes HL letters and
   def/use marks for the name under the cursor and checks every frame
   against an exact model; vim's regex syntax and Emacs's font-lock do
   their own (different) amounts of work.
 - Emacs defers contextual refontification after an unclosed `"`
   (`jit-lock-context-time`, 0.5 s). In this run no extra output arrived
-  within 1.2 s (`all_output` = `done`), so the 0.9 ms Emacs number covers
+  within 1.2 s (`all_output` = `done`), so the 0.75–1.0 ms Emacs number covers
   only the immediate redisplay.
 - One key of vim's left/right cursor pair produced no terminal output,
   so only half of vim's cursor samples are counted (n=60 of 120).

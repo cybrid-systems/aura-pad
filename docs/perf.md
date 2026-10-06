@@ -12,7 +12,39 @@ bash scripts/smoke_perf.sh    # pad/perf.aura → PAD_PERF_OK + PAD_M7_PERF_OK,
 bash scripts/smoke_m7.sh      # tests + DIRTY audit + perf → PAD_M7_OK
 ```
 
-## Now: Emacs algorithms ported (see [`perf-emacs.md`](perf-emacs.md))
+## Now: end-to-end pty latency (gap round, see [`perf-emacs.md`](perf-emacs.md))
+
+`scripts/bench_editors.sh` covers keystroke → terminal output through a
+pty, with the same file and keys for each editor, two runs each, in ms
+per key. "before" is tree `94b1fa0`; "after" is `93dfd3c` and `4075523`:
+
+| key | pad before | pad after | vim | emacs -nw |
+|-----|-----------|-----------|-----|-----------|
+| insert | 7.9 / 8.2 | **4.6 / 4.5** | 0.33 / 0.36 | 0.68 / 0.70 |
+| cursor | 6.8 / 7.0 | **1.8 / 1.9** | 0.24 / 0.25 | 0.64 / 0.66 |
+| string open | 8.3 / 8.7 | **7.2 / 7.3** | 0.47 / 0.34 | 1.02 / 0.75 |
+| string close | 12.3 / 10.1 | **6.6 / 6.4** | 0.41 / 0.40 | 0.55 / 0.60 |
+
+Bytes written to the terminal per key went from a full repaint
+(595–1 222 B per frame) to 81 / 83 B. vim and Emacs are still 3–21×
+faster. The process, pipes, docker and C cost ~0.45 ms; the rest is
+Soft.
+
+What changed:
+
+- One Soft entry per key (`play_in.aura`; C sends one `IN` line per
+  `read()`).
+- A flat line scanner.
+- A C cell-diff tty update with IL/DL.
+
+The remaining insert time: ~2.3 ms in `pad:lc-line!` (named-let entries
+and builtins), ~0.8 ms in three closure calls, and ~0.5 ms building the
+frame string. A cursor key is one Soft entry plus the frame. Each of
+these is Soft call or primitive cost (Aura #4350). Gate:
+`PAD_GAP_OK`. Its frames are byte-identical to the old path, and the C
+diff screens equal full repaints.
+
+## Before that: Emacs algorithms ported (see [`perf-emacs.md`](perf-emacs.md))
 
 Same Soft binary (`c69e644`), same box. BEFORE is tree `bbc7c04`, AFTER
 is this tree. Numbers are µs per key on the twelve-row page from
@@ -99,8 +131,9 @@ Versus vi / Emacs: we do **not** claim to be faster. Those editors spend
 well under a millisecond of editor time on pages like these. Aura Pad's
 Soft key path is now ~1.3–4 ms. Measured with one pty harness on this
 box (`scripts/bench_editors.sh`, `perf-emacs.md`): vim 0.2–0.5 ms and
-Emacs 0.5–1 ms per key versus aura-pad 7–12 ms end to end, so they are
-10–30× faster. "Feels faster than vi/Emacs" stays the north star; the
+Emacs 0.5–1 ms per key. aura-pad was 7–12 ms end to end and is now
+1.8–7 ms after the gap round (top of this page), so they are still
+3–21× faster. "Feels faster than vi/Emacs" stays the north star; the
 measured Soft floor is below.
 
 ## Aura `c69e644`: #4343 closed, but the per-key time did not drop
@@ -196,3 +229,8 @@ Soft 后（见 perf-emacs.md），12 行页面插入 **~33 → ~3.6 ms**，光�
 也从 ~24 ms 降到 ~7–9 ms，随后闭合 ~14 → ~6–7 ms（逐行区域遍历，遇到
 状态一致的行即停）。剩下的地板是 Soft 每次调用约
 0.26 ms（#4350）。我们**不声称比 vi/Emacs 快**。
+
+端到端（pty，gap 轮）：每键一次 Soft 入口、扁平的行扫描器、C 只写变化的
+单元格（IL/DL），插入 **~8 → ~4.5 ms**，光标 **~7 → ~1.9 ms**，每键写到终端
+的字节从整屏重画 ~600–1200 B 降到 ~81 B。vim 0.3 ms、Emacs 0.7 ms，仍快
+3–21×。进程、管道、docker 和 C 只占 ~0.45 ms，其余是 Soft 调用开销（#4350）。
