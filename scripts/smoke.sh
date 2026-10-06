@@ -48,6 +48,10 @@
 # snapshot via serialize-workspace + .pad sidecar; open is restore
 # (deserialize-workspace, no set-code guess); who still answers
 # (PAD_M12_OK). Play loop does not load book.aura. C unchanged.
+# → M13 aura notebook pad: sexp projection, M5 HL tape, Soft jump +
+# workspace defines, GAPS hygienic-play when clone_macro_body unbound,
+# fixture race DROP (PAD_M13_OK). Play loop does not load aura_pad.aura.
+# C unchanged.
 # → gap round: one Soft entry per key (play_in.aura), flat line scanner,
 # C cell-diff tty update with IL/DL (Soft tests PAD_GAP_TEST_OK, batched
 # lines == byte lines, term model TERM_MODEL_OK; PAD_GAP_OK).
@@ -130,6 +134,8 @@ echo "smoke: m11 Aura-unique features (robot txn undo, engine who, kid why, blas
 bash "$ROOT/scripts/smoke_m11.sh"
 echo "smoke: m12 the book closes (persist probe + open-is-restore)"
 bash "$ROOT/scripts/smoke_m12.sh"
+echo "smoke: m13 aura notebook (sexp pad, hygienic GAPS, fixture race)"
+bash "$ROOT/scripts/smoke_m13.sh"
 
 echo "smoke: gap round (one Soft entry per key + C cell-diff tty update)"
 bash "$ROOT/scripts/smoke_gap.sh"
