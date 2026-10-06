@@ -8,7 +8,7 @@ earlier M7–M12 sketch in [`NEXT.md`](NEXT.md) (kept for its detail) is
 renumbered here; where they disagree, this file wins:
 NEXT's "M7 workspace" is now **M9**, "M8 intent worldline" stays **M8**,
 "M9 dirty SNAP" + "M10 who" merge into **M10** (Soft DIRTY already landed
-in M7). M11 and M12 are done (`m11.md`, `m12.md`).
+in M7). M11–M13 are done (`m11.md`, `m12.md`, `m13.md`).
 
 Why this order: the M6 key path was right at its 50 ms gate (49–54 ms on
 a two-row page) and O(page): a twelve-row kid page cost ~230 ms per
@@ -156,7 +156,17 @@ Shipped ([`m12.md`](m12.md)). Soft owns persist:
   → `PAD_M12_OK`. Play loop does not load `book.aura` (key latency
   unchanged).
 
-## Latency track (runs alongside M8–M12)
+
+## M13 — aura notebook (done)
+
+Shipped ([`m13.md`](m13.md)). Soft tip `c69e644`.
+
+- Third pad `aura`: sexp + M5 HL tape; Soft jump (+ workspace define-lookup).
+- `GAPS hygienic-play` when `clone_macro_body` unbound; refuse mutate.
+- Fixture race: failing helper DROPs. → `PAD_M13_OK`.
+  Play loop does not load `aura_pad.aura`.
+
+## Latency track (runs alongside M8–M13)
 
 Goal: insert < 16 ms on kid pages (one 60 fps frame). **Met** with the
 Emacs ports: insert ~3.6 ms and cursor ~1.3 ms on the twelve-row page on
