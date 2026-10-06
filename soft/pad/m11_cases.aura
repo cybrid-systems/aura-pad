@@ -2,7 +2,7 @@
 ;; Every section is a function; the entry file runs ONE top-level call
 ;; (forms after a set-code + eval-current are read back wrong, docs/m9.md).
 ;; Test globals carry an m11 prefix only (aura#4353). Prints T lines,
-;; M11A_ACC / M11B_ACC n OK per acceptance item, M11STATS, then PAD_M11_TEST_OK.
+;; M11A_ACC / M11B_ACC / M11C_ACC n OK per acceptance item, M11STATS, then PAD_M11_TEST_OK.
 ;; Soft reserved: never bind quote.
 
 (define *m11-fail* 0)
@@ -198,7 +198,7 @@
          (h0 *ws-heals*)
          (r (pad:robot-line-out! (pad:robot-step! "helper" *m11-ops-arity* "faster") "helper")))
     (m11:expect-str "A3_ARITY_DROP" (car r) "DROP")
-    (m11:expect-str "A3_ARITY_SAY" (pad:nth r 2) "aura said no to the whole change, nothing moved")
+    (m11:expect-str "A3_ARITY_SAY" (pad:nth r 2) "the helper's bye gives hello 2 things, it wants 1")
     (m11:expect-true "A3_ARITY_CODE_SAME" (string=? (pad:q-code) code0))
     (m11:expect-true "A3_ARITY_PAGE_SAME" (eq? (pad:es-L *pl-st*) L0))
     (m11:expect-true "A3_ADD_NOT_HALF" (not (string-contains? (pad:q-code) "(* a b)")))
@@ -333,6 +333,115 @@
   (m11:acc-end! "M11B" 3)
   #t)
 
+;; M11c: "why did it break?" in kid words (why.aura).
+(define *m11-tx-type* "mutation-failed: mutation rejected: typecheck after mutate (selective) failed: 1:14: type error: argument 1: expected String, got Int\n  blamed: caller (compile);")
+(define *m11-tx-arity* "mutation-failed: mutation rejected: typecheck after mutate (selective) failed: 1:20: arity mismatch: call 'hello': expected 1 arguments, got 2;")
+(define *m11-tx-arity0* "mutation-failed: mutation rejected: typecheck after mutate (selective) failed: 1:14: arity mismatch: call 'hello': expected 1 arguments, got 0;")
+(define *m11-tx-unbound* "mutation-failed: mutation rejected: typecheck after mutate (selective) failed: 1:14: unbound variable: frob\n  did you mean 'drop'?;")
+(define *m11-tx-parse* "parse-error: 1:21: unexpected ')'")
+(define *m11-tx-caller-type* "mutation-failed: mutation rejected: typecheck after mutate (selective) failed: 8:2: type error: argument 0: expected y, got Int\n  blamed: caller (compile); 12:9: type error: argument 0: expected y, got Int\n  blamed: caller (compile);")
+(define *m11-tx-caller-arity* "mutation-failed: mutation rejected: typecheck after mutate (selective) failed: 2:24: arity mismatch: call 'hello': expected 2 arguments, got 1; arity mismatch: call 'hello': expected 2 arguments, got 1;")
+(define *m11-tc-pet* "re-inferred: 2\ndiagnostics:\n  [3] 1:28: unbound variable: pet\n  did you mean 'set'?\n")
+(define *m11-tc-mixed* "re-inferred: 3\ndiagnostics:\n  [6] 1:20: unbound variable: frob\n  [14] warning: incompatible ground types: expected String, got Int\n")
+
+(define (m11:sec-c1)
+  ;; 1. The Soft table turns the engine's own refusal and diagnostic texts
+  ;;    (captured on c69e644, probes p6 / p9 / p10) into one short kid
+  ;;    sentence; a blamed caller line is named by its define or text.
+  (m11:acc-begin!)
+  (m11:fresh!)
+  (m11:expect-str "C1_TYPE" (pad:why-kid *m11-tx-type* "helper" "greet") "the helper's greet used a number where words go")
+  (m11:expect-str "C1_ARITY" (pad:why-kid *m11-tx-arity* "helper" "bye") "the helper's bye gives hello 2 things, it wants 1")
+  (m11:expect-str "C1_ARITY0" (pad:why-kid *m11-tx-arity0* "macro" "bye") "the macro's bye gives hello 0 things, it wants 1")
+  (m11:expect-str "C1_UNBOUND" (pad:why-kid *m11-tx-unbound* "law" "bye") "the law's bye uses frob, nothing is called that yet")
+  (m11:expect-str "C1_PARSE" (pad:why-kid *m11-tx-parse* "helper" "bye") "the helper's bye has a bracket in the wrong place")
+  (m11:expect-str "C1_CALLER_TYPE" (pad:why-kid *m11-tx-caller-type* "helper" "bye") "the helper's bye does not fit (bye 4)")
+  (m11:expect-str "C1_CALLER_ARITY" (pad:why-kid *m11-tx-caller-arity* "helper" "hello") "the helper's hello now wants 2 things, but bye gives it 1")
+  (m11:expect-str "C1_TYPEVAR" (pad:why-type-word "y") "something else")
+  (m11:expect "C1_LINE" (pad:why-line *m11-tx-caller-type*) 8)
+  (m11:expect-str "C1_OTHER" (pad:why-kid "refused" "helper" "bye") "aura said no to the whole change, nothing moved")
+  (m11:expect-str "C1_KINDS" (pad:ws-names-str (map pad:why-kind (list *m11-tx-type* *m11-tx-arity* *m11-tx-unbound* *m11-tx-parse* "x")))
+                  "type.arity.unbound.brackets.other")
+  ;; typecheck-incremental: pet is a notebook define, so its "unbound" is
+  ;; dropped (aura#4363); frob is not, so it stays; a warning line maps too
+  (m11:expect "C1_TC_PET_DROPPED" (length (pad:why-diags *m11-tc-pet*)) 0)
+  ;; (shown as kinds: a raw "unbound variable" text would trip smoke's Soft-error grep)
+  (m11:expect-str "C1_TC_MIXED" (pad:ws-names-str (map pad:why-kind (pad:why-diags *m11-tc-mixed*))) "unbound.type")
+  (m11:expect-true "C1_TC_MIXED_FROB" (pad:why-has? (car (pad:why-diags *m11-tc-mixed*)) "variable: frob"))
+  (m11:expect-str "C1_TC_WARN_KID" (pad:why-kid (cadr (pad:why-diags *m11-tc-mixed*)) "helper" "greet")
+                  "the helper's greet used a number where words go")
+  (m11:expect-true "C1_BRACKETS_BAD" (not (pad:why-brackets-ok? "(lambda (y) (+ y 2)")))
+  (m11:expect-true "C1_BRACKETS_EXTRA" (not (pad:why-brackets-ok? "(lambda (y) (+ y 2)))")))
+  (m11:expect-true "C1_BRACKETS_OK" (pad:why-brackets-ok? "(lambda (y) (+ y 2))"))
+  (m11:acc-end! "M11C" 1)
+  #t)
+
+(define (m11:sec-c2)
+  ;; 2. Live: aura refuses a robot proposal; the say line tells the kid
+  ;;    which define broke and why, in kid words; the replay that found
+  ;;    the reason leaves nothing behind (one heal, code and page same).
+  (m11:acc-begin!)
+  (m11:fresh!)
+  (let* ((code0 (pad:q-code))
+         (L0 (pad:es-L *pl-st*))
+         (h0 *ws-heals*)
+         (p0 *why-probes*)
+         (r (pad:robot-line-out! (pad:robot-step! "helper" (list (list "hello" "(lambda (x) (* x 2))")
+                                                                 (list "bye" "(lambda (y) (hello y y))")) "faster") "helper")))
+    (m11:expect-str "C2_ARITY_DROP" (car r) "DROP")
+    (m11:expect-str "C2_ARITY_SAY" *pl-say* "the helper's bye gives hello 2 things, it wants 1")
+    (m11:expect-str "C2_ARITY_WHO" (car *why-last*) "bye")
+    (m11:expect-str "C2_ARITY_KIND" (cadr *why-last*) "arity")
+    (m11:expect "C2_PROBED" (- *why-probes* p0) 1)
+    (m11:expect "C2_ONE_HEAL" (- *ws-heals* h0) 1)
+    (m11:expect-true "C2_CODE_SAME" (string=? (pad:q-code) code0))
+    (m11:expect-true "C2_PAGE_SAME" (eq? (pad:es-L *pl-st*) L0))
+    (m11:expect-str "C2_CALLABLE" (try (number->string (hello 3)) (catch (e) "stale")) "4"))
+  (let ((r (pad:robot-line-out! (pad:robot-step! "helper" (list (list "bye" "(lambda (y) (frob y))")) "fun") "helper")))
+    (m11:expect-str "C2_UNBOUND_DROP" (car r) "DROP")
+    (m11:expect-str "C2_UNBOUND_SAY" *pl-say* "the helper's bye uses frob, nothing is called that yet"))
+  ;; a change that breaks the lines that use it: aura blames a caller
+  (let ((r (pad:robot-line-out! (pad:robot-step! "helper" (list (list "hello" "(lambda (x y) (+ x y))")) "two") "helper")))
+    (m11:expect-str "C2_CALLER_DROP" (car r) "DROP")
+    (m11:expect-str "C2_CALLER_SAY" *pl-say* "the helper's hello now wants 2 things, but bye gives it 1"))
+  (if (string=? *m11-gate* "hard")
+      (let ((r (pad:robot-line-out! (pad:robot-step! "helper" *m11-ops-type* "louder") "helper")))
+        (m11:expect-str "C2_TYPE_SAY" *pl-say* "the helper's greet used a number where words go")
+        (m11:expect-str "C2_TYPE_KIND" (cadr *why-last*) "type"))
+      (begin
+        (newline) (display "M11GATE why_type=skipped (needs AURA_MUTATE_TYPE_GATE=hard)") (newline)))
+  ;; brackets: the engine would close a missing ")" by itself, so the
+  ;; Soft gate refuses first, before any snapshot
+  (let* ((g0 (pad:pen-gen))
+         (r (pad:robot-line-out! (pad:robot-step! "helper" (list (list "bye" "(lambda (y) (+ y 2)")) "short") "helper")))
+    (m11:expect-str "C2_BRACKETS" (cadr r) "brackets")
+    (m11:expect-str "C2_BRACKETS_SAY" *pl-say* "the helper's brackets do not match")
+    (m11:expect "C2_BRACKETS_GEN" (- (pad:pen-gen) g0) 0))
+  (m11:acc-end! "M11C" 2)
+  #t)
+
+(define (m11:sec-c3)
+  ;; 3. A KEEP whose typecheck-incremental only reports the false
+  ;;    "unbound" of a notebook define (aura#4363) is not turned into a
+  ;;    warning: the say line stays the normal KEEP sentence. A refusal
+  ;;    blamed on a caller line names that line.
+  (m11:acc-begin!)
+  (m11:fresh!)
+  (let ((r (pad:robot-line-out! (pad:robot-step! "helper" (list (list "bye" "(lambda (y) (+ y (string-length pet)))")) "pet") "helper")))
+    (m11:expect-str "C3_KEEP" (car r) "KEEP")
+    (m11:expect-true "C3_TC_SAID_PET" (pad:why-has? *robot-tc-raw* "variable: pet"))
+    (m11:expect "C3_NO_FALSE_WARN" (length *robot-diags*) 0)
+    (m11:expect-str "C3_SAY" *pl-say* "the helper changed bye, ctrl-z takes it all back"))
+  ;; a type refusal blamed on a caller line: bye now wants words, (bye 4)
+  ;; gives it a number
+  (if (string=? *m11-gate* "hard")
+      (let ((r (pad:robot-line-out! (pad:robot-step! "helper" (list (list "bye" "(lambda (y) (string-append pet y))")) "pet") "helper")))
+        (m11:expect-str "C3_CALLER_TYPE_DROP" (car r) "DROP")
+        (m11:expect-str "C3_CALLER_TYPE_SAY" *pl-say* "the helper's bye does not fit (bye 4)"))
+      #f)
+  (m11:acc-end! "M11C" 3)
+  #t)
+
 (define (m11:outro)
   (newline)
   (display "M11STATS ") (display (pad:robot-stats-str))
@@ -351,4 +460,7 @@
   (m11:sec-b1)
   (m11:sec-b2)
   (m11:sec-b3)
+  (m11:sec-c1)
+  (m11:sec-c2)
+  (m11:sec-c3)
   (m11:outro))
