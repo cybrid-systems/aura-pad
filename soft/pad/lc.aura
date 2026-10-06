@@ -348,7 +348,13 @@
 ;; so the memo is checked by content and reused whole: closing a string
 ;; just opened (or opening it again) brings every row below back at once.
 (define *lc-tail* #f)
+;; (memo records-below-after-that-walk dirty-below nopen-delta): what
+;; swapping that memo back does, valid while the rows below are still
+;; equal? to those records -- the hit is then O(1), no per-row pass
+(define *lc-tann* #f)
+(define *lc-thit* 0)      ; O(1) memo swaps (tests)
 (define *lc-hint* #f)                  ; entry lc-line! just scanned, or #f
+(define *lc-pre* #f)                   ; row-l entry play_in already scanned, or #f
 (define *lc-rowv* (make-vector 0 ""))  ; row strings of the last frame
 (define *lc-body* "")                  ; the row strings joined (SNAP body)
 (define *lc-L* (list))                 ; editor lines of the last frame
@@ -367,7 +373,9 @@
   (set! *lc-recv* (make-vector 0 0))
   (set! *lc-nopen* 0)
   (set! *lc-tail* #f)
+  (set! *lc-tann* #f)
   (set! *lc-hint* #f)
+  (set! *lc-pre* #f)
   (set! *lc-rowv* (make-vector 0 ""))
   (set! *lc-body* "")
   (set! *lc-L* (list))
@@ -621,6 +629,9 @@
 ;; vector-set!, see the header note).
 (define (pad:lc-line! L l col)
   (let* ((codes (list-ref L l))
+         ;; *lc-pre*: play_in.aura already scanned this row the same way
+         (pre (and *lc-pre* (eq? (car *lc-pre*) codes) *lc-pre*))
+         (h1 (set! *lc-pre* #f))
          (old (vector-ref *lc-recv* l))
          (oe (car old))
          (news (list->string codes))
@@ -635,21 +646,23 @@
                 0))
          ;; keep old tokens whose end AND lookahead char lie before p
          ;; (b < p); drop the rest from the reversed token / sym lists
-         (cut (let walk ((xs (list-ref oe 8)) (m 0) (mr 0))
+         (cut (if pre (list (list) 0) (let walk ((xs (list-ref oe 8)) (m 0) (mr 0))
                 (if (and (pair? xs) (>= (caddr (car xs)) p))
                     (let ((kd (car (car xs))))
                       (walk (cdr xs) (+ m 1)
                             (if (or (string=? kd "S") (string=? kd "K")
                                     (string=? kd "Q") (string=? kd "M"))
                                 (+ mr 1) mr)))
-                    (list xs mr))))
+                    (list xs mr)))))
          (acc0 (car cut))
          (r (if (pair? acc0) (caddr (car acc0)) 0))
-         (le (begin (set! *lc-retok* (+ *lc-retok* 1))      ; pad:lc-entry, inlined
+         (le (if pre
+                 pre
+                 (begin (set! *lc-retok* (+ *lc-retok* 1))      ; pad:lc-entry, inlined
                    (pad:lc-scan news codes r acc0
                                 (if (> r 0) (list (substring (list-ref oe 3) 0 r)) (list))
                                 (drop (list-ref oe 7) (cadr cut))
-                                (list-ref oe 9)))))
+                                (list-ref oe 9))))))
     (if (not (list-ref old 2))
         (begin (set! *lc-hint* le) (pad:lc-generic! L l col))
         (let* ((tp-l (list-ref le 3))
@@ -673,6 +686,7 @@
                (rs (vector->list *lc-recv*))
                (ws (vector->list *lc-rowv*))
                (keep (- (length rs) l))
+               (tm0 *lc-tail*)
                ;; walk rows l, l+1, ... -> (records rows nopen dirty)
                (res
                 (let rw ((rr (drop rs l)) (ww (drop ws l)) (i l) (ins (list-ref oe 9))
@@ -724,6 +738,15 @@
                                    (cons (string-append "T " str "\nH " (list-ref le 3) "\nM " mrow "\n") wacc)
                                    (cons i dacc)
                                    (+ nopen (if (list-ref le 4) 1 0) (if (list-ref oe 4) -1 0)))))
+                            ((and hit *lc-tann* (eq? (car *lc-tann*) tm) (equal? rr (cadr *lc-tann*)))
+                             ;; memo rows back whole, rows below exactly as that
+                             ;; walk left them: dirty rows and the open-row
+                             ;; delta are the ones it recorded
+                             (set! *lc-thit* (+ *lc-thit* 1))
+                             (list (append (reverse racc) (list-ref tm 6))
+                                   (append (reverse wacc) (list-ref tm 7))
+                                   (+ nopen (list-ref *lc-tann* 3))
+                                   (append (reverse dacc) (caddr *lc-tann*))))
                             (hit
                              ;; memo rows back whole; one pass for dirty rows
                              ;; and the open-row count of the swapped tails
@@ -806,6 +829,12 @@
                (recs (append (reverse (drop (reverse rs) keep)) (car res)))
                (rows (append (reverse (drop (reverse ws) keep)) (cadr res)))
                (nopen (caddr res)))
+          (if (not (eq? *lc-tail* tm0))
+              ;; this walk saved a memo: record what swapping it back does
+              (set! *lc-tann*
+                    (list *lc-tail* (drop recs (+ l 1)) (cdr (list-ref res 3))
+                          (- (+ *lc-nopen* (if (list-ref le 4) 1 0) (if (list-ref oe 4) -1 0))
+                             nopen))))
           (set! *lc-recv* (list->vector recs))
           (set! *lc-rowv* (list->vector rows))
           (set! *lc-body* (apply string-append rows))

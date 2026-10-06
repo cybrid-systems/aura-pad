@@ -89,12 +89,7 @@
 ;; recursive call ~0.3 ms with the pad loaded: opening a string dirties
 ;; every row below it).
 (define (pad:v-dirty-csv xs)
-  (if (null? xs)
-      ""
-      (let csv ((ys (cdr xs)) (acc (list (number->string (car xs)))))
-        (if (null? ys)
-            (apply string-append (reverse acc))
-            (csv (cdr ys) (cons (number->string (car ys)) (cons "," acc)))))))
+  (if (null? xs) "" (string-join (map number->string xs) ",")))
 
 ;; The whole SNAP block. Tokenize once; optional dirty row list.
 (define (pad:snap-text title L l col say)
