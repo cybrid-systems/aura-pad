@@ -37,9 +37,13 @@ M6 “加c”：一个很薄的 C 画面。编辑、高亮、跳转标记、按�
 小朋友看的话都在 Soft；Soft 把它们打包成 `SNAP v1 pad` 块，C 只负责
 把字母换成颜色画到终端（以及把原始按键字节转发给 Soft）。
 按键延迟：M6 缓存后小页面约 49/29 ms；M7 行级缓存后约 23/12 ms，
-12 行页面插入约 230→26–30 ms（见 docs/perf.md）。不声称比 vi/Emacs 快。
+12 行页面插入约 230→26–30 ms；Soft tip `c69e644` 上约 33–35/17–19 ms
+（#4343 关闭但没变快，#4350；见 docs/perf.md）。不声称比 vi/Emacs 快。
 M8 欢迎卡 + 意图世界线：首帧欢迎词、`goal:` 命令、两条助手赛跑、
 CARD 行、门卫（含 capability）、撤销 KEEP → `PAD_M8_OK`。
+M9 工作区笔记本：ctrl-s 才 `set-code` + `eval-current`（打字零次），
+引擎名字 ⊇ Soft 名字、标记/引用/节点类型、助手笔 KEEP/DROP/REJECT 与
+`ast:restore` 修复 → `PAD_M9_OK`。
 
 - **M0** races `map-gentle` (mid 1) and `map-bold` (mid 2) on 24 seeded
   key steps toward the goal fixture `"hi aura"`. Score is
@@ -93,9 +97,10 @@ CARD 行、门卫（含 capability）、撤销 KEEP → `PAD_M8_OK`。
   find-refs / jump-back with kid reasons (`no-symbol`, `no-def`,
   `no-ref`, `nothing-to-back`), and an honest Soft bridge to tip
   `query:*` / `mutate:*` (`query.aura`: categories, help, find,
-  def-use, mutate summary/rebind). Gaps (`define-lookup`,
-  `query:code`, `query:ref-counts`, `query:node-types`) are listed
-  and filed as Aura issues from aura-pad — no fake Soft APIs.
+  def-use, mutate summary/rebind). The former gaps (`define-lookup`,
+  `query:code`, `query:ref-counts`, `query:node-types`; filed as #4344 and
+  #4345) are bound on Soft tip `c69e644`. The smoke prints `USED ...` and
+  `GAPS none`. No fake Soft APIs.
   Tests: Python model, Soft checks, `PAD_M5_OK`. See
   [`docs/m5.md`](docs/m5.md).
 - **M6** adds a **thin C viewport** ("加c"). Soft (`view.aura`) packs the
@@ -123,7 +128,20 @@ CARD 行、门卫（含 capability）、撤销 KEEP → `PAD_M8_OK`。
   checks). C unchanged. Soft floors published (#4343 + in-place
   `vector-set!` cost). Tests: `PAD_M7_TEST_OK`, `PAD_M7_DIRTY_OK`,
   `PAD_PERF_OK`, `PAD_M7_PERF_OK`, `PAD_M7_OK`. See
-  [`docs/m7.md`](docs/m7.md), [`docs/m8.md`](docs/m8.md).
+  [`docs/m7.md`](docs/m7.md), [`docs/m8.md`](docs/m8.md). On Soft tip
+  `c69e644` the same keys measure ~33–35 / 17–19 ms. #4343 closed but did
+  not speed up the file runner (#4350). The floor is ~0.3 ms per Soft
+  call.
+- **M9 workspace notebook** — `ws.aura`: ctrl-s (byte 19) runs one
+  `set-code` + `eval-current` of the page plus a char-code row define.
+  Typing makes zero `set-code` calls. Engine names (`define-lookup`) are
+  compared with Soft find-defs names (missing/extra printed). Marks
+  `name@row:col`, `query:ref-counts` and `query:node-types` lines are
+  printed. Rows come back from `query:code`. `pen.aura`: helper/macro/law
+  rebind steps are REJECTed (kid reasons, no writes), KEEPed (generation
+  +1 exactly, page row re-projected, undo via `ast:restore`) or DROPped
+  (`ast:restore` heal). Tests: 113 Soft checks, `M9_ACC 1..6 OK`,
+  `PAD_M9_OK`. See [`docs/m9.md`](docs/m9.md).
 
 ## Soft smoke
 
@@ -134,7 +152,7 @@ Soft runs natively in that container (no nested docker). Never
 `build_soft4132`. Needs `AURA_SANDBOX=off`.
 
 ```bash
-bash scripts/smoke.sh         # M0..M8 (+ live MiniMax if keyed) → PAD_SMOKE_OK
+bash scripts/smoke.sh         # M0..M9 (+ live MiniMax if keyed) → PAD_SMOKE_OK
 bash scripts/smoke_soft.sh    # M0 → PAD_M0_OK
 bash scripts/smoke_m1.sh      # M1 → PAD_M1_OK
 bash scripts/smoke_m2.sh      # M2 fixtures → PAD_M2_PROPOSE_OK
@@ -146,8 +164,9 @@ bash scripts/smoke_m5.sh      # M5 PAREN_OK, PAD_M5_MODEL_OK, PAD_M5_TEST_OK, PA
 bash scripts/smoke_c.sh       # M6 Soft dump → thin C blit … PAD_C_OK (PAD_C_DOCKER=1 builds C in the image)
 bash scripts/smoke_m7.sh      # M7 Soft tests + DIRTY audit + perf → PAD_M7_OK
 bash scripts/smoke_m8.sh      # M8 welcome card + intent race → PAD_M8_OK
+bash scripts/smoke_m9.sh      # M9 workspace notebook + pen → PAD_M9_OK
 bash scripts/smoke_perf.sh    # key-path ms/key → PAD_PERF_OK + PAD_M7_PERF_OK
-PAD_LIVE=0 bash scripts/smoke.sh     # skip live MiniMax (includes M8)
+PAD_LIVE=0 bash scripts/smoke.sh     # skip live MiniMax (includes M8, M9)
 ```
 
 Scripts may be mode `100644` in git. Always invoke them with `bash`.
