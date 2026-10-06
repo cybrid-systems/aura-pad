@@ -1,12 +1,26 @@
 ;; aura-pad M5 -- Soft pad bridge to landed Aura query:* / mutate:* surfaces.
-;; Honest tip APIs only (probed on /workspace/aura-grok Soft tip). No fake Soft
-;; APIs. Gaps (define-lookup unbound, query:ref-counts exported-but-unbound,
-;; query:code unbound) are documented in docs/m5.md and filed as Aura issues
-;; from aura-pad.
-;; Needs buffer.aura. Soft reserved: never bind quote.
+;; Honest tip APIs only. No fake Soft APIs. The four names M5 once listed
+;; as GAPS (define-lookup, query:code, query:node-types, query:ref-counts;
+;; Aura #4344 / #4345) are probed at load: a name whose call raises
+;; "unbound variable" stays in *pad-q-gaps*, a name that binds moves to
+;; *pad-q-used*. On Soft tip c69e644 all four bind (GAPS none).
+;; Engine errors come back as values (kind msg . 0), not throws; helpers
+;; below turn them into empty results.
+;; Needs buffer.aura + jump.aura (load jump first). Soft reserved: never bind quote.
 
-(require "std/query" all:)
-(require "std/mutate" all:)
+;; The entry file must load soft/pad/std.aura (the std/query + std/mutate
+;; requires) FIRST, before any other pad file: a require inside a file
+;; loaded after the pad stack aliased builtins (null? -> a pad global) on
+;; Soft tip (aura#4351). pad:q-sane? checks.
+
+;; Engine error value: (kind msg . 0), e.g. ("no-workspace" "..." . 0).
+(define (pad:eng-err? v)
+  (and (pair? v) (string? (car v)) (pair? (cdr v)) (string? (car (cdr v)))
+       (number? (cdr (cdr v)))))
+
+;; A caught Soft error that means "this name is not bound on this tip".
+(define (pad:unbound-msg? e)
+  (and (string? e) (string-contains? e "unbound variable")))
 
 ;; --- query discovery (stdlib wrappers, always safe) ---
 (define (pad:q-categories) (query:list-categories))
@@ -34,7 +48,14 @@
 
 (define (pad:q-defines)
   (try
-    (query:defines)
+    (let ((r (query:defines)))
+      (if (pad:eng-err? r) (list) r))
+    (catch (e) (list))))
+
+(define (pad:q-defines-of name)
+  (try
+    (let ((r (query:defines name)))
+      (if (pad:eng-err? r) (list) r))
     (catch (e) (list))))
 
 (define (pad:q-find-by-name name)
@@ -119,9 +140,40 @@
     (newline)
     s))
 
-;; Gap markers Soft cannot honestly call on tip (for smoke asserts).
-(define *pad-q-gaps*
+;; --- #4344 / #4345 surfaces: probed, never assumed ---
+(define *pad-q-names*
   (list "define-lookup" "query:code" "query:ref-counts" "query:node-types"))
+
+;; #t when calling name does not raise "unbound variable" (an engine
+;; "no-workspace" value still means the name binds).
+(define (pad:q-probe name)
+  (try
+    (begin
+      (cond
+        ((string=? name "define-lookup") (define-lookup "pad-probe"))
+        ((string=? name "query:code") (query:code))
+        ((string=? name "query:node-types") (query:node-types))
+        ((string=? name "query:ref-counts") (query:ref-counts 0))
+        (#t 0))
+      #t)
+    (catch (e) (not (pad:unbound-msg? e)))))
+
+(define (pad:q-split-names names want)
+  ;; want: 1 = names that bind, 0 = names that are unbound.
+  (cond
+    ((null? names) (list))
+    ((= (if (pad:q-probe (car names)) 1 0) want)
+     (cons (car names) (pad:q-split-names (cdr names) want)))
+    (#t (pad:q-split-names (cdr names) want))))
+
+;; Builtins resolve right inside this file (aura#4351 guard; tests assert).
+(define (pad:q-sane?)
+  (and (null? (list)) (not (pair? (null? (list 1)))) (not (null? (list 1)))))
+
+;; Names Soft cannot honestly call on this tip (for smoke asserts).
+(define *pad-q-gaps* (pad:q-split-names *pad-q-names* 0))
+;; Names that bind and the pad now calls.
+(define *pad-q-used* (pad:q-split-names *pad-q-names* 1))
 
 (define (pad:q-gap? name)
   (let loop ((xs *pad-q-gaps*))
@@ -130,13 +182,81 @@
       ((string=? name (car xs)) #t)
       (#t (loop (cdr xs))))))
 
-(define (pad:gaps-line!)
-  (display "GAPS ")
-  (let loop ((xs *pad-q-gaps*) (first 1))
-    (if (null? xs)
-        (newline)
-        (begin
-          (if (= first 0) (display "."))
-          (display (car xs))
-          (loop (cdr xs) 0))))
+(define (pad:q-used? name)
+  (let loop ((xs *pad-q-used*))
+    (cond
+      ((null? xs) #f)
+      ((string=? name (car xs)) #t)
+      (#t (loop (cdr xs))))))
+
+(define (pad:q-names-line! tag xs)
+  (display tag)
+  (display " ")
+  (if (null? xs)
+      (display "none")
+      (let loop ((ys xs) (first 1))
+        (if (not (null? ys))
+            (begin
+              (if (= first 0) (display "."))
+              (display (car ys))
+              (loop (cdr ys) 0)))))
+  (newline)
   0)
+
+(define (pad:gaps-line!) (pad:q-names-line! "GAPS" *pad-q-gaps*))
+(define (pad:used-line!) (pad:q-names-line! "USED" *pad-q-used*))
+
+;; (define-lookup name) -> list of (id line col); () on miss, gap or error.
+(define (pad:define-lookup name)
+  (if (pad:q-gap? "define-lookup")
+      (list)
+      (try
+        (let ((r (define-lookup name)))
+          (if (or (pad:eng-err? r) (not (or (null? r) (pair? r)))) (list) r))
+        (catch (e) (list)))))
+
+;; (query:code) -> live workspace source (canonical form) or "".
+(define (pad:q-code)
+  (if (pad:q-gap? "query:code")
+      ""
+      (try
+        (let ((r (query:code)))
+          (if (string? r) r ""))
+        (catch (e) ""))))
+
+;; (query:node-types) -> ((tag . count) ...) or ().
+(define (pad:q-node-types)
+  (if (pad:q-gap? "query:node-types")
+      (list)
+      (try
+        (let ((r (query:node-types)))
+          (if (or (pad:eng-err? r) (not (pair? r))) (list) r))
+        (catch (e) (list)))))
+
+;; (query:ref-counts node-id) -> number or -1.
+(define (pad:q-ref-counts id)
+  (if (pad:q-gap? "query:ref-counts")
+      -1
+      (try
+        (let ((r (query:ref-counts id)))
+          (if (number? r) r -1))
+        (catch (e) -1))))
+
+(define (pad:q-used-line! name)
+  (let* ((recs (pad:define-lookup name))
+         (code (pad:q-code))
+         (nt (pad:q-node-types))
+         (rc (if (pair? recs) (pad:q-ref-counts (car (car recs))) -1)))
+    (display "QUERY used define-lookup=")
+    (display (number->string (length recs)))
+    (display " code_len=")
+    (display (number->string (string-length code)))
+    (display " node_types=")
+    (display (number->string (length nt)))
+    (display " ref_counts=")
+    (display (number->string rc))
+    (newline)
+    recs))
+
+;; M9: hand engine goto-def to jump.aura (Soft HL stays the fallback).
+(if (pad:q-used? "define-lookup") (set! *pad-def-lookup* pad:define-lookup))

@@ -1,0 +1,7 @@
+;; aura-pad std modules. Load this FIRST, before any other pad file:
+;; requiring std/query + std/mutate after the pad stack let builtins such
+;; as null? resolve to pad globals (aura#4351). Kept out of the entry file
+;; itself: a require at the top of the file being run made mutate /
+;; set-code re-run that file. Soft reserved: never bind quote.
+(require "std/query" all:)
+(require "std/mutate" all:)

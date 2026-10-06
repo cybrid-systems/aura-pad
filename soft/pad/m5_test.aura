@@ -2,6 +2,8 @@
 ;; Soft query:* / mutate:* bridge (honest tip surfaces only).
 ;; Numbers match scripts/hl_model.py --check. Ends PAD_M5_TEST_OK.
 ;; No HTTP, no fibers. Soft reserved: never bind quote.
+;; std modules first, before any other load (aura#4351), via std.aura.
+(load "/workspace/aura-pad/soft/pad/std.aura")
 (load "/workspace/aura-pad/soft/pad/buffer.aura")
 (load "/workspace/aura-pad/soft/pad/hl.aura")
 (load "/workspace/aura-pad/soft/pad/jump.aura")
@@ -148,10 +150,16 @@
     (expect "Q_COMMIT" (pad:alist-get (pad:m-summary) ":committed") 2)
     (expect-str "Q_HELP" (pad:q-help "find") "Find first node-id matching name.")
     (expect "Q_CATS" (length (pad:q-categories)) 10)
-    (expect-true "GAP_DEFLOOKUP" (pad:q-gap? "define-lookup"))
-    (expect-true "GAP_QCODE" (pad:q-gap? "query:code"))
-    (expect-true "GAP_QREF" (pad:q-gap? "query:ref-counts"))
-    (expect-true "GAP_QNTYPES" (pad:q-gap? "query:node-types"))
+    ;; Soft tip c69e644 binds these (aura#4345 closed): USED, not GAPS.
+    (expect-true "USED_DEFLOOKUP" (pad:q-used? "define-lookup"))
+    (expect-true "USED_QCODE" (pad:q-used? "query:code"))
+    (expect-true "USED_QREF" (pad:q-used? "query:ref-counts"))
+    (expect-true "USED_QNTYPES" (pad:q-used? "query:node-types"))
+    (expect-str "GAPS_NONE" (if (null? *pad-q-gaps*) "yes" "no") "yes")
+    (expect-true "JUMP_HOOK" (procedure? *pad-def-lookup*))
+    (expect "DEFLOOKUP_HELLO" (length (pad:define-lookup "hello")) 1)
+    (expect-true "QCODE_BEGIN" (string-prefix? (pad:q-code) "(begin "))
+    (expect-true "QNTYPES_PAIR" (pair? (pad:q-node-types)))
     (expect-str "GAP_NO" (if (pad:q-gap? "query:find") "yes" "no") "no")
     0))
 

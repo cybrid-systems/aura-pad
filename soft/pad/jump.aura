@@ -6,6 +6,10 @@
 ;; Hot path: find-defs / find-refs / sym-at walk a token list once
 ;; (no O(n^2) list-ref via pad:hl-nth + length). Soft reserved: never
 ;; bind quote. Needs buffer.aura + hl.aura.
+;; M9: goto-def asks the engine first when query.aura hands over
+;; define-lookup (*pad-def-lookup*); Soft HL tokenize stays the fallback
+;; when the hook is unset, the name is unbound, or the engine has no
+;; record. Kid REJECT reasons are unchanged.
 
 (define (pad:js src point stack) (list src point stack))
 (define (pad:js-src j) (car j))
@@ -110,6 +114,62 @@
 (define (pad:find-refs src name)
   (pad:find-refs-in (pad:hl-tokens src) name))
 
+;; --- M9 engine goto-def ---
+;; #f, or a procedure name -> list of (id line col) (query.aura sets it to
+;; pad:define-lookup when define-lookup binds on tip).
+(define *pad-def-lookup* #f)
+;; Who placed the last goto-def: "hl" (Soft only), "hl+engine" (engine
+;; confirmed the name is born, Soft placed the cursor), "engine".
+(define *pad-jump-src* "hl")
+
+;; Offset of 1-based (line col) in src, or -1.
+(define (pad:src-point src line col)
+  (let ((n (string-length src)))
+    (let loop ((i 0) (ln 1))
+      (cond
+        ((= ln line) (if (<= (+ i (- col 1)) n) (+ i (- col 1)) -1))
+        ((>= i n) -1)
+        ((= (string-ref src i) 10) (loop (+ i 1) (+ ln 1)))
+        (#t (loop (+ i 1) ln))))))
+
+;; First name token at or after p on the same define form (within 64).
+(define (pad:name-tok-from toks p name)
+  (let loop ((ts toks))
+    (cond
+      ((null? ts) -1)
+      (#t
+       (let* ((t (car ts)) (a (cadr t)) (txt (car (cdr (cdr (cdr t))))))
+         (cond
+           ((> a (+ p 64)) -1)
+           ((and (>= a p) (string=? txt name)) a)
+           (#t (loop (cdr ts)))))))))
+
+;; Engine records -> points that land on name. Line/col are taken as
+;; 1-based like eval diagnostics; a record at 0:0 is not usable (tip
+;; c69e644 reports 0:0 for every define, aura#4347).
+(define (pad:eng-def-points toks src recs name)
+  (let loop ((rs recs) (acc (list)))
+    (if (null? rs)
+        (reverse acc)
+        (let* ((r (car rs))
+               (ln (if (and (pair? r) (pair? (cdr r))) (cadr r) 0))
+               (cl (if (and (pair? r) (pair? (cdr r)) (pair? (cddr r))) (caddr r) 0))
+               (p (if (and (number? ln) (number? cl) (> ln 0) (> cl 0))
+                      (pad:src-point src ln cl)
+                      -1))
+               (q (if (< p 0) -1 (pad:name-tok-from toks p name))))
+          (loop (cdr rs) (if (< q 0) acc (cons q acc)))))))
+
+;; Defs for name: engine points when usable, else Soft HL. Sets
+;; *pad-jump-src*.
+(define (pad:defs-for toks src name)
+  (let* ((recs (if *pad-def-lookup* (*pad-def-lookup* name) (list)))
+         (eng (if (pair? recs) (pad:eng-def-points toks src recs name) (list))))
+    (cond
+      ((pair? eng) (set! *pad-jump-src* "engine") eng)
+      ((pair? recs) (set! *pad-jump-src* "hl+engine") (pad:find-defs-in toks name))
+      (#t (set! *pad-jump-src* "hl") (pad:find-defs-in toks name)))))
+
 ;; Result shape: (reason point stack refs) where reason "ok" or kid tag.
 ;; The -in forms take whole-page toks (M7 line cache hands them over so a
 ;; jump key does not re-tokenize); the plain forms tokenize src.
@@ -120,7 +180,7 @@
       ((string=? name "")
        (list "no-symbol" pt (pad:js-stack j) (list)))
       (#t
-       (let ((defs (pad:find-defs-in toks name)))
+       (let ((defs (pad:defs-for toks (pad:js-src j) name)))
          (if (null? defs)
              (list "no-def" pt (pad:js-stack j) (list))
              (let ((dest (car defs)))

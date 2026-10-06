@@ -46,7 +46,10 @@ for want in \
   'T NOSYM=no-symbol OK' \
   'T NODEF=no-def OK' \
   'T Q_REBIND=yes OK' \
-  'T GAP_DEFLOOKUP=yes OK'; do
+  'T USED_DEFLOOKUP=yes OK' \
+  'T GAPS_NONE=yes OK' \
+  'T JUMP_HOOK=yes OK' \
+  'T DEFLOOKUP_HELLO=1 OK'; do
   grep -qF -- "$want" "$T" || { echo "smoke_m5: test missing: $want" >&2; exit 1; }
 done
 echo "smoke_m5: PAD_M5_TEST_OK checks=$checks"
@@ -72,7 +75,8 @@ for want in \
   'QUERY load=ok cats=core.stable.def-use.pattern.filter.marker.schema.module.stats.observability' \
   'QUERY find=hello nodes=1 defuse_len=2' \
   'MUTATE total=2 committed=2 rolled=0 safe=yes' \
-  'GAPS define-lookup.query:code.query:ref-counts.query:node-types' \
+  'USED define-lookup.query:code.query:ref-counts.query:node-types' \
+  'GAPS none' \
   'PAD_M5_OK'; do
   grep -qF -- "$want" "$S" || { echo "smoke_m5: missing: $want" >&2; fail=1; }
 done

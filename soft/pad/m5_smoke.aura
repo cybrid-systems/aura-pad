@@ -1,6 +1,8 @@
 ;; M5 smoke: Soft Aura HL tape, LSP-lite jump/refs, Soft query/mutate bridge.
 ;; Prints HL / JUMP / REJECT / QUERY / MUTATE / GAPS / PAD_M5_OK.
 ;; No HTTP. Soft reserved: never bind quote.
+;; std modules first, before any other load (aura#4351), via std.aura.
+(load "/workspace/aura-pad/soft/pad/std.aura")
 (load "/workspace/aura-pad/soft/pad/buffer.aura")
 (load "/workspace/aura-pad/soft/pad/hl.aura")
 (load "/workspace/aura-pad/soft/pad/jump.aura")
@@ -79,8 +81,10 @@
 (newline)
 (pad:mutate-line!)
 (expect "M_TOTAL" (pad:alist-get (pad:m-summary) ":total") 2)
+(pad:used-line!)
 (pad:gaps-line!)
-(expect "GAP" (if (pad:q-gap? "define-lookup") "yes" "no") "yes")
+(expect "GAP" (if (pad:q-gap? "define-lookup") "yes" "no") "no")
+(expect "USED" (if (pad:q-used? "define-lookup") "yes" "no") "yes")
 
 (if (= *fail* 0)
     (begin (display "PAD_M5_OK") (newline))
