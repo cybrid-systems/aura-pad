@@ -1,0 +1,23 @@
+;; aura-pad M11 tests: Aura-unique features on the notebook stack
+;; (robot.aura: one AI proposal = one typed engine transaction, ctrl-z
+;; undoes it). std modules first (aura#4351), via std.aura. Cases live in
+;; m11_cases.aura; this file makes one top-level call.
+;; Soft reserved: never bind quote.
+(load "/workspace/aura-pad/soft/pad/std.aura")
+(load "/workspace/aura-pad/soft/pad/buffer.aura")
+(load "/workspace/aura-pad/soft/pad/lines.aura")
+(load "/workspace/aura-pad/soft/pad/edit.aura")
+(load "/workspace/aura-pad/soft/pad/hl.aura")
+(load "/workspace/aura-pad/soft/pad/jump.aura")
+(load "/workspace/aura-pad/soft/pad/view.aura")
+;; query.aura before lc.aura: aura#4351 (null? aliasing after require).
+(load "/workspace/aura-pad/soft/pad/query.aura")
+(load "/workspace/aura-pad/soft/pad/lc.aura")
+(load "/workspace/aura-pad/soft/pad/keys.aura")
+(load "/workspace/aura-pad/soft/pad/ws.aura")
+(load "/workspace/aura-pad/soft/pad/pen.aura")
+(load "/workspace/aura-pad/soft/pad/who.aura")
+(load "/workspace/aura-pad/soft/pad/who_pen.aura")
+(load "/workspace/aura-pad/soft/pad/robot.aura")
+(load "/workspace/aura-pad/soft/pad/m11_cases.aura")
+(m11:run-all)

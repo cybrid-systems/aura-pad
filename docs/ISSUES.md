@@ -10,6 +10,7 @@ invents a replacement API for any of them.
 
 | Aura issue | What is wrong | Pad rule until it lands |
 |------------|---------------|-------------------------|
+| [aura#4362](https://github.com/cybrid-systems/aura/issues/4362) | `mutate:atomic-batch` skips the post-mutate type/arity gate in both gate modes: a batch commits a rebind that `mutate:rebind` refuses. `typed-mutate-atomic` gates, but returns only `#t`/`#f` | AI proposals go through `typed-mutate-atomic` (`robot.aura`, M11a) under `AURA_MUTATE_TYPE_GATE=hard`; never `mutate:atomic-batch` for kid code |
 | [aura#4358](https://github.com/cybrid-systems/aura/issues/4358) | No non-blocking stdin poll in Soft (`char-ready?` or similar); `fiber:yield` is a no-op outside serve-async and `eval:async` runs synchronously, so the play loop cannot see that a key is waiting or do idle work between keys | Early frame stays opt-in (`PAD_DEFER=1`). `play.aura` probes `primitive:describe "char-ready?"` at startup; when it exists, the early frame turns on by default and a waiting key skips the settle (`*pi-pending*`). The skip path is tested now with a fake poll (`PAD_TEST_PENDING`, `AP_POLL_SKIP`, `POLL_SKIP_OK`) |
 | [aura#4357](https://github.com/cybrid-systems/aura/issues/4357) | `compile:relower-strategy` answers `:none`; workspace code runs at file speed; one `mutate:rebind` costs 14–19 ms (more than a whole key); file mode has no workspace before `set-code` | No per-key rebind or workspace specialisation. `aura_facts.aura` reports `cap_relower` so a specialising relower shows up in the smoke output |
 | [aura#4356](https://github.com/cybrid-systems/aura/issues/4356) | CLI fibers are OS threads (`fiber:spawn-backend` 2). The main thread does not take the fiber body mutex, and `read-line` pushes to the string heap unlocked, so a fiber allocating strings while main waits in `read-line` corrupts strings or SIGSEGVs | No fiber runs while the play loop is in `read-line`; the early frame and settle stay on the main thread (`perf-aura.md`) |
@@ -88,6 +89,12 @@ Gate `PAD_AURA_PERF_OK`. Filed #4355, #4356.
 Capability round: filed #4357 (relower/rebind) and #4358 (stdin poll),
 and commented on #4356 (fiber-safe hand-back channel). The pad switches
 the poll path on by itself when `char-ready?` appears.
+
+## M11a–d — Aura-unique features (in progress)
+
+[`m11.md`](m11.md), from the ranked list in [`aura-vs-rust.md`](aura-vs-rust.md).
+M11a "undo the robot" is done (`PAD_M11_UNDO_OK`): one AI proposal is one
+`typed-mutate-atomic` transaction, and ctrl-z undoes it whole. Filed #4362.
 
 ## M11 — aura notebook
 

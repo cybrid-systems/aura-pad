@@ -205,9 +205,11 @@ To go further the pad needs cheaper Soft calls
 ([aura#4350](https://github.com/cybrid-systems/aura/issues/4350)) or a
 relower that specialises the key path
 ([aura#4357](https://github.com/cybrid-systems/aura/issues/4357)).
-Without them the remaining choice is to inline `pad:lc-scan`'s common
-case (append at the end of a row) into `play-step!`. That saves about
-one call (~0.3 ms) but duplicates the tokenizer, so it is not done.
+Without them the remaining choice was to inline `pad:lc-scan`'s common
+case (an edit at the end of a row) into `play-step!`. That was done
+later (`0499ae0`, below). It saves 0.5–0.6 ms per insert in process,
+and `GAP3_EOL_ENTRY` checks that the duplicated tokenizer logic matches
+a full scan.
 
 ## 3. Measured: pty bench (`out/bench/editors_aura.txt`)
 
@@ -253,6 +255,27 @@ no poll primitive the settle-skip branch never runs. Insert stays at
 4 ms, 9–12× vim and 5–6× Emacs. Per the profile above, nothing on the
 pad side cuts that by a large factor before #4350 / #4357 land.
 
+### Re-run at `0499ae0` (end-of-row shave, `out/bench/editors_aura3.txt`)
+
+End-of-row edits skip `pad:lc-scan` (the "remaining choice" named in
+the profile above, now done, with a field-by-field check against a
+full scan in `GAP3_EOL_ENTRY`). In process, insert went from 2.9–3.1 to
+2.3–2.6 ms per key. Two pty runs were measured 18:40–19:12 (UTC+8).
+Load average was 2.0–2.9, because other agents' jobs were running and
+the M11 probes ran during run 2.
+
+| ms per key (run 1 / run 2) | pad | pad `PAD_DEFER=1` first / done | vim | emacs -nw |
+|---|---|---|---|---|
+| insert | **3.8 / 3.3** | 3.1 / 3.2 | 0.41 / 0.46 | 0.66 / 0.67 |
+| cursor | 1.86 / 1.74 | 1.76 / 1.78 | 0.25 / 0.31 | 0.67 / 0.67 |
+| string open (`"`) | 6.4 / 5.8 | 4.0 / 4.2 first, 6.1 / 5.9 done | 0.78 / 0.45 | 1.01 / 1.09 |
+| string close (backspace) | 5.9 / 5.5 | 4.0 / 3.8 first, 6.2 / 5.8 done | 0.59 / 0.53 | 0.57 / 0.76 |
+
+Insert is now 3.1–3.8 ms, down from 3.9–4.1. String keys are unchanged,
+because the quote still goes through the scan, and their run-to-run
+noise is about ±0.5 ms. Insert is still about 7–9× slower than vim and
+about 5× slower than Emacs.
+
 ## Issues filed this round
 
 - [aura#4355](https://github.com/cybrid-systems/aura/issues/4355): a
@@ -269,3 +292,6 @@ pad side cuts that by a large factor before #4350 / #4357 land.
 - [aura#4358](https://github.com/cybrid-systems/aura/issues/4358): no
   non-blocking stdin poll / idle scheduling in Soft (repro inline
   in the issue).
+- [aura#4362](https://github.com/cybrid-systems/aura/issues/4362)
+  (M11 round, [`m11.md`](m11.md)): `mutate:atomic-batch` skips the
+  post-mutate type/arity gate.

@@ -31,5 +31,6 @@ exec "${DOCKER[@]}" run --rm -i --entrypoint /usr/local/bin/gosu \
   -e "PAD_BURN_ROUNDS=${PAD_BURN_ROUNDS:-}" \
   -e "PAD_ROUND_DIR=${PAD_ROUND_DIR:-}" \
   -e "PAD_PROPOSE_FILE=${PAD_PROPOSE_FILE:-}" \
+  -e "AURA_MUTATE_TYPE_GATE=${AURA_MUTATE_TYPE_GATE:-}" \
   "${IMG}" \
   dev /usr/bin/stdbuf -oL -eL /workspace/aura-grok/build/aura "$SRC" "$@"

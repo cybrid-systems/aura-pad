@@ -1,0 +1,192 @@
+;; aura-pad M11a -- "undo the robot": one AI proposal = ONE typed engine
+;; transaction, one key takes it all back.
+;; Needs ws.aura, pen.aura, who.aura, who_pen.aura (and what they load).
+;;
+;; A robot proposal is a list of (name lam) edits plus one reason. It is
+;; applied with typed-mutate-atomic: every edit is a mutate:rebind sexpr,
+;; the engine runs them under one MutationBoundary (one composite id in
+;; query:mutations-since), types and arity are checked after the batch
+;; (AURA_MUTATE_TYPE_GATE=hard rejects type errors; arity always), and a
+;; refusal rolls back every edit (all or nothing). mutate:atomic-batch is
+;; NOT used: it skips the type/arity gate (aura#4362).
+;; - ast:snapshot is taken before the transaction; KEEP pushes it with
+;;   the page, so ctrl-z (IN 26, pad:robot-line!) runs ast:restore + one
+;;   eval-current and puts every row of the change back at once.
+;; - A refused transaction still gets ast:restore + eval-current (a
+;;   failed batch can leave stale node ids, aura#4361); the page is not
+;;   touched.
+;; - The Soft pen gate (pad:pen-gate) checks every edit first; a gate NO
+;;   never takes a snapshot and never calls the engine.
+;; Lives in the notebook session (M9 stack), not in play.aura: the play
+;; loop never loads the workspace stack, so key latency is unchanged.
+;; Soft reserved: never bind quote.
+
+(define *robot-undo* (list))   ; entries: (snap L l col names gen0 code0)
+(define *robot-keeps* 0)
+(define *robot-refused* 0)
+(define *robot-gated* 0)
+(define *robot-undos* 0)
+(define *robot-max-ops* 4)
+(define *robot-last-sexprs* (list))
+
+;; "s" -> "\"s\"" with " and \ escaped, built from char codes (a Soft
+;; file literal loses a backslash, aura#4348).
+(define (pad:robot-q s)
+  (let rq ((t s) (i (- (string-length s) 1)) (acc (list 34)))
+    (if (< i 0)
+        (list->string (cons 34 acc))
+        (let ((c (string-ref t i)))
+          (rq t (- i 1) (if (or (= c 34) (= c 92)) (cons 92 (cons c acc)) (cons c acc)))))))
+
+;; (name lam) -> "(mutate:rebind \"name\" \"lam\" \"why\")"
+(define (pad:robot-sexpr op why)
+  (string-append "(mutate:rebind " (pad:robot-q (car op)) " " (pad:robot-q (cadr op))
+                 " " (pad:robot-q why) ")"))
+(define (pad:robot-sexprs ops why)
+  (if (null? ops) (list) (cons (pad:robot-sexpr (car ops) why) (pad:robot-sexprs (cdr ops) why))))
+
+(define (pad:robot-names ops)
+  (if (null? ops) (list) (cons (car (car ops)) (pad:robot-names (cdr ops)))))
+
+(define (pad:robot-dup? xs)
+  (cond
+    ((null? xs) #f)
+    ((member (car xs) (cdr xs)) #t)
+    (#t (pad:robot-dup? (cdr xs)))))
+
+;; Soft gate for the whole proposal: "ok" or the first kid tag.
+(define (pad:robot-gate who ops)
+  (cond
+    ((null? ops) "nothing")
+    ((> (length ops) *robot-max-ops*) "too-long")
+    ((pad:robot-dup? (pad:robot-names ops)) "twice")
+    (#t (pad:robot-gate-each who ops))))
+(define (pad:robot-gate-each who ops)
+  (if (null? ops)
+      "ok"
+      (let ((g (pad:pen-gate who (car (car ops)) (cadr (car ops)))))
+        (if (string=? g "ok") (pad:robot-gate-each who (cdr ops)) g))))
+
+(define (pad:robot-say reason)
+  (cond
+    ((string=? reason "nothing") "the helper did not change anything")
+    ((string=? reason "twice") "the helper tried to change one name twice")
+    ((string=? reason "refused") "aura said no to the whole change, nothing moved")
+    (#t (pad:pen-say reason))))
+
+(define (pad:robot-names-str xs)
+  (cond
+    ((null? xs) "")
+    ((null? (cdr xs)) (car xs))
+    ((null? (cddr xs)) (string-append (car xs) " and " (cadr xs)))
+    (#t (string-append (car xs) ", " (pad:robot-names-str (cdr xs))))))
+
+;; Project every KEEP edit into the page; returns (L tags).
+(define (pad:robot-project L ops tags)
+  (if (null? ops)
+      (list L (reverse tags))
+      (let ((pr (pad:pen-project L (car (car ops)) (cadr (car ops)))))
+        (pad:robot-project (car pr) (cdr ops) (cons (cadr pr) tags)))))
+
+(define (pad:robot-heal! snap)
+  (let ((ok (try (ast:restore snap) (catch (e) #f))))
+    (set! *ws-heals* (+ *ws-heals* 1))
+    (pad:ws-eval!)
+    ok))
+
+;; One robot step. Returns (verdict reason say gen-delta total-delta tags).
+(define (pad:robot-step! who ops why)
+  (pad:who-sync! "kid" "typed" *who-gen*)
+  (let* ((g0 (pad:pen-gen))
+         (t0 (pad:pen-total))
+         (gate (pad:robot-gate who ops)))
+    (if (not (string=? gate "ok"))
+        (begin
+          (set! *robot-gated* (+ *robot-gated* 1))
+          (list "REJECT" gate (pad:robot-say gate) (- (pad:pen-gen) g0) (- (pad:pen-total) t0) (list)))
+        (let* ((code0 (pad:q-code))
+               (snap (ast:snapshot "robot"))
+               (sx (pad:robot-sexprs ops why))
+               (r (try (typed-mutate-atomic sx) (catch (e) #f))))
+          (set! *robot-last-sexprs* sx)
+          (if (eq? r #t)
+              (let* ((g1 (pad:pen-gen))
+                     (t1 (pad:pen-total))
+                     (L0 (pad:es-L *pl-st*))
+                     (pr (pad:robot-project L0 ops (list))))
+                (set! *robot-undo*
+                      (cons (list snap L0 (pad:es-l *pl-st*) (pad:es-col *pl-st*)
+                                  (pad:robot-names ops) g0 code0)
+                            *robot-undo*))
+                (pad:pen-set-page! (car pr))
+                (set! *who-gen* g1)
+                (pad:who-sync! who why g1)
+                (set! *robot-keeps* (+ *robot-keeps* 1))
+                (list "KEEP" "row"
+                      (string-append "the " who " changed " (pad:robot-names-str (pad:robot-names ops))
+                                     ", ctrl-z takes it all back")
+                      (- g1 g0) (- t1 t0) (cadr pr)))
+              (begin
+                (pad:robot-heal! snap)
+                (set! *robot-refused* (+ *robot-refused* 1))
+                (list "DROP" "refused" (pad:robot-say "refused")
+                      (- (pad:pen-gen) g0) (- (pad:pen-total) t0) (list))))))))
+
+;; ctrl-z: undo the last robot KEEP as one unit. Returns
+;; "nothing-to-undo", "agree" (engine code and page both back) or
+;; "disagree" (fails loud with an M11_UNDO_DISAGREE line).
+(define (pad:robot-undo!)
+  (if (null? *robot-undo*)
+      "nothing-to-undo"
+      (let* ((u (car *robot-undo*))
+             (L0 (pad:nth u 1))
+             (code0 (pad:nth u 6)))
+        (set! *robot-undo* (cdr *robot-undo*))
+        (pad:robot-heal! (car u))
+        (set! *pl-st* (pad:es L0 (pad:nth u 2) (pad:nth u 3)
+                              (pad:es-kill *pl-st*) (pad:es-mark *pl-st*)
+                              (pad:es-undo *pl-st*)))
+        (set! *who-gen* (pad:pen-gen))
+        (pad:who-sync! "kid" "typed" *who-gen*)
+        (set! *robot-undos* (+ *robot-undos* 1))
+        (let ((code-ok (string=? (pad:q-code) code0))
+              (page-ok (eq? (pad:es-L *pl-st*) L0)))
+          (if (and code-ok page-ok)
+              "agree"
+              (begin
+                (newline)
+                (display "M11_UNDO_DISAGREE code=") (display (pad:who-bool code-ok))
+                (display " page=") (display (pad:who-bool page-ok))
+                (newline)
+                "disagree"))))))
+
+(define (pad:robot-undo-say r)
+  (cond
+    ((string=? r "agree") "the helper's whole change is gone")
+    ((string=? r "nothing-to-undo") "the helper has not changed anything to undo")
+    (#t "undo got mixed up, the page and aura disagree")))
+
+;; Notebook key face: IN 26 (ctrl-z) undoes the last robot change; every
+;; other line goes to pad:play-line!. Returns what pad:play-line! returns.
+(define (pad:robot-line! line)
+  (if (and (string? line) (string=? line "IN 26") (null? *pl-esc*))
+      (pad:play-ok! (pad:robot-undo-say (pad:robot-undo!)))
+      (pad:play-line! line)))
+
+(define (pad:robot-line-out! r who)
+  (newline)
+  (display (car r))
+  (display " robot who=") (display who)
+  (display " reason=") (display (cadr r))
+  (display " gen+=") (display (number->string (pad:nth r 3)))
+  (display " total+=") (display (number->string (pad:nth r 4)))
+  (display " say=\"") (display (pad:nth r 2)) (display "\"")
+  (newline)
+  r)
+
+(define (pad:robot-stats-str)
+  (string-append "keeps=" (number->string *robot-keeps*)
+                 " refused=" (number->string *robot-refused*)
+                 " gated=" (number->string *robot-gated*)
+                 " undos=" (number->string *robot-undos*)
+                 " heals=" (number->string *ws-heals*)))
