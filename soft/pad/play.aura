@@ -2,7 +2,8 @@
 ;; stdin : "IN <b1> [<b2> ...]" (the raw key bytes of one read() in C,
 ;;         uninterpreted; one byte per line works too),
 ;;         "KEY <word>" (scripted command word), "QUIT".
-;; stdout: SNAP v1 pad blocks only (see view.aura).
+;; stdout: SNAP v1 pad blocks only (see view.aura); SNAP v2 pad after
+;;         C offers "WIRE 2" (soft/pad/wire2.aura, c/snap.c).
 ;; Soft owns everything: the keymap (bytes -> commands), the gate, the
 ;; buffer, cursor, jump stack, HL tape, marks and kid words. C forwards
 ;; bytes and blits; it never learns what a key means.
@@ -23,6 +24,7 @@
 ;; key path live in play_in.aura (loadable, so gap_test.aura can check
 ;; its frames against the keys.aura path).
 (load "/workspace/aura-pad/soft/pad/play_in.aura")
+(load "/workspace/aura-pad/soft/pad/wire2.aura")
 
 ;; PAD_PAGE=big starts on the twelve-row page (scripts/bench_editors.sh)
 (pad:play-reset! (if (equal? (getenv "PAD_PAGE") "big") *lc-big-page* *play-start*))
@@ -45,5 +47,11 @@
 (let loop ()
   (let ((line (read-line)))
     (if (string? line)
-        (if (string=? (pad:play-step! line) "quit") 0 (loop))
+        ;; "WIRE ..." (87 = W) is C's wire offer, not a key
+        (if (string=? (if (and (> (string-length line) 5) (= (string-ref line 0) 87))
+                          (pad:w2-line! line)
+                          (pad:play-step! line))
+                      "quit")
+            0
+            (loop))
         0)))

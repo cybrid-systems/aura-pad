@@ -20,6 +20,9 @@
 (define *pl-stack* (list))
 (define *pl-esc* (list))
 (define *pl-say* "")
+;; wire v2 (soft/pad/wire2.aura, play.aura only): frames carry only the
+;; DIRTY rows. Off until C offers it ("WIRE 2" from pad_play --wire2).
+(define *w2-on* #f)
 (define *pl-keys* 0)
 (define *pl-rej* 0)
 
@@ -419,17 +422,36 @@
                  ((null? dirty) "")
                  ((null? (cdr dirty)) (number->string (car dirty)))
                  (#t (pad:v-dirty-csv dirty)))))
-    (string-append
-      "SNAP v1 pad\n"
-      "TITLE aura pad (Soft) keys=" (number->string *pl-keys*)
-      " no=" (number->string *pl-rej*) "\n"
-      "CURSOR line=" (number->string l) " col=" (number->string col) "\n"
-      "SAY " *pl-say* "\n"
-      "LEGEND " *view-legend* "\n"
-      (if (string=? dcsv "") "" (string-append "DIRTY lines=" dcsv "\n"))
-      "ROWS n=" (number->string (vector-length *lc-rowv*)) "\n"
-      *lc-body*
-      "END\n")))
+    (cond
+      ;; wire v2, one DIRTY row (cursor moves, most edits): inlined; one
+      ;; more Soft call (~0.13 ms, aura#4350) costs about what v2 saves
+      ((and *w2-on* (not *w2-full*) (< *w2-plus* 0) (pair? dirty) (null? (cdr dirty)))
+       (set! *w2-gen* (+ *w2-gen* 1))
+       (string-append
+         "SNAP v2 pad\nGEN " (number->string *w2-gen*) " base=" (number->string (- *w2-gen* 1))
+         "\nTITLE aura pad (Soft) keys=" (number->string *pl-keys*)
+         " no=" (number->string *pl-rej*) "\n"
+         "CURSOR line=" (number->string l) " col=" (number->string col) "\n"
+         "SAY " *pl-say* "\n"
+         "LEGEND " *view-legend* "\n"
+         "ROWS n=" (number->string (vector-length *lc-rowv*))
+         " body=" (number->string (string-length *lc-body*))
+         "\nR " (number->string (car dirty)) "\n"
+         (vector-ref *lc-rowv* (car dirty))
+         "END\n"))
+      (*w2-on* (pad:w2-frame l col dirty *lc-rowv* *lc-body*))
+      (#t
+        (string-append
+          "SNAP v1 pad\n"
+          "TITLE aura pad (Soft) keys=" (number->string *pl-keys*)
+          " no=" (number->string *pl-rej*) "\n"
+          "CURSOR line=" (number->string l) " col=" (number->string col) "\n"
+          "SAY " *pl-say* "\n"
+          "LEGEND " *view-legend* "\n"
+          (if (string=? dcsv "") "" (string-append "DIRTY lines=" dcsv "\n"))
+          "ROWS n=" (number->string (vector-length *lc-rowv*)) "\n"
+          *lc-body*
+          "END\n")))))
 
 ;; M6 key path (whole-page tokenize per text change), kept as the perf
 ;; "before" reference. Do not mix with pad:play-snap in one session.

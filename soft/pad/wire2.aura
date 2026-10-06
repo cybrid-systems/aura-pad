@@ -1,0 +1,102 @@
+;; aura-pad wire v2 -- SNAP v2 pad: send only the rows Soft marked DIRTY.
+;; Needs keys.aura and lc.aura (play.aura loads them first).
+;; Soft reserved: never bind quote.
+;;
+;; Soft still decides everything: which rows changed is the exact M7
+;; DIRTY set (*lc-rowv* / pad:lc-line! / pad:lc-remark!). v2 only stops
+;; resending the rows C already holds:
+;;   SNAP v2 pad
+;;   GEN <g> base=<b>       rows not sent are the rows of frame b
+;;   GEN <g> base=-         full frame: every row is sent
+;;   TITLE / CURSOR / SAY / LEGEND      (as v1)
+;;   ROWS n=<n> body=<bytes of the whole v1 ROWS body>
+;;   R <i> / T / H / M      once per sent row
+;;   END
+;; C (c/snap.c) rebuilds the frame only when b is the frame it holds and
+;; every unsent row exists there, and checks body=; else it drops the
+;; block and asks once for a full frame ("WIRE 2 FULL"). C never guesses.
+;;
+;; Handshake (c/pad_play.c --wire2): C sends "WIRE 2"; Soft answers with a
+;; full v2 frame and stays on v2. "WIRE 2 FULL" -> a full frame now.
+;; "WIRE 1" -> back to v1 frames. Off by default (*w2-on* in keys.aura).
+
+(define *w2-gen* 0)    ; generation of the last v2 frame Soft wrote
+(define *w2-full* #t)  ; the next v2 frame is a full one
+(define *w2-plus* -1)  ; a row C holds that is not *lc-rowv*'s (early frame)
+
+;; "R i\n" + row text for each index (named let inside a define, #4353).
+(define (pad:w2-some ds rowv)
+  (let w2-s ((ds ds) (acc (list)))
+    (if (null? ds)
+        (apply string-append (reverse acc))
+        (w2-s (cdr ds)
+              (cons (vector-ref rowv (car ds))
+                    (cons (string-append "R " (number->string (car ds)) "\n") acc))))))
+
+(define (pad:w2-all rowv n)
+  (let w2-a ((i (- n 1)) (acc (list)))
+    (if (< i 0)
+        (apply string-append acc)
+        (w2-a (- i 1)
+              (cons (string-append "R " (number->string i) "\n")
+                    (cons (vector-ref rowv i) acc))))))
+
+;; One v2 frame. pad:play-snap and the play_in fast path inline the
+;; one-row case with the same bytes. l col: cursor; dirty: Soft's exact
+;; DIRTY rows for this frame relative to the last frame written ((): full
+;; repaint, as v1's absent DIRTY line); rowv: row strings; body: rowv
+;; joined (the v1 ROWS body).
+(define (pad:w2-frame l col dirty rowv body)
+  (let* ((n (vector-length rowv))
+         (base *w2-gen*)
+         (full (or *w2-full* (null? dirty)))
+         (p *w2-plus*)
+         (ds (if (and (not full) (>= p 0) (< p n) (not (member p dirty)))
+                 (cons p dirty)
+                 dirty)))
+    (set! *w2-gen* (+ base 1))
+    (set! *w2-full* #f)
+    (set! *w2-plus* -1)
+    (string-append
+      "SNAP v2 pad\nGEN " (number->string (+ base 1))
+      (if full " base=-\n" (string-append " base=" (number->string base) "\n"))
+      "TITLE aura pad (Soft) keys=" (number->string *pl-keys*)
+      " no=" (number->string *pl-rej*) "\n"
+      "CURSOR line=" (number->string l) " col=" (number->string col) "\n"
+      "SAY " *pl-say* "\n"
+      "LEGEND " *view-legend* "\n"
+      "ROWS n=" (number->string n) " body=" (number->string (string-length body)) "\n"
+      (cond
+        (full (pad:w2-all rowv n))
+        ((null? (cdr ds))
+         (string-append "R " (number->string (car ds)) "\n" (vector-ref rowv (car ds))))
+        (#t (pad:w2-some ds rowv)))
+      "END\n")))
+
+;; Full v2 frame of what Soft last framed (no new frame work).
+(define (pad:w2-full-now!)
+  (set! *w2-full* #t)
+  (display (pad:w2-frame (cadr *pl-st*) (caddr *pl-st*) (list) *lc-rowv* *lc-body*))
+  "go")
+
+;; "WIRE 2" / "WIRE 2 FULL" / "WIRE 1" from C. Not keys: *pl-keys* stays.
+(define (pad:w2-line! line)
+  (cond
+    ((string=? line "WIRE 2")
+     (set! *w2-on* #t)
+     (pad:w2-full-now!))
+    ((string=? line "WIRE 2 FULL")
+     (if *w2-on* (pad:w2-full-now!) "go"))
+    ((string=? line "WIRE 1")
+     (set! *w2-on* #f)
+     (display (string-append
+                "SNAP v1 pad\nTITLE aura pad (Soft) keys=" (number->string *pl-keys*)
+                " no=" (number->string *pl-rej*) "\n"
+                "CURSOR line=" (number->string (cadr *pl-st*))
+                " col=" (number->string (caddr *pl-st*)) "\n"
+                "SAY " *pl-say* "\n"
+                "LEGEND " *view-legend* "\n"
+                "ROWS n=" (number->string (vector-length *lc-rowv*)) "\n"
+                *lc-body* "END\n"))
+     "go")
+    (#t "go")))
