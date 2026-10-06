@@ -1,0 +1,236 @@
+;; aura-pad -- one Soft entry per protocol line for play.aura.
+;; Needs keys.aura, card.aura and who.aura (play.aura loads them first).
+;;
+;; c/pad_play forwards every read() of key bytes as ONE line,
+;; "IN b1 b2 ... bn" (still raw bytes, never interpreted in C). An arrow
+;; key is one line "IN 27 91 68" instead of three. Soft takes the line in
+;; pad:play-step!, which does the dispatch, runs the command, and writes
+;; the frame itself. A cursor move is one Soft call per key and a typed
+;; char or backspace three (pad:play-step!, pad:lc-line!, pad:lc-scan),
+;; instead of the old chain (play-line! wrapper -> keys.aura play-line!
+;; -> key-step -> kv-get per keymap entry -> play-cmd! -> play-snap ->
+;; lc-line! -> lc-scan, and three lines per arrow key).
+;; Every closure call costs ~0.26 ms on Soft tip c69e644 with the pad
+;; loaded (aura#4350), so the chain alone was ~1.5 ms per line and 2.5 ms
+;; for backspace.
+;;
+;; The hot cases are table lookups made with builtins:
+;; - one byte, idle escape state: *pi-keyv*, the idle-state result of
+;;   pad:key-step for each byte 0..255, computed once at load;
+;; - a whole escape sequence on one line ("IN 27 91 68"): *pi-seq-lines*.
+;; Anything else (an escape split over lines, as the smoke streams send
+;; it, several keys in one read, byte 15) goes through pad:pi-bytes!,
+;; which feeds each byte through the same steps the old path used and
+;; writes one frame per accepted command, as before. So every frame is
+;; the frame the old path wrote (checked by gap_test.aura).
+;; No named let captures an outer local here (aura#4353).
+;; Soft reserved: never bind quote.
+
+(define (pad:pi-keyv-list b acc)
+  (if (< b 0)
+      acc
+      (pad:pi-keyv-list (- b 1) (cons (car (pad:key-step (list) b)) acc))))
+(define *pi-keyv* (list->vector (pad:pi-keyv-list 255 (list))))
+
+;; "IN 27 91 X" / "IN 27 79 X" for every arrow X -> its command word.
+(define (pad:pi-seq-lines xs)
+  (if (null? xs)
+      (list)
+      (let ((x (number->string (car (car xs)))))
+        (cons (string-append "IN 27 91 " x)
+              (cons (string-append "IN 27 79 " x) (pad:pi-seq-lines (cdr xs)))))))
+(define (pad:pi-seq-cmds xs)
+  (if (null? xs)
+      (list)
+      (cons (cadr (car xs)) (cons (cadr (car xs)) (pad:pi-seq-cmds (cdr xs))))))
+(define *pi-seq-lines* (pad:pi-seq-lines *arrows*))
+(define *pi-seq-cmds* (pad:pi-seq-cmds *arrows*))
+(define *pi-seq-n* (length *pi-seq-lines*))
+
+;; Tests collect frames instead of writing them.
+(define *pi-collect* #f)
+(define *pi-out* (list))
+(define *pi-fast* 0)    ; lines taken by the table fast path
+(define *pi-slow* 0)    ; lines taken byte by byte
+
+;; M8: KEY goal:... and M10: IN 15 (ctrl-o) on top of keys.aura's
+;; pad:play-line!. Same contract as keys.aura (returns "ok", "pending",
+;; "quit" or a reason; the caller writes the frame). A new name, not a
+;; redefinition: in a loaded file, "(define base f) (define (f ..))"
+;; makes base run the NEW f on Soft tip c69e644 (inline it works), so the
+;; old wrapper moved here looped forever on QUIT (repro filed upstream).
+(define (pad:pi-line! line)
+  (if (and (string? line) (string=? line "IN 15") (null? *pl-esc*))
+      (pad:who-key!)
+      (if (and (string? line) (string-prefix? line "KEY ")
+               (>= (string-length line) 9)
+               (string=? (substring line 4 9) "goal:"))
+          (let ((r (pad:card-goal! (substring line 4 (string-length line)))))
+            (if (car r)
+                (pad:play-ok! (car (cdr (cdr r))))
+                (begin
+                  (set! *pl-rej* (+ *pl-rej* 1))
+                  (set! *pl-say* (car (cdr (cdr r))))
+                  (car (cdr r)))))
+          (pad:play-line! line))))
+
+;; Byte list of "IN b1 b2 ..." or #f when a field is not a byte.
+(define (pad:pi-parse line)
+  (let pi-walk ((s line) (k (string-length line)) (i 3) (acc (list)))
+    (if (>= i k)
+        (if (null? acc) #f (reverse acc))
+        (let* ((sp (string-index s " " i))
+               (j (if (< sp 0) k sp))
+               (v (string->number (substring s i j))))
+          (if (and (number? v) (>= v 0) (< v 256))
+              (pi-walk s k (+ j 1) (cons v acc))
+              #f)))))
+
+;; Byte by byte, exactly what one "IN b" line per byte did before: ctrl-o
+;; (15, idle) asks who wrote the row, every other byte goes through
+;; pad:key-step and pad:play-cmd!. One frame per accepted or rejected
+;; command; a pending escape byte writes nothing. Returns "quit" or "go".
+(define (pad:pi-bytes! line)
+  (set! *pi-slow* (+ *pi-slow* 1))
+  (let ((bs (pad:pi-parse line)))
+    (if (not bs)
+        (begin
+          (pad:play-reject! "unknown")
+          (if *pi-collect* (set! *pi-out* (cons (pad:play-snap) *pi-out*)) (display (pad:play-snap)))
+          "go")
+        (let pi-each ((xs bs))
+          (if (null? xs)
+              "go"
+              (let* ((b (car xs))
+                     (r (if (and (= b 15) (null? *pl-esc*))
+                            (pad:who-key!)
+                            (let ((step (pad:key-step *pl-esc* b)))
+                              (set! *pl-esc* (car (cdr step)))
+                              (if (and (string? (car step)) (string=? (car step) "pending"))
+                                  "pending"
+                                  (pad:play-cmd! (car step)))))))
+                (cond
+                  ((string=? r "quit") "quit")
+                  ((string=? r "pending") (pi-each (cdr xs)))
+                  (#t
+                   (if *pi-collect* (set! *pi-out* (cons (pad:play-snap) *pi-out*)) (display (pad:play-snap)))
+                   (pi-each (cdr xs))))))))))
+
+;; One protocol line: dispatch, run, write the frame. Returns "quit" or
+;; "go". One Soft entry per key on the hot paths: when the lc cache is in
+;; step with the state (*lc-L* is the current lines object), a cursor
+;; move on the row that keeps the name under the cursor (left, right,
+;; home, end) and a typed char or a backspace inside a row are done here
+;; inline -- the same state change as pad:play-cmd! and the same frame as
+;; pad:play-snap (try_cursor_movement, or pad:lc-line! for the edited
+;; row, which needs no try_window_id check because only row l changed).
+;; Everything else calls pad:play-cmd! + pad:play-snap as before.
+(define (pad:play-step! line)
+  (let* ((n0 (string-length line))
+         (in (and (> n0 3) (string=? (substring line 0 3) "IN ")))
+         (idle (null? *pl-esc*))
+         (b (and in idle (string->number (substring line 3 n0))))
+         (c (cond
+              ((not (and in idle)) #f)
+              ((number? b) (if (and (>= b 0) (< b 256) (not (= b 15))) (vector-ref *pi-keyv* b) #f))
+              (#t (let ((t (member line *pi-seq-lines*)))
+                    (if t (list-ref *pi-seq-cmds* (- *pi-seq-n* (length t))) #f)))))
+         (fast (and c (not (equal? c "pending"))))
+         (st *pl-st*)
+         (L (car st))
+         (sync (and fast (= *lc-framed* 1) (eq? L *lc-L*)))
+         (l (cadr st))
+         (col (caddr st))
+         (ln (if sync (list-ref L l) (list)))
+         (len (length ln))
+         (mv (cond
+               ((not sync) -1)
+               ((number? c) -1)
+               ((string=? c "left") (if (> col 0) (- col 1) -1))
+               ((string=? c "right") (if (< col len) (+ col 1) -1))
+               ((string=? c "home") 0)
+               ((string=? c "end") len)
+               (#t -1)))
+         ;; the HL tape letter at the new column says whether a name is
+         ;; there at all (S K Q M); only then walk the row's tokens (a
+         ;; named-let entry costs ~0.1-0.25 ms on Soft tip c69e644)
+         (tape (if (< mv 0) "" (list-ref (car (vector-ref *lc-recv* l)) 3)))
+         (tc (if (< mv (string-length tape)) (string-ref tape mv) 46))
+         (name (cond
+                 ((< mv 0) #f)
+                 ((not (or (= tc 83) (= tc 75) (= tc 81) (= tc 77))) "")
+                 (#t
+                   (let pi-nm ((ts (list-ref (car (vector-ref *lc-recv* l)) 2)) (cc mv))
+                     (if (null? ts)
+                         ""
+                         (let* ((t (car ts)) (kd (car t)))
+                           (if (and (or (string=? kd "S") (string=? kd "K")
+                                        (string=? kd "Q") (string=? kd "M"))
+                                    (>= cc (cadr t)) (< cc (caddr t)))
+                               (list-ref t 3)
+                               (pi-nm (cdr ts) cc))))))))
+         (cur (and name (string=? name *lc-name*)))
+         (ins (and sync (number? c) (>= c 32) (<= c 126) (< len *max-col*)))
+         (del (and sync (not ins) (string? c) (string=? c "back") (> col 0)))
+         (r (cond
+              (cur
+               (set! *pl-st* (list L l mv (list-ref st 3) (list-ref st 4) (list-ref st 5)))
+               (set! *pl-keys* (+ *pl-keys* 1))
+               (set! *lc-moves* (+ *lc-moves* 1))
+               (set! *lc-cur* l)
+               (set! *lc-frames* (+ *lc-frames* 1))
+               (list l))
+              ((or ins del)
+               (let* ((n (length L))
+                      (ln2 (if ins
+                               (append (if (<= col 0) (list) (reverse (drop (reverse ln) (- len col))))
+                                       (cons c (if (<= col 0) ln (drop ln col))))
+                               (append (if (<= (- col 1) 0) (list) (reverse (drop (reverse ln) (- len (- col 1)))))
+                                       (drop ln col))))
+                      (L2 (append (reverse (drop (reverse L) (- n l)))
+                                  (cons ln2 (drop L (+ l 1)))))
+                      (U (cons (list L l col) (list-ref st 5)))
+                      (un (length U))
+                      (col2 (if ins (+ col 1) (- col 1))))
+                 (set! *pl-st*
+                       (list L2 l col2 (list-ref st 3) (list)
+                             (cond
+                               ((<= *undo-max* 0) (list))
+                               ((> un *undo-max*) (reverse (drop (reverse U) (- un *undo-max*))))
+                               (#t U))))
+                 (set! *pl-keys* (+ *pl-keys* 1))
+                 (pad:lc-line! L2 l col2)))
+              (fast (if (equal? (pad:play-cmd! c) "quit") "quit" "snap"))
+              (in (pad:pi-bytes! line))
+              (#t
+               (let ((r1 (pad:pi-line! line)))
+                 (cond
+                   ((string=? r1 "quit") "quit")
+                   ((string=? r1 "pending") "go")
+                   (#t "snap")))))))
+    (cond
+      ((list? r)
+       (set! *pi-fast* (+ *pi-fast* 1))
+       (let* ((st2 *pl-st*)
+              (fr (string-append
+                    "SNAP v1 pad\n"
+                    "TITLE aura pad (Soft) keys=" (number->string *pl-keys*)
+                    " no=" (number->string *pl-rej*) "\n"
+                    "CURSOR line=" (number->string (cadr st2))
+                    " col=" (number->string (caddr st2)) "\n"
+                    "SAY " *pl-say* "\n"
+                    "LEGEND " *view-legend* "\n"
+                    (cond
+                      ((null? r) "")
+                      ((null? (cdr r)) (string-append "DIRTY lines=" (number->string (car r)) "\n"))
+                      (#t (string-append "DIRTY lines=" (pad:v-dirty-csv r) "\n")))
+                    "ROWS n=" (number->string (vector-length *lc-rowv*)) "\n"
+                    *lc-body*
+                    "END\n")))
+         (if *pi-collect* (set! *pi-out* (cons fr *pi-out*)) (display fr))
+         "go"))
+      ((string=? r "snap")
+       (if fast (set! *pi-fast* (+ *pi-fast* 1)) 0)
+       (if *pi-collect* (set! *pi-out* (cons (pad:play-snap) *pi-out*)) (display (pad:play-snap)))
+       "go")
+      (#t r))))

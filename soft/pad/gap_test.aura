@@ -1,0 +1,17 @@
+;; aura-pad gap round tests: one Soft entry per key (play_in.aura) and
+;; the flat line scanner (lc.aura). Cases live in gap_cases.aura; this
+;; file makes one top-level call. Prints T lines, GAPSTATS, then
+;; PAD_GAP_TEST_OK. Soft reserved: never bind quote.
+(load "/workspace/aura-pad/soft/pad/buffer.aura")
+(load "/workspace/aura-pad/soft/pad/lines.aura")
+(load "/workspace/aura-pad/soft/pad/edit.aura")
+(load "/workspace/aura-pad/soft/pad/hl.aura")
+(load "/workspace/aura-pad/soft/pad/jump.aura")
+(load "/workspace/aura-pad/soft/pad/view.aura")
+(load "/workspace/aura-pad/soft/pad/lc.aura")
+(load "/workspace/aura-pad/soft/pad/keys.aura")
+(load "/workspace/aura-pad/soft/pad/card.aura")
+(load "/workspace/aura-pad/soft/pad/who.aura")
+(load "/workspace/aura-pad/soft/pad/play_in.aura")
+(load "/workspace/aura-pad/soft/pad/gap_cases.aura")
+(gp:run)

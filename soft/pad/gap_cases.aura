@@ -1,0 +1,233 @@
+;; aura-pad gap round tests, loaded by gap_test.aura (the one-entry play
+;; path and the flat line scanner against their references).
+;;  GAP_SCAN    pad:lc-scan (one flat loop) == the nested scan it replaced
+;;              (kept below as gp:lc-scan-nested) on generated lines, with
+;;              and without a string carried in
+;;  GAP_FRAMES  pad:play-step! with one "IN b1 .. bn" line per key (what
+;;              c/pad_play sends) writes the same frames as the reference
+;;              path: one "IN b" line per byte through pad:pi-line!
+;;              (keys.aura decode + pad:play-cmd!) and pad:play-snap
+;;  GAP_FAST    the inline cursor / insert / backspace paths were taken
+;; Soft reserved: never bind quote.
+
+(define gp-checks 0)
+(define gp-fails 0)
+(define (gp:expect name ok detail)
+  (set! gp-checks (+ gp-checks 1))
+  (if ok
+      (begin (display "T ") (display name) (display " OK") (newline))
+      (begin
+        (set! gp-fails (+ gp-fails 1))
+        (display "T ") (display name) (display " WANT=") (display detail) (newline))))
+
+;; small LCG, deterministic
+(define gp-seed 7)
+(define (gp:rand k)
+  (set! gp-seed (modulo (+ (* gp-seed 75) 74) 65537))
+  (modulo gp-seed k))
+
+(define (gp:lc-scan-nested s codes r acc0 tp0 sy0 ins)
+  (let* ((n (string-length s)) (cls *lc-cls*) (mx *lc-run-max*) (dots *lc-dots*)
+         ;; syntax-ppss carry: a line that starts inside a string first
+         ;; finishes that string (one T token from 0) before normal
+         ;; lexing. qq = end of that token, -2 = no closing quote here
+         ;; (the whole line is string and it stays open), -1 = not in one.
+         (qq (if (and ins (= r 0))
+                 (if (< (string-index s "\"" 0) 0)
+                     -2                     ; no quote at all: stays open
+                 (let str0 ((j 0))
+                   (cond
+                     ((>= j n) -2)
+                     ((= (string-ref s j) 92) (if (>= (+ j 1) n) -2 (str0 (+ j 2))))
+                     ((= (string-ref s j) 34) (+ j 1))
+                     (#t (str0 (+ j 1))))))
+                 -1))
+         (open-all (= qq -2))
+         (q (cond (open-all n) (#t qq)))
+         (i0 (if (>= q 0) q r)))
+    (let loop ((i i0)
+               (acc (if (> q 0) (cons (list "T" 0 q (substring s 0 q)) acc0) acc0))
+               (tp (if (> q 0) (cons (substring *lc-run-T* 0 (if (> q mx) mx q)) tp0) tp0))
+               (e i0)
+               (sy sy0))
+      (if (>= i n)
+          (let ((toks (reverse acc)))
+            (list codes s toks
+                  (if (> n mx)
+                      (pad:hl-color-from-tokens s toks)
+                      (apply string-append
+                             (reverse (cons (substring dots 0 (- n e)) tp))))
+                  open-all
+                  (if (pair? acc) (car acc) #f)
+                  (if (and (pair? acc) (pair? (cdr acc))) (cadr acc) #f)
+                  sy
+                  acc
+                  ins))
+          (let* ((c (string-ref s i))
+                 (k (if (< c 128) (vector-ref cls c) 0)))
+            (cond
+              ((= k 1)
+               (let sp ((j (+ i 1)))
+                 (if (>= j n)
+                     (loop j acc tp e sy)
+                     (let ((q (string-ref s j)))
+                       (if (and (< q 128) (= (vector-ref cls q) 1))
+                           (sp (+ j 1))
+                           (loop j acc tp e sy))))))
+              ((= k 4)
+               (loop (+ i 1) (cons (list "P" i (+ i 1) (substring s i (+ i 1))) acc)
+                     (cons "P" (cons (substring dots 0 (if (> (- i e) mx) mx (- i e))) tp))
+                     (+ i 1) sy))
+              ((and (= k 2)
+                    (or (= i 0)
+                        (let* ((pc (string-ref s (- i 1)))
+                               (p (if (< pc 128) (vector-ref cls pc) 0)))
+                          (or (= p 1) (= p 4)))))
+               (let num ((j (+ i 1)))
+                 (if (or (>= j n)
+                         (let ((q (string-ref s j)))
+                           (not (and (< q 128) (= (vector-ref cls q) 2)))))
+                     (loop j (cons (list "N" i j (substring s i j)) acc)
+                           (cons (substring *lc-run-N* 0 (if (> (- j i) mx) mx (- j i)))
+                                 (cons (substring dots 0 (if (> (- i e) mx) mx (- i e))) tp))
+                           j sy)
+                     (num (+ j 1)))))
+              ((or (= k 2) (= k 3))
+               (let sym ((j (+ i 1)))
+                 (if (or (>= j n)
+                         (let* ((q (string-ref s j))
+                                (qk (if (< q 128) (vector-ref cls q) 0)))
+                           (not (or (= qk 3) (= qk 2)))))
+                     (let* ((txt (substring s i j))
+                            (w (- j i))
+                            (kd (cond
+                                  ((and (>= w 6) (string=? (substring txt 0 6) "query:")) "Q")
+                                  ((and (>= w 7) (string=? (substring txt 0 7) "mutate:")) "M")
+                                  ((member txt *hl-keywords*) "K")
+                                  (#t "S"))))
+                       (loop j (cons (list kd i j txt) acc)
+                             (cons (substring (cond
+                                                ((string=? kd "S") *lc-run-S*)
+                                                ((string=? kd "K") *lc-run-K*)
+                                                ((string=? kd "Q") *lc-run-Q*)
+                                                (#t *lc-run-M*))
+                                              0 (if (> w mx) mx w))
+                                   (cons (substring dots 0 (if (> (- i e) mx) mx (- i e))) tp))
+                             j (cons txt sy)))
+                     (sym (+ j 1)))))
+              ((= k 5)
+               (let cm ((j (+ i 1)))
+                 (if (or (>= j n) (= (string-ref s j) 10))
+                     (loop j (cons (list "C" i j (substring s i j)) acc)
+                           (cons (substring *lc-run-C* 0 (if (> (- j i) mx) mx (- j i)))
+                                 (cons (substring dots 0 (if (> (- i e) mx) mx (- i e))) tp))
+                           j sy)
+                     (cm (+ j 1)))))
+              ((= k 6)
+               (let str ((j (+ i 1)))
+                 (cond
+                   ((>= j n)
+                    (let* ((a2 (cons (list "T" i n (substring s i n)) acc))
+                           (toks (reverse a2)))
+                      (list codes s toks
+                            (if (> n mx)
+                                (pad:hl-color-from-tokens s toks)
+                                (apply string-append
+                                       (reverse (cons (substring *lc-run-T* 0 (- n i))
+                                                      (cons (substring dots 0 (- i e)) tp)))))
+                            #t
+                            (car a2)
+                            (if (pair? (cdr a2)) (cadr a2) #f)
+                            sy
+                            a2
+                            ins)))
+                   ((= (string-ref s j) 92)
+                    (str (if (>= (+ j 1) n) n (+ j 2))))
+                   ((= (string-ref s j) 34)
+                    (loop (+ j 1)
+                          (cons (list "T" i (+ j 1) (substring s i (+ j 1))) acc)
+                          (cons (substring *lc-run-T* 0 (if (> (- (+ j 1) i) mx) mx (- (+ j 1) i)))
+                                (cons (substring dots 0 (if (> (- i e) mx) mx (- i e))) tp))
+                          (+ j 1) sy))
+                   (#t (str (+ j 1))))))
+              (#t (loop (+ i 1) acc tp e sy))))))))
+
+
+(define gp-alpha (list 40 41 97 98 100 101 102 105 110 113 117 114 121 58 49 50 32 32 59 34 92 45 116 109))
+(define gp-words (list "define" "query:find" "mutate:set" "\"hi\"" "(a 1)" "; note" "12x" "x12"))
+(define (gp:line k acc)
+  (if (<= k 0)
+      acc
+      (if (= (gp:rand 9) 0)
+          (gp:line (- k 1) (string-append acc (list-ref gp-words (gp:rand (length gp-words)))))
+          (gp:line (- k 1) (string-append acc (list->string (list (list-ref gp-alpha (gp:rand (length gp-alpha))))))))))
+
+(define (gp:scan-cases i bad)
+  (if (<= i 0)
+      bad
+      (let* ((s (gp:line (+ 1 (gp:rand 14)) ""))
+             (ins (= (gp:rand 3) 0))
+             (a (pad:lc-scan s #f 0 (list) (list) (list) ins))
+             (b (gp:lc-scan-nested s #f 0 (list) (list) (list) ins)))
+        (gp:scan-cases (- i 1) (if (equal? a b) bad (cons (list s ins) bad))))))
+
+;; key pool: printable, backspace, arrows, home/end, enter, kill/yank,
+;; undo, quote, ctrl-o (who), goto-def / back / refs, a two-key read
+(define gp-keys
+  (list (list 97) (list 98) (list 100) (list 101) (list 113) (list 58) (list 49)
+        (list 32) (list 59) (list 92) (list 34) (list 40) (list 41)
+        (list 127) (list 127) (list 27 91 68) (list 27 91 68) (list 27 91 67)
+        (list 27 91 65) (list 27 91 66) (list 1) (list 5) (list 13) (list 11)
+        (list 25) (list 31) (list 15) (list 7) (list 2) (list 18) (list 97 98)))
+(define (gp:keylist k acc)
+  (if (<= k 0) (reverse acc) (gp:keylist (- k 1) (cons (list-ref gp-keys (gp:rand (length gp-keys))) acc))))
+(define (gp:join bs acc)
+  (if (null? bs) acc (gp:join (cdr bs) (string-append acc " " (number->string (car bs))))))
+
+(define (gp:start!)
+  (pad:play-reset! *lc-big-page*)
+  (pad:who-reset!)
+  (set! *pi-out* (list))
+  (set! *pi-fast* 0)
+  (set! *pi-slow* 0)
+  (pad:play-snap))
+
+(define (gp:ref-bytes bs acc)
+  (if (null? bs)
+      acc
+      (let ((r (pad:pi-line! (string-append "IN " (number->string (car bs))))))
+        (gp:ref-bytes (cdr bs)
+                      (if (or (string=? r "pending") (string=? r "quit")) acc (cons (pad:play-snap) acc))))))
+(define (gp:ref-keys ks acc)
+  (if (null? ks) (reverse acc) (gp:ref-keys (cdr ks) (gp:ref-bytes (car ks) acc))))
+(define (gp:step-keys ks)
+  (if (null? ks)
+      (reverse *pi-out*)
+      (begin (pad:play-step! (gp:join (car ks) "IN")) (gp:step-keys (cdr ks)))))
+(define (gp:first-diff a b i)
+  (cond
+    ((and (null? a) (null? b)) -1)
+    ((or (null? a) (null? b)) i)
+    ((string=? (car a) (car b)) (gp:first-diff (cdr a) (cdr b) (+ i 1)))
+    (#t i)))
+
+(define (gp:run)
+  (display "GAP one-entry play path on Soft tip") (newline)
+  (let ((bad (gp:scan-cases 300 (list))))
+    (gp:expect "GAP_SCAN_300" (null? bad) (if (null? bad) "" (car bad))))
+  (let* ((ks (gp:keylist 260 (list)))
+         (r0 (gp:start!))
+         (ref (gp:ref-keys ks (list)))
+         (r1 (gp:start!))
+         (r2 (set! *pi-collect* #t))
+         (got (gp:step-keys ks))
+         (r3 (set! *pi-collect* #f))
+         (d (gp:first-diff ref got 0)))
+    (display "GAPSTATS keys=") (display (length ks)) (display " frames=") (display (length got))
+    (display " ref=") (display (length ref)) (display " fast=") (display *pi-fast*)
+    (display " slow=") (display *pi-slow*) (newline)
+    (gp:expect "GAP_FRAMES" (= d -1) (if (= d -1) "" (string-append "frame " (number->string d))))
+    (gp:expect "GAP_FRAMES_MANY" (> (length got) 200) (length got))
+    (gp:expect "GAP_FAST" (> *pi-fast* 100) *pi-fast*))
+  (display "TESTS checks=") (display gp-checks) (display " fail=") (display gp-fails) (newline)
+  (if (= gp-fails 0) (begin (display "PAD_GAP_TEST_OK") (newline)) 0))
