@@ -244,3 +244,5 @@ Soft (`soft/pad/keys.aura`). C forwards bytes and paints.
 ## License
 
 Apache-2.0. Soft tip: `/workspace/aura-grok/build/aura`.
+
+Aura vs Rust for a next-generation (AI-era) editor, verified on Soft tip `c69e644`: [`docs/aura-vs-rust.md`](docs/aura-vs-rust.md).
