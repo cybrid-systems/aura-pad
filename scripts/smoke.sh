@@ -58,6 +58,10 @@
 # → aura-perf round: PAD_DEFER early frame for string edits (settled
 # stream == plain stream, early rows exact), Aura surface facts
 # (rebind / snapshot / fiber / relower), tty model (PAD_AURA_PERF_OK).
+# → wire v2: SNAP v2 pad carries only Soft's DIRTY rows + GEN/base and
+# body length; C rebuilds or drops and asks for a full frame (fixtures,
+# pad_play ask, v2 == v1 frame for frame, replay bytes, term model;
+# PAD_WIRE2_OK). v1 stays the default.
 # Ends with PAD_SMOKE_OK.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -142,5 +146,8 @@ bash "$ROOT/scripts/smoke_gap.sh"
 
 echo "smoke: aura-perf round (early frame + Aura surface facts)"
 bash "$ROOT/scripts/smoke_aura_perf.sh"
+
+echo "smoke: wire v2 (changed rows only, fail closed)"
+bash "$ROOT/scripts/smoke_wire2.sh"
 
 echo "smoke: PAD_SMOKE_OK"

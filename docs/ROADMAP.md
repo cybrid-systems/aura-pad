@@ -183,6 +183,6 @@ numbers are in `perf-emacs.md` (they are 10–30× faster per key).
 | Load only play-path files in `play.aura` | pad | fewer defines → cheaper calls (measure) |
 | Tokenize tape + syms in one pass | pad | done (`pad:lc-scan`): row 15 → 3 ms |
 | Emacs ports: direct commands, try_cursor_movement, try_window_id, syntax-ppss carry | pad | done: insert 33 → 3.6 ms, cursor 13 → 1.3 ms |
-| Skip SNAP rows C already has (wire v2, still fail closed) | pad + C reader only | smaller frames, no C logic |
+| Skip SNAP rows C already has (wire v2, still fail closed) | pad + C reader only | done, opt-in `--wire2` (`PAD_WIRE2_OK`): frames 44 → 12 lines, **no latency gain** (cursor 1.86 vs 1.71 ms, insert 3.16 vs 3.24 ms, noise), v1 stays default |
 
 Each lever lands with a before/after line in `perf.md`.

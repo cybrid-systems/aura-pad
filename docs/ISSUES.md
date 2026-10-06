@@ -132,6 +132,21 @@ idea in a child world (never evals generated code, aura#4359) and answers
 in kid words; Soft copies intend code/err with `string-append` before the
 next try (filed #4370); a passing idea is one robot KEEP.
 
+## Wire v2 — skip SNAP rows C has (done, no gain)
+
+Soft tip `c69e644`. Marker `PAD_WIRE2_OK`. See [`perf.md`](perf.md),
+"wire v2", and DESIGN §7.1. v1 stays the default.
+
+- No new Soft bug found. Nothing to file.
+- The cost that ate the gain is the known per-call floor: one
+  named-let step calling an empty `(lambda () 0)` (two Soft calls) costs
+  ~0.26 ms in the play-path define set (#4350, still open). Do not re-file it; add the number to #4350 when
+  cursor-github auth is back (**to add as a comment, not a new issue**).
+- Probed: no string hash builtin on this tip (`string-hash`, `crc32`,
+  `sha256`, `fnv1a` are unbound; `hash` makes a table). v2 uses a
+  generation number plus the body length instead. This is a gap, not a
+  bug, so there is nothing to file.
+
 ## M13 — aura notebook (done)
 
 Was the NEXT.md "M11 — aura notebook" sketch; M11 shipped as Aura-unique
