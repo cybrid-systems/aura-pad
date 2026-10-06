@@ -3,7 +3,8 @@
 #   1. paren balance of play_in/play/lc/keys + gap_*            -> PAREN_OK
 #   2. Soft tests (gap_test.aura -> gap_cases.aura): flat scanner ==
 #      nested scanner, one-entry play-step! frames == reference path,
-#      inline fast paths taken                                   -> PAD_GAP_TEST_OK
+#      inline fast paths taken; gap2 quote stream: row splice and
+#      O(1) memo swaps taken, ROWS == whole-page render         -> PAD_GAP_TEST_OK
 #   3. one "IN b1 .. bn" line per key through play.aura == one "IN b" line
 #      per byte (same SNAP stream, byte for byte)                -> GAP_BATCH_OK
 #   4. C tty update: pad_view --replay (cell diff, IL/DL) leaves the same
@@ -25,7 +26,7 @@ echo "smoke_gap: Soft tests"
 bash "$ROOT/scripts/run_soft.sh" /workspace/aura-pad/soft/pad/gap_test.aura \
   </dev/null >"$OUT/gap_test.txt" 2>"$OUT/gap_test.err"
 T="$OUT/gap_test.txt"
-grep -E '^(T |GAPSTATS|TESTS|PAD_GAP_TEST)' "$T" || true
+grep -E '^(T |GAPSTATS|GAP2STATS|TESTS|PAD_GAP_TEST)' "$T" || true
 if ! grep -q '^PAD_GAP_TEST_OK$' "$T" || grep -q 'WANT=' "$T" \
    || soft_errs "$T" "$OUT/gap_test.err"; then
   cat "$OUT/gap_test.err" >&2 || true

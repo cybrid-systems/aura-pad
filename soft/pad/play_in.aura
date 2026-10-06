@@ -6,10 +6,11 @@
 ;; key is one line "IN 27 91 68" instead of three. Soft takes the line in
 ;; pad:play-step!, which does the dispatch, runs the command, and writes
 ;; the frame itself. A cursor move is one Soft call per key and a typed
-;; char or backspace three (pad:play-step!, pad:lc-line!, pad:lc-scan),
-;; instead of the old chain (play-line! wrapper -> keys.aura play-line!
-;; -> key-step -> kv-get per keymap entry -> play-cmd! -> play-snap ->
-;; lc-line! -> lc-scan, and three lines per arrow key).
+;; char or backspace inside a row two (pad:play-step!, pad:lc-scan; three
+;; when a string opens or closes: + pad:lc-line!), instead of the old
+;; chain (play-line! wrapper -> keys.aura play-line! -> key-step ->
+;; kv-get per keymap entry -> play-cmd! -> play-snap -> lc-line! ->
+;; lc-scan, and three lines per arrow key).
 ;; Every closure call costs ~0.26 ms on Soft tip c69e644 with the pad
 ;; loaded (aura#4350), so the chain alone was ~1.5 ms per line and 2.5 ms
 ;; for backspace.
@@ -124,6 +125,22 @@
                    (if *pi-collect* (set! *pi-out* (cons (pad:play-snap) *pi-out*)) (display (pad:play-snap)))
                    (pi-each (cdr xs))))))))))
 
+;; A typed char or backspace changed row l only (L2 = new lines, ln2 = new
+;; row codes, col2 = new column). This is pad:lc-line!'s common case
+;; written out with builtins, so a key costs two Soft calls (play-step!
+;; and pad:lc-scan): re-lex row l from the first token that can change
+;; (font-lock-extend-region: tokens ending before col2 - 1 are kept, the
+;; same cut lc-line! makes), then, when the row's end state (inside a
+;; string?) and the def-carry it hands to row l+1 equal what row l+1's
+;; cached record was built with, no other row can change
+;; (jit-lock-context stops at once), so only row l is spliced in. Any
+;; other case -- more than three tokens to drop, no cached mark row, the
+;; end state or carry changed (a string opened or closed) -- goes to
+;; pad:lc-line! with the entry already scanned (*lc-pre*), so the frame
+;; is the one lc-line! builds either way. Written inline in
+;; pad:play-step! (a Soft call costs ~0.23 ms). Yields the dirty rows.
+(define *pi-symk* (list "S" "K" "Q" "M"))
+(define *pi-rows* 0)    ; keys spliced here (row l only)
 ;; One protocol line: dispatch, run, write the frame. Returns "quit" or
 ;; "go". One Soft entry per key on the hot paths: when the lc cache is in
 ;; step with the state (*lc-L* is the current lines object), a cursor
@@ -210,7 +227,92 @@
                                ((> un *undo-max*) (reverse (drop (reverse U) (- un *undo-max*))))
                                (#t U))))
                  (set! *pl-keys* (+ *pl-keys* 1))
-                 (pad:lc-line! L2 l col2)))
+                 (let* ((old (vector-ref *lc-recv* l))
+                        (oe (car old))
+                        (p (if (> col2 0) (- col2 1) 0))
+                        (xs (list-ref oe 8))
+                        (t1 (if (pair? xs) (car xs) #f))
+                        (x1 (and t1 (>= (caddr t1) p)))
+                        (t2 (if (and x1 (pair? (cdr xs))) (cadr xs) #f))
+                        (x2 (and t2 (>= (caddr t2) p)))
+                        (t3 (if (and x2 (pair? (cddr xs))) (caddr xs) #f))
+                        (x3 (and t3 (>= (caddr t3) p)))
+                        (t4 (if (and x3 (pair? (cdddr xs))) (list-ref xs 3) #f))
+                        (x4 (and t4 (>= (caddr t4) p))))
+                   (if (or x4 (not (list-ref old 2)))
+                       (pad:lc-line! L2 l col2)
+                       (let* ((acc0 (cond (x3 (cdddr xs)) (x2 (cddr xs)) (x1 (cdr xs)) (#t xs)))
+                              (mr (+ (if (and x1 (member (car t1) *pi-symk*)) 1 0)
+                                     (if (and x2 (member (car t2) *pi-symk*)) 1 0)
+                                     (if (and x3 (member (car t3) *pi-symk*)) 1 0)))
+                              (r (if (pair? acc0) (caddr (car acc0)) 0))
+                              (le (pad:lc-scan (list->string ln2) ln2 r acc0
+                                               (if (> r 0) (list (substring (list-ref oe 3) 0 r)) (list))
+                                               (drop (list-ref oe 7) mr)
+                                               (list-ref oe 9)))
+                              (h0 (set! *lc-retok* (+ *lc-retok* 1)))
+                              (a (list-ref le 5))
+                              (b (list-ref le 6))
+                              (p1 (list-ref old 3))
+                              (p2 (list-ref old 4))
+                              (q1 (if a a p1))
+                              (q2 (cond ((not a) p2) ((not b) p1) (#t b)))
+                              (rs (vector->list *lc-recv*))
+                              (below (drop rs (+ l 1)))
+                              (nx (if (pair? below) (car below) #f))
+                              (keep (or (not nx)
+                                        (and (eq? (list-ref le 4) (list-ref (car nx) 9))
+                                             (list-ref nx 2)
+                                             (= (cadr (list-ref nx 1))
+                                                (if (and q1 (string=? (car q1) "K") (string=? (list-ref q1 3) "define")) 1 0))
+                                             (= (caddr (list-ref nx 1))
+                                                (if (and q1 (string=? (car q1) "P") q2 (string=? (car q2) "K")
+                                                         (string=? (list-ref q2 3) "define"))
+                                                    1 0))))))
+                         (if (not keep)
+                             (begin (set! *lc-pre* le) (pad:lc-line! L2 l col2))
+                             (let* ((tp (list-ref le 3))
+                                    (tc (if (< col2 (string-length tp)) (string-ref tp col2) 46))
+                                    (name (if (not (or (= tc 83) (= tc 75) (= tc 81) (= tc 77)))
+                                              ""
+                                              (let pi-nm2 ((ts (list-ref le 2)) (cc col2))
+                                                (if (null? ts)
+                                                    ""
+                                                    (let* ((t (car ts)) (kd (car t)))
+                                                      (if (and (member kd *pi-symk*) (>= cc (cadr t)) (< cc (caddr t)))
+                                                          (list-ref t 3)
+                                                          (pi-nm2 (cdr ts) cc)))))))
+                                    (oname *lc-name*)
+                                    (str (list-ref le 1))
+                                    (k (string-length str))
+                                    (mrow (if (and (<= k *lc-run-max*)
+                                                   (or (string=? oname "") (not (member oname (list-ref le 7)))))
+                                              (substring *lc-dots* 0 k)
+                                              (pad:lc-mrow le oname p1 p2)))
+                                    (row (string-append "T " str "\nH " tp "\nM " mrow "\n"))
+                                    (n (length rs))
+                                    (ws (vector->list *lc-rowv*))
+                                    (nopen (+ *lc-nopen* (if (list-ref le 4) 1 0) (if (list-ref oe 4) -1 0)))
+                                    (rows (append (reverse (drop (reverse ws) (- n l))) (cons row (drop ws (+ l 1))))))
+                               (set! *lc-recv* (list->vector
+                                                 (append (reverse (drop (reverse rs) (- n l)))
+                                                         (cons (list le (cons oname (cdr (list-ref old 1))) mrow p1 p2 #f)
+                                                               below))))
+                               (set! *lc-rowv* (list->vector rows))
+                               (set! *lc-body* (apply string-append rows))
+                               (set! *lc-nopen* nopen)
+                               (set! *lc-full* (if (> nopen 0) 1 0))
+                               (set! *lc-lines* (+ *lc-lines* 1))
+                               (set! *lc-L* L2)
+                               (set! *lc-cur* l)
+                               (set! *lc-framed* 1)
+                               (set! *lc-frames* (+ *lc-frames* 1))
+                               (set! *pi-rows* (+ *pi-rows* 1))
+                               (if (string=? name oname)
+                                   (list l)
+                                   (let ((dm (pad:lc-remark! name l)))
+                                     (set! *lc-name* name)
+                                     dm)))))))))
               (fast (if (equal? (pad:play-cmd! c) "quit") "quit" "snap"))
               (in (pad:pi-bytes! line))
               (#t
@@ -234,7 +336,7 @@
                     (cond
                       ((null? r) "")
                       ((null? (cdr r)) (string-append "DIRTY lines=" (number->string (car r)) "\n"))
-                      (#t (string-append "DIRTY lines=" (pad:v-dirty-csv r) "\n")))
+                      (#t (string-append "DIRTY lines=" (string-join (map number->string r) ",") "\n")))
                     "ROWS n=" (number->string (vector-length *lc-rowv*)) "\n"
                     *lc-body*
                     "END\n")))

@@ -8,6 +8,10 @@
 ;;              path: one "IN b" line per byte through pad:pi-line!
 ;;              (keys.aura decode + pad:play-cmd!) and pad:play-snap
 ;;  GAP_FAST    the inline cursor / insert / backspace paths were taken
+;;  GAP2_*      a quote-heavy stream (strings opened / closed on many rows,
+;;              typing inside strings and words): frames == reference, the
+;;              row splice and the O(1) memo swap were taken, and the cached
+;;              ROWS body == a whole-page pad:snap-text render after every key
 ;; Soft reserved: never bind quote.
 
 (define gp-checks 0)
@@ -181,6 +185,14 @@
         (list 25) (list 31) (list 15) (list 7) (list 2) (list 18) (list 97 98)))
 (define (gp:keylist k acc)
   (if (<= k 0) (reverse acc) (gp:keylist (- k 1) (cons (list-ref gp-keys (gp:rand (length gp-keys))) acc))))
+;; gap2 pool: string open/close on many rows (memo swaps), typing and
+;; deleting mid-word / inside strings (row splice), moves between
+(define gp-keys2
+  (list (list 34) (list 34) (list 34) (list 127) (list 127) (list 97) (list 120)
+        (list 32) (list 40) (list 41) (list 27 91 68) (list 27 91 67) (list 27 91 65)
+        (list 27 91 66) (list 27 91 66) (list 1) (list 5) (list 15)))
+(define (gp:keylist2 k acc)
+  (if (<= k 0) (reverse acc) (gp:keylist2 (- k 1) (cons (list-ref gp-keys2 (gp:rand (length gp-keys2))) acc))))
 (define (gp:join bs acc)
   (if (null? bs) acc (gp:join (cdr bs) (string-append acc " " (number->string (car bs))))))
 
@@ -204,6 +216,19 @@
   (if (null? ks)
       (reverse *pi-out*)
       (begin (pad:play-step! (gp:join (car ks) "IN")) (gp:step-keys (cdr ks)))))
+;; independent oracle: the cached ROWS body vs a whole-page render
+(define (gp:body-ok)
+  (let* ((st *pl-st*)
+         (tx (pad:snap-text "x" (car st) (cadr st) (caddr st) ""))
+         (i (string-index tx "ROWS n=" 0))
+         (j (string-index tx "\n" i))
+         (body (substring tx (+ j 1) (- (string-length tx) 4))))
+    (string=? body *lc-body*)))
+(define (gp:step-keys-chk ks bad)
+  (if (null? ks)
+      bad
+      (begin (pad:play-step! (gp:join (car ks) "IN"))
+             (gp:step-keys-chk (cdr ks) (if (gp:body-ok) bad (+ bad 1))))))
 (define (gp:first-diff a b i)
   (cond
     ((and (null? a) (null? b)) -1)
@@ -229,5 +254,26 @@
     (gp:expect "GAP_FRAMES" (= d -1) (if (= d -1) "" (string-append "frame " (number->string d))))
     (gp:expect "GAP_FRAMES_MANY" (> (length got) 200) (length got))
     (gp:expect "GAP_FAST" (> *pi-fast* 100) *pi-fast*))
+  (let* ((ks (gp:keylist2 300 (list)))
+         (r0 (gp:start!))
+         (ref (gp:ref-keys ks (list)))
+         (r1 (gp:start!))
+         (h0 *lc-thit*)
+         (s0 *pi-rows*)
+         (r2 (set! *pi-collect* #t))
+         (got (gp:step-keys ks))
+         (r3 (set! *pi-collect* #f))
+         (d (gp:first-diff ref got 0)))
+    (display "GAP2STATS keys=") (display (length ks)) (display " frames=") (display (length got))
+    (display " spliced=") (display (- *pi-rows* s0)) (display " memo_o1=") (display (- *lc-thit* h0)) (newline)
+    (gp:expect "GAP2_QUOTE_FRAMES" (= d -1) (if (= d -1) "" (string-append "frame " (number->string d))))
+    (gp:expect "GAP2_SPLICED" (> (- *pi-rows* s0) 30) (- *pi-rows* s0))
+    (gp:expect "GAP2_MEMO_O1" (> (- *lc-thit* h0) 5) (- *lc-thit* h0)))
+  (let* ((ks (gp:keylist2 120 (list)))
+         (r0 (gp:start!))
+         (r1 (set! *pi-collect* #t))
+         (bad (gp:step-keys-chk ks 0))
+         (r2 (set! *pi-collect* #f)))
+    (gp:expect "GAP2_BODY_VS_FULL" (= bad 0) bad))
   (display "TESTS checks=") (display gp-checks) (display " fail=") (display gp-fails) (newline)
   (if (= gp-fails 0) (begin (display "PAD_GAP_TEST_OK") (newline)) 0))
