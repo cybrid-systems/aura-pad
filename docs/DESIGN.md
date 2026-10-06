@@ -273,11 +273,12 @@ and keeps per-key Soft calls to O(edited line + rows touched).
 | **M7** | **done** | **snappy pad: line-incremental Soft key path, exact DIRTY** |
 | **M8** | **done** | **kid onboarding card + intent worldline (goal race, story cards)** |
 | **M9** | **done** | **workspace notebook: load once per check, pen at mutation boundaries** |
-| M10 | next | provenance (`who`) + engine dirty nodes |
-| M11 | later | `aura` notebook pad, hygienic macro play |
-| M12 | later | persist: open is restore |
+| **M10** | **done** | **provenance (`who`) + engine dirty nodes** |
+| **M11** | **done** | **Aura-unique features (undo/who/why/blast/time/world/rules/fix)** |
+| **M12** | **done** | **the book closes: Soft persist snapshot, open is restore** |
+| M13 | next | `aura` notebook pad, hygienic macro play, fixture race |
 
-Acceptance tests for M8–M10: [`ROADMAP.md`](ROADMAP.md).
+Acceptance tests for M8–M13: [`ROADMAP.md`](ROADMAP.md).
 
 ## 中文
 
