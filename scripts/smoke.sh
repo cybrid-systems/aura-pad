@@ -35,7 +35,9 @@
 # provenance under agent fingerprints, cross-checked with the Soft stamps
 # (PAD_M11_WHO_OK); a refused proposal is explained in kid words from
 # aura's own reason (PAD_M11_WHY_OK); a blast radius card lists what a
-# proposal would move before KEEP (PAD_M11_BLAST_OK). C unchanged.
+# proposal would move before KEEP (PAD_M11_BLAST_OK); a time machine
+# steps through every KEEP's snapshot and a saved book reopens with its
+# story via serialize/deserialize-workspace (PAD_M11_TIME_OK). C unchanged.
 # → gap round: one Soft entry per key (play_in.aura), flat line scanner,
 # C cell-diff tty update with IL/DL (Soft tests PAD_GAP_TEST_OK, batched
 # lines == byte lines, term model TERM_MODEL_OK; PAD_GAP_OK).
@@ -114,7 +116,7 @@ bash "$ROOT/scripts/smoke_m9.sh"
 echo "smoke: m10 who wrote this + engine dirty"
 bash "$ROOT/scripts/smoke_m10.sh"
 
-echo "smoke: m11 Aura-unique features (robot txn undo, engine who, kid why, blast card)"
+echo "smoke: m11 Aura-unique features (robot txn undo, engine who, kid why, blast card, time machine)"
 bash "$ROOT/scripts/smoke_m11.sh"
 
 echo "smoke: gap round (one Soft entry per key + C cell-diff tty update)"
