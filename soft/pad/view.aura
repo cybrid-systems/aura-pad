@@ -85,12 +85,16 @@
                                "M " (substring marks off e) "\n"))))))
 
 ;; DIRTY csv of 0-based row indexes, or "" if unknown / all dirty.
+;; One Soft call for any row count (a named-let step is ~0.01 ms, a
+;; recursive call ~0.3 ms with the pad loaded: opening a string dirties
+;; every row below it).
 (define (pad:v-dirty-csv xs)
-  (cond
-    ((null? xs) "")
-    ((null? (cdr xs)) (number->string (car xs)))
-    (#t (string-append (number->string (car xs)) ","
-                       (pad:v-dirty-csv (cdr xs))))))
+  (if (null? xs)
+      ""
+      (let csv ((ys (cdr xs)) (acc (list (number->string (car xs)))))
+        (if (null? ys)
+            (apply string-append (reverse acc))
+            (csv (cdr ys) (cons (number->string (car ys)) (cons "," acc)))))))
 
 ;; The whole SNAP block. Tokenize once; optional dirty row list.
 (define (pad:snap-text title L l col say)
