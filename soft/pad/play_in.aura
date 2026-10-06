@@ -410,17 +410,23 @@
                                                          (cons (string-append "T " str "\nH " (list-ref le 3) "\nM " mrow "\n")
                                                                (drop ws (+ l 1)))))
                                           (ebody (apply string-append erows))
-                                          (fr (string-append
-                                                "SNAP v1 pad\n"
-                                                "TITLE aura pad (Soft) keys=" (number->string *pl-keys*)
-                                                " no=" (number->string *pl-rej*) "\n"
-                                                "CURSOR line=" (number->string l) " col=" (number->string col2) "\n"
-                                                "SAY " *pl-say* "\n"
-                                                "LEGEND " *view-legend* "\n"
-                                                "DIRTY lines=" (number->string l) "\n"
-                                                "ROWS n=" (number->string n) "\n"
-                                                ebody
-                                                "END\n")))
+                                          (fr (if *w2-on*
+                                                  ;; v2: row l only; C still holds *lc-rowv*'s
+                                                  ;; row l, so the next frame resends it
+                                                  (let ((f (pad:w2-frame l col2 (list l) (list->vector erows) ebody)))
+                                                    (set! *w2-plus* l)
+                                                    f)
+                                                  (string-append
+                                                    "SNAP v1 pad\n"
+                                                    "TITLE aura pad (Soft) keys=" (number->string *pl-keys*)
+                                                    " no=" (number->string *pl-rej*) "\n"
+                                                    "CURSOR line=" (number->string l) " col=" (number->string col2) "\n"
+                                                    "SAY " *pl-say* "\n"
+                                                    "LEGEND " *view-legend* "\n"
+                                                    "DIRTY lines=" (number->string l) "\n"
+                                                    "ROWS n=" (number->string n) "\n"
+                                                    ebody
+                                                    "END\n"))))
                                      (set! *pi-early* (+ *pi-early* 1))
                                      (if *pi-collect* (set! *pi-out* (cons (string-append "EARLY\n" fr) *pi-out*)) (display fr))
                                      (list erows ebody))
@@ -489,21 +495,40 @@
       ((list? r)
        (set! *pi-fast* (+ *pi-fast* 1))
        (let* ((st2 *pl-st*)
-              (fr (string-append
-                    "SNAP v1 pad\n"
-                    "TITLE aura pad (Soft) keys=" (number->string *pl-keys*)
-                    " no=" (number->string *pl-rej*) "\n"
-                    "CURSOR line=" (number->string (cadr st2))
-                    " col=" (number->string (caddr st2)) "\n"
-                    "SAY " *pl-say* "\n"
-                    "LEGEND " *view-legend* "\n"
-                    (cond
-                      ((null? r) "")
-                      ((null? (cdr r)) (string-append "DIRTY lines=" (number->string (car r)) "\n"))
-                      (#t (string-append "DIRTY lines=" (string-join (map number->string r) ",") "\n")))
-                    "ROWS n=" (number->string (vector-length *lc-rowv*)) "\n"
-                    *lc-body*
-                    "END\n")))
+              (fr (cond
+                    ;; wire v2, one DIRTY row: inlined (see pad:play-snap)
+                    ((and *w2-on* (not *w2-full*) (< *w2-plus* 0) (pair? r) (null? (cdr r)))
+                     (set! *w2-gen* (+ *w2-gen* 1))
+                     (string-append
+                       "SNAP v2 pad\nGEN " (number->string *w2-gen*) " base=" (number->string (- *w2-gen* 1))
+                       "\nTITLE aura pad (Soft) keys=" (number->string *pl-keys*)
+                       " no=" (number->string *pl-rej*) "\n"
+                       "CURSOR line=" (number->string (cadr st2))
+                       " col=" (number->string (caddr st2)) "\n"
+                       "SAY " *pl-say* "\n"
+                       "LEGEND " *view-legend* "\n"
+                       "ROWS n=" (number->string (vector-length *lc-rowv*))
+                       " body=" (number->string (string-length *lc-body*))
+                       "\nR " (number->string (car r)) "\n"
+                       (vector-ref *lc-rowv* (car r))
+                       "END\n"))
+                    (*w2-on* (pad:w2-frame (cadr st2) (caddr st2) r *lc-rowv* *lc-body*))
+                    (#t
+                      (string-append
+                        "SNAP v1 pad\n"
+                        "TITLE aura pad (Soft) keys=" (number->string *pl-keys*)
+                        " no=" (number->string *pl-rej*) "\n"
+                        "CURSOR line=" (number->string (cadr st2))
+                        " col=" (number->string (caddr st2)) "\n"
+                        "SAY " *pl-say* "\n"
+                        "LEGEND " *view-legend* "\n"
+                        (cond
+                          ((null? r) "")
+                          ((null? (cdr r)) (string-append "DIRTY lines=" (number->string (car r)) "\n"))
+                          (#t (string-append "DIRTY lines=" (string-join (map number->string r) ",") "\n")))
+                        "ROWS n=" (number->string (vector-length *lc-rowv*)) "\n"
+                        *lc-body*
+                        "END\n")))))
          (if *pi-collect* (set! *pi-out* (cons fr *pi-out*)) (display fr))
          "go"))
       ((string=? r "snap")
