@@ -10,6 +10,7 @@ invents a replacement API for any of them.
 
 | Aura issue | What is wrong | Pad rule until it lands |
 |------------|---------------|-------------------------|
+| [aura#4370](https://github.com/cybrid-systems/aura/issues/4370) | `intend` reuses `string_heap` slots: kept `code` / `err` strings alias the newest attempt, so Soft trust of those pointers after the next try is wrong | Soft copies with `string-append` before the next try (`fix_loop.aura`, M11h) |
 | [aura#4369](https://github.com/cybrid-systems/aura/issues/4369) | A child workspace's `mutate:rebind` leaks into root's procedure bindings even without a child `eval-current`; after `workspace:delete` of that child, calling the binding in root segfaults (`workspace:discard`: hangs), and in a create / mutate / heal / delete loop the next `:switch` hits a vector assert | M11f keeps its children (never `workspace:delete` / `workspace:discard`, which only resets a child) and heals root after every idea (#4368) |
 | [aura#4368](https://github.com/cybrid-systems/aura/issues/4368) | Child workspaces share the top-level Soft bindings: after a child `workspace :create` + `:switch` + `eval-current` + rebind, `workspace :switch 0` + root `eval-current` keeps the child's bindings (root `(hello 3)` runs the child's body) although root `query:code` is unchanged | M11f heals root after every idea with `ast:restore` of a root snapshot + one `eval-current` (`pad:world-home!`, `world.aura`); the winner comes back by rebind, never `workspace :merge` |
 | [aura#4367](https://github.com/cybrid-systems/aura/issues/4367) | After `deserialize-workspace` the tree is renumbered (a rebind changed a body's size), but the restored log's `target=` and `query:node-provenance` keep the old node ids: moved defines read "nobody", kept ids keep old provenance by coincidence. The mutation id counter is not restored either | M11e never joins the reopened log to a define by node id: who comes from the row's pad stamp, confirmed by a reopened rebind record whose `sum=` is the stamp's why; old vs new is decided by author fingerprint, not by id (`pad:time-eng-of`, `time.aura`) |
@@ -97,7 +98,7 @@ Capability round: filed #4357 (relower/rebind) and #4358 (stdin poll),
 and commented on #4356 (fiber-safe hand-back channel). The pad switches
 the poll path on by itself when `char-ready?` appears.
 
-## M11a–g — Aura-unique features (done)
+## M11a–h — Aura-unique features (done)
 
 [`m11.md`](m11.md), from the ranked list in [`aura-vs-rust.md`](aura-vs-rust.md).
 M11a "undo the robot" is done (`PAD_M11_UNDO_OK`): one AI proposal is one
@@ -125,6 +126,11 @@ gate with kid words, is one `typed-mutate-atomic` under fingerprint kid=1,
 lands as a robot KEEP (ctrl-z, who stamps, time-machine step) and is
 verified by calling the live rule (a helper's out-of-range body is undone
 at once).
+M11h the helper repairs its own idea is done (`PAD_M11_FIX_OK`): Soft
+calls `(intend goal gen verify fix max)`; the Soft verifier tries each
+idea in a child world (never evals generated code, aura#4359) and answers
+in kid words; Soft copies intend code/err with `string-append` before the
+next try (filed #4370); a passing idea is one robot KEEP.
 
 ## M11 — aura notebook
 
