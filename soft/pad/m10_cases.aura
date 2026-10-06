@@ -1,0 +1,266 @@
+;; aura-pad M10 test cases, loaded by m10_test.aura. Every section is a
+;; function; the entry file runs ONE top-level call. Globals here carry an
+;; m10 prefix only: a pad loop that captures an outer local can resolve it
+;; to a same-named global on c69e644 (docs/m10.md), so test globals must
+;; never shadow common local names. Soft reserved: never bind quote.
+
+(define *m10-fail* 0)
+(define *m10-checks* 0)
+(define *m10-acc0* 0)
+
+(define (m10:expect tag got want)
+  (set! *m10-checks* (+ *m10-checks* 1))
+  (newline)
+  (display "T ") (display tag) (display "=")
+  (display (if (number? got) (number->string got) "?"))
+  (if (and (number? got) (= got want))
+      (display " OK")
+      (begin
+        (display " WANT=") (display (number->string want))
+        (set! *m10-fail* (+ *m10-fail* 1))))
+  (newline)
+  got)
+
+(define (m10:expect-str tag got want)
+  (set! *m10-checks* (+ *m10-checks* 1))
+  (newline)
+  (display "T ") (display tag) (display "=")
+  (display (if (string? got) got "?"))
+  (if (and (string? got) (string=? got want))
+      (display " OK")
+      (begin
+        (display " WANT=") (display want)
+        (set! *m10-fail* (+ *m10-fail* 1))))
+  (newline)
+  got)
+
+(define (m10:expect-true tag got)
+  (m10:expect-str tag (if got "yes" "no") "yes"))
+
+(define (m10:acc-begin!) (set! *m10-acc0* *m10-fail*))
+(define (m10:acc-end! n)
+  (newline)
+  (display "M10_ACC ") (display (number->string n))
+  (display (if (= *m10-fail* *m10-acc0*) " OK" " FAIL"))
+  (newline))
+
+;; Same twelve-row page as the M9 pen tests.
+(define *m10-page*
+  (string-append
+    "(define (hello x) (+ x 1))\n"
+    "(define (bye y) (hello y))\n"
+    "(define (add a b) (+ a b))\n"
+    "; kids write stories here\n"
+    "(define pet \"cat\")\n"
+    "(define (greet n) (add n 1))\n"
+    "(hello 3)\n"
+    "(bye 4)\n"
+    "(greet (add 1 2))\n"
+    "(display pet)\n"
+    "(add 2 3)\n"
+    "(hello (bye 5))"))
+(define *m10-keep-row* "(define hello (lambda (x) (* x 2)))")
+
+(define (m10:keys! ks)
+  (if (null? ks)
+      0
+      (begin (pad:play-line! (car ks)) (m10:keys! (cdr ks)))))
+
+(define (m10:row-src l) (pad:v-src (list (list-ref (pad:es-L *pl-st*) l))))
+
+;; Ask who wrote the cursor row; print the answer line; return (tag say).
+(define (m10:ask!)
+  (let ((r (pad:who-ask!)))
+    (newline) (display (car r))
+    (display " row=") (display (number->string (pad:es-l *pl-st*)))
+    (display " say=\"") (display (cadr r)) (display "\"")
+    (newline)
+    r))
+
+(define (m10:rows-line!)
+  (newline) (display "WHOROWS ") (display (pad:who-rows-str *who-S* 0)) (newline))
+
+(define (m10:gen-tag who why)
+  (string-append "WHO who=" who " why=" why " gen=" (number->string (pad:pen-gen))))
+
+(define (m10:fresh!)
+  (pad:play-reset! *m10-page*)
+  (pad:who-reset!)
+  (set! *pen-undo* (list))
+  (set! *who-keep-codes* (list))
+  (pad:play-snap)
+  (m10:expect-str "CHECK" (car (pad:who-check!)) "ok")
+  #t)
+
+(define (m10:intro)
+  (newline)
+  (display "M10 who wrote this on Soft tip")
+  (newline)
+  (m10:expect-true "DIRTY_NODES_BOUND" *who-dirty-bound*)
+  (m10:expect-str "XDIRTY_ROWS_FN" (pad:who-nums-str (pad:who-frame-dirty "SNAP v1 pad\nDIRTY lines=0,3,4\nEND\n" 9)) "0.3.4")
+  (m10:expect-str "XDIRTY_FULL_BLIT" (pad:who-nums-str (pad:who-frame-dirty "SNAP v1 pad\nEND\n" 3)) "0.1.2")
+  #t)
+
+(define (m10:sec1)
+  ;; 1. WHO who=helper why=closer gen=G on the row a helper KEEP wrote;
+  ;;    no-who "nobody has changed this yet" on an untouched row.
+  (m10:acc-begin!)
+  (m10:fresh!)
+  (let ((a0 (m10:ask!)))
+    (m10:expect-str "FRESH_ROW0" (car a0) "no-who"))
+  (let ((x (pad:who-xdirty (pad:play-snap))))
+    (pad:who-xdirty-line! "check" x)
+    (m10:expect-str "XCHECK_V" (car x) "ok")
+    (m10:expect "XCHECK_NODES" (pad:nth x 4) 0))
+  (let* ((g0 (pad:pen-gen))
+         (rs (pad:who-pen-step! "helper" "hello" "(lambda (x) (* x 2))" "closer"))
+         (r (car rs)))
+    (pad:pen-line! r "helper" "hello")
+    (m10:expect-str "KEEP_V" (car r) "KEEP")
+    (m10:expect "KEEP_GEN" (- (pad:pen-gen) g0) 1)
+    (m10:expect "KEEP_STAMPED" (cadr rs) 1)
+    (m10:expect-str "KEEP_ROW0" (m10:row-src 0) *m10-keep-row*))
+  (let ((a1 (m10:ask!)))
+    (m10:expect-str "WHO_HELPER" (car a1) (m10:gen-tag "helper" "closer"))
+    (m10:expect-str "WHO_HELPER_SAY" (cadr a1) "the AI helper wrote this line: closer"))
+  (m10:keys! (list "KEY next-line" "KEY next-line" "KEY next-line"))
+  (let ((a2 (m10:ask!)))
+    (m10:expect "UNTOUCHED_ROW" (pad:es-l *pl-st*) 3)
+    (m10:expect-str "NO_WHO" (car a2) "no-who")
+    (m10:expect-str "NO_WHO_SAY" (cadr a2) "nobody has changed this yet"))
+  (m10:rows-line!)
+  (m10:acc-end! 1)
+  #t)
+
+(define (m10:sec2)
+  ;; 2. Kid typing on a stamped row restamps it who=kid; undo restores the
+  ;;    previous stamp with the text (same snapshot).
+  (m10:acc-begin!)
+  (m10:keys! (list "KEY prev-line" "KEY prev-line" "KEY prev-line" "KEY end" "IN 32"))
+  (m10:expect "ON_ROW0" (pad:es-l *pl-st*) 0)
+  (m10:expect-str "KID_TYPED" (m10:row-src 0) (string-append *m10-keep-row* " "))
+  (let ((a1 (m10:ask!)))
+    (m10:expect-str "WHO_KID" (car a1) (m10:gen-tag "kid" "typed"))
+    (m10:expect-str "WHO_KID_SAY" (cadr a1) "you wrote this line"))
+  (m10:keys! (list "KEY undo"))
+  (m10:expect-str "UNDO_TEXT" (m10:row-src 0) *m10-keep-row*)
+  (let ((a2 (m10:ask!)))
+    (m10:expect-str "UNDO_STAMP" (car a2) (m10:gen-tag "helper" "closer")))
+  ;; untouched row: kid stamp, then undo brings back "nobody"
+  (m10:keys! (list "KEY next-line" "KEY next-line" "KEY next-line" "KEY end" "IN 33"))
+  (let ((a3 (m10:ask!)))
+    (m10:expect-str "ROW3_KID" (car a3) (m10:gen-tag "kid" "typed")))
+  (m10:keys! (list "KEY undo"))
+  (let ((a4 (m10:ask!)))
+    (m10:expect-str "ROW3_UNDO" (car a4) "no-who"))
+  ;; several keys between two asks: one sync, every changed row is the kid's
+  (m10:keys! (list "KEY next-line" "KEY end" "IN 32" "KEY next-line" "KEY end" "IN 32"))
+  (let ((a5 (m10:ask!)))
+    (m10:expect-str "LAZY_ROW5" (car a5) (m10:gen-tag "kid" "typed")))
+  (m10:keys! (list "KEY prev-line"))
+  (let ((a6 (m10:ask!)))
+    (m10:expect-str "LAZY_ROW4" (car a6) (m10:gen-tag "kid" "typed")))
+  (m10:keys! (list "KEY undo" "KEY undo"))
+  (m10:expect-str "LAZY_UNDONE_ROW4" (m10:row-src 4) "(define pet \"cat\")")
+  (let ((a7 (m10:ask!)))
+    (m10:expect-str "LAZY_UNDO_STAMP" (car a7) "no-who"))
+  (m10:rows-line!)
+  (m10:acc-end! 2)
+  #t)
+
+(define (m10:sec3)
+  ;; 3. Undo of a KEEP = ast:restore of the pre-KEEP snapshot + re-project;
+  ;;    Soft undo stack and restore agree, or the test fails loud.
+  (m10:acc-begin!)
+  (m10:fresh!)
+  (let* ((g0 (pad:pen-gen))
+         (code0 (pad:q-code))
+         (rs (pad:who-pen-step! "helper" "hello" "(lambda (x) (* x 2))" "closer")))
+    (m10:expect-str "K3_V" (car (car rs)) "KEEP")
+    (m10:expect-str "K3_UNDO" (pad:who-pen-undo!) "agree")
+    (m10:expect-true "K3_CODE" (string=? (pad:q-code) code0))
+    (m10:expect "K3_GEN" (- (pad:pen-gen) g0) 0)
+    (m10:expect-str "K3_PAGE" (pad:play-src) *m10-page*)
+    (m10:expect "K3_PEN_UNDO" (length *pen-undo*) 0)
+    (m10:expect "K3_KEEP_CODES" (length *who-keep-codes*) 0)
+    (let ((a (m10:ask!)))
+      (m10:expect-str "K3_STAMP_BACK" (car a) "no-who"))
+    (m10:expect-str "K3_EMPTY" (pad:who-pen-undo!) "nothing-to-undo"))
+  ;; macro writer, then a planted disagreement must be caught loud
+  (let ((rs (pad:who-pen-step! "macro" "add" "(lambda (a b) (+ b a))" "swap")))
+    (m10:expect-str "K3M_V" (car (car rs)) "KEEP")
+    (m10:keys! (list "KEY next-line" "KEY next-line"))
+    (let ((a (m10:ask!)))
+      (m10:expect-str "WHO_MACRO" (car a) (m10:gen-tag "macro" "swap")))
+    (set! *who-keep-codes* (cons "planted" (cdr *who-keep-codes*)))
+    (m10:expect-str "K3_PLANTED" (pad:who-pen-undo!) "disagree")
+    (m10:expect-str "K3_PLANTED_PAGE" (pad:play-src) *m10-page*))
+  (m10:acc-end! 3)
+  #t)
+
+(define (m10:sec4)
+  ;; 4. Engine dirty rows (query:dirty-nodes, placed through page defines)
+  ;;    are a subset of Soft DIRTY plus the cursor row; GAPS otherwise.
+  (m10:acc-begin!)
+  (m10:fresh!)
+  (pad:play-snap)
+  (let* ((rs (pad:who-pen-step! "helper" "hello" "(lambda (x) (* x 2))" "closer"))
+         (x (pad:who-xdirty (pad:play-snap))))
+    (pad:who-xdirty-line! "keep-hello" x)
+    (m10:expect-str "X1_V" (car x) "ok")
+    (m10:expect-str "X1_ENGINE" (pad:who-nums-str (cadr x)) "0")
+    (m10:expect-true "X1_NODES" (> (pad:nth x 4) 0)))
+  ;; cursor away from the written row: Soft DIRTY must still hold it
+  (m10:keys! (list "KEY next-line" "KEY next-line" "KEY next-line"
+                   "KEY next-line" "KEY next-line"))
+  (pad:play-snap)
+  (let* ((rs (pad:who-pen-step! "law" "add" "(lambda (a b) (+ b a))" "commutes"))
+         (x (pad:who-xdirty (pad:play-snap))))
+    (pad:who-xdirty-line! "keep-add" x)
+    (m10:expect-str "X2_V" (car x) "ok")
+    (m10:expect-str "X2_ENGINE" (pad:who-nums-str (cadr x)) "2")
+    (m10:expect-true "X2_SINCE_CHECK" (and (member 0 (pad:nth x 5)) (member 2 (pad:nth x 5))))
+    (m10:expect-true "X2_SOFT_HAS_ROW2" (member 2 (caddr x)))
+    (m10:expect "X2_CURSOR" (pad:es-l *pl-st*) 5))
+  (let ((a (m10:ask!)))
+    (m10:expect-str "X2_ROW5_NO_WHO" (car a) "no-who"))
+  (m10:keys! (list "KEY prev-line" "KEY prev-line" "KEY prev-line"))
+  (let ((a (m10:ask!)))
+    (m10:expect-str "WHO_LAW" (car a) (m10:gen-tag "law" "commutes")))
+  ;; a check reloads the workspace: no engine dirty nodes after it
+  (pad:play-snap)
+  (m10:expect-str "X3_CHECK" (car (pad:who-check!)) "ok")
+  (let ((x (pad:who-xdirty (pad:play-snap))))
+    (pad:who-xdirty-line! "check" x)
+    (m10:expect-str "X3_V" (car x) "ok"))
+  ;; the subset test is not vacuous; the unbound path prints GAPS
+  (m10:expect-str "MISS_DETECT" (pad:who-nums-str (pad:who-misses (list (cons 7 1) (cons 2 1)) (list 2) 0)) "7")
+  (m10:expect-str "GROWN_ONLY" (pad:who-nums-str (map car (pad:who-grown (list (list "a" 0 1) (list "b" 2 2)) (list (list "a" 0 1) (list "b" 2 1))))) "2")
+  (let ((saved *who-dirty-bound*))
+    (set! *who-dirty-bound* #f)
+    (let ((x (pad:who-xdirty (pad:play-snap))))
+      (m10:expect-str "GAP_PATH" (pad:who-xdirty-line! "unbound-sim" x) "gap"))
+    (set! *who-dirty-bound* saved))
+  (m10:acc-end! 4)
+  #t)
+
+(define (m10:outro)
+  (newline)
+  (display "M10STATS syncs=") (display (number->string *who-syncs*))
+  (display " asks=") (display (number->string *who-asks*))
+  (display " xchecks=") (display (number->string *who-xchecks*))
+  (display " keeps=") (display (number->string *pen-keeps*))
+  (newline)
+  (display "TESTS checks=") (display (number->string *m10-checks*))
+  (display " fail=") (display (number->string *m10-fail*))
+  (newline)
+  (if (= *m10-fail* 0) (display "PAD_M10_TEST_OK") (display "PAD_M10_TEST_FAIL"))
+  (newline))
+
+(define (m10:run-all)
+  (m10:intro)
+  (m10:sec1)
+  (m10:sec2)
+  (m10:sec3)
+  (m10:sec4)
+  (m10:outro))

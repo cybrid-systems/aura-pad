@@ -1,0 +1,25 @@
+;; aura-pad M10 tests: who wrote this (who.aura) + pen stamps and engine
+;; dirty cross-check (who_pen.aura). Prints T lines, WHO / no-who answers,
+;; WHOROWS, XDIRTY (+ GAPS when a dirty node has no row), one
+;; "M10_ACC <n> OK" per ROADMAP acceptance item, then PAD_M10_TEST_OK.
+;; std modules first (aura#4351), via std.aura. Cases live in
+;; m10_cases.aura; this file makes one top-level call (forms after a
+;; set-code + eval-current are read back wrong, see docs/m9.md).
+;; Soft reserved: never bind quote.
+(load "/workspace/aura-pad/soft/pad/std.aura")
+(load "/workspace/aura-pad/soft/pad/buffer.aura")
+(load "/workspace/aura-pad/soft/pad/lines.aura")
+(load "/workspace/aura-pad/soft/pad/edit.aura")
+(load "/workspace/aura-pad/soft/pad/hl.aura")
+(load "/workspace/aura-pad/soft/pad/jump.aura")
+(load "/workspace/aura-pad/soft/pad/view.aura")
+;; query.aura before lc.aura: aura#4351 (null? aliasing after require).
+(load "/workspace/aura-pad/soft/pad/query.aura")
+(load "/workspace/aura-pad/soft/pad/lc.aura")
+(load "/workspace/aura-pad/soft/pad/keys.aura")
+(load "/workspace/aura-pad/soft/pad/ws.aura")
+(load "/workspace/aura-pad/soft/pad/pen.aura")
+(load "/workspace/aura-pad/soft/pad/who.aura")
+(load "/workspace/aura-pad/soft/pad/who_pen.aura")
+(load "/workspace/aura-pad/soft/pad/m10_cases.aura")
+(m10:run-all)
