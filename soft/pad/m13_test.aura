@@ -1,0 +1,11 @@
+;; aura-pad M13 tests: aura notebook pad.
+;; std first (aura#4351). Cases in m13_cases.aura; one top-level call.
+;; Soft reserved: never bind quote.
+(load "/workspace/aura-pad/soft/pad/std.aura")
+(load "/workspace/aura-pad/soft/pad/buffer.aura")
+(load "/workspace/aura-pad/soft/pad/hl.aura")
+(load "/workspace/aura-pad/soft/pad/jump.aura")
+(load "/workspace/aura-pad/soft/pad/query.aura")
+(load "/workspace/aura-pad/soft/pad/aura_pad.aura")
+(load "/workspace/aura-pad/soft/pad/m13_cases.aura")
+(m13:run-all)

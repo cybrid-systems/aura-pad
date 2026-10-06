@@ -1,0 +1,136 @@
+;; aura-pad M13 — aura notebook pad (Soft owns logic; C only blits).
+;; Third pad "aura": sexp projection, M5 HL tape (P K S T C Q M N).
+;; Jump: Soft HL goto-def; when workspace loaded also query:defines /
+;; define-lookup (query:find-by-name unbound on tip — not called).
+;; Hygienic macro play: clone_macro_body unbound → GAPS hygienic-play,
+;; refuse to mutate (do not capture kid names). Do not re-file #165.
+;; Play loop does not load this file (key latency unchanged).
+;; Soft reserved: never bind quote.
+
+(define *aura-pad-name* "aura")
+(define *aura-hygienic* #f)
+(define *aura-gaps* "")
+(define *aura-probed* #f)
+(define *aura-src* "")
+(define *aura-ws* #f)
+(define *aura-refuses* 0)
+(define *aura-drops* 0)
+(define *aura-keeps* 0)
+
+(define (pad:aura-bound? name)
+  (let ((d (try (primitive:describe name) (catch (e) #f))))
+    (and (pair? d) (car d))))
+
+;; Probe once. Returns gaps string ("" if none).
+(define (pad:aura-probe!)
+  (set! *aura-probed* #t)
+  (set! *aura-hygienic*
+        (or (pad:aura-bound? "clone_macro_body")
+            (pad:aura-bound? "clone-macro-body")
+            (pad:aura-bound? "hygienic-expand")))
+  (set! *aura-gaps* (if *aura-hygienic* "" "hygienic-play"))
+  (if (string=? *aura-gaps* "") "" (string-append "GAPS " *aura-gaps*)))
+
+(define (pad:aura-gaps-line!)
+  (if (not *aura-probed*) (pad:aura-probe!) #f)
+  (if (string=? *aura-gaps* "")
+      (begin (display "GAPS none") (newline))
+      (begin (display "GAPS ") (display *aura-gaps*) (newline)))
+  *aura-gaps*)
+
+;; Load sexp page into Soft jump state (no set-code). Returns jump state.
+(define (pad:aura-page! src)
+  (set! *aura-src* src)
+  (set! *aura-ws* #f)
+  (pad:js-at src 0))
+
+;; Load into workspace once (M9 check style). Returns #t on success.
+(define (pad:aura-ws-load! src)
+  (set! *aura-src* src)
+  (let ((ok (try
+              (begin
+                (set-code (string-append src "\n#t\n"))
+                (eval-current)
+                #t)
+              (catch (e) #f))))
+    (set! *aura-ws* ok)
+    ok))
+
+;; HL tape for the aura page (M5 letters only).
+(define (pad:aura-tape)
+  (pad:hl-color *aura-src*))
+
+;; Kind letters present on the tape (deduped string of PKS...).
+(define (pad:aura-kinds-seen)
+  (let ((tape (pad:aura-tape)))
+    (pad:aura-kinds-fold tape 0 "")))
+(define (pad:aura-kinds-fold tape i acc)
+  (if (>= i (string-length tape))
+      acc
+      (let ((c (substring tape i (+ i 1))))
+        (pad:aura-kinds-fold tape (+ i 1)
+                             (if (or (string=? c ".") (string-contains? acc c))
+                                 acc
+                                 (string-append acc c))))))
+
+;; Jump goto-def at point. Soft HL always; engine define-lookup when ws loaded.
+(define (pad:aura-goto! j)
+  (if *aura-ws*
+      (begin
+        ;; tip hands define-lookup via query.aura when bound
+        (if (procedure? *pad-def-lookup*) #f
+            (set! *pad-def-lookup* (if (pad:aura-bound? "define-lookup") define-lookup #f)))
+        (pad:goto-def j))
+      (begin
+        (set! *pad-def-lookup* #f)
+        (pad:goto-def j))))
+
+;; Hygienic play of a recorded macro body (Aura syntax). If the tip has
+;; no hygienic surface, print GAPS and refuse to mutate.
+;; Returns (tag say) where tag is PLAY | REFUSE.
+(define (pad:aura-hygienic-play! body)
+  (if (not *aura-probed*) (pad:aura-probe!) #f)
+  (if *aura-hygienic*
+      (list "PLAY" "hygienic play is ready")
+      (begin
+        (set! *aura-refuses* (+ *aura-refuses* 1))
+        (pad:aura-gaps-line!)
+        (list "REFUSE" "hygienic play is not ready, nothing changed"))))
+
+;; Fixture race on the classic hello page. A helper idea that fails
+;; (hello 3) => 4 DROPs; one that passes may KEEP.
+;; idea = (name body-src) for rebind of hello. Returns (tag score).
+(define (pad:aura-fixture-score body)
+  ;; Run (hello 3) after loading; expect 4 for a passing idea.
+  (try
+    (begin
+      (set-code (string-append
+                 "(define (hello x) " body ")\n"
+                 "(define *v* (hello 3))\n"
+                 "#t\n"))
+      (eval-current)
+      (let ((v (try *v* (catch (e) #f))))
+        (if (and (number? v) (= v 4)) 1 0)))
+    (catch (e) 0)))
+
+(define (pad:aura-fixture-race! good-body bad-body)
+  (let* ((sg (pad:aura-fixture-score good-body))
+         (sb (pad:aura-fixture-score bad-body)))
+    (cond
+      ((and (= sg 1) (= sb 0))
+       (set! *aura-keeps* (+ *aura-keeps* 1))
+       (set! *aura-drops* (+ *aura-drops* 1))
+       (list "RACE" "KEEP" "DROP" sg sb))
+      ((and (= sg 0) (= sb 0))
+       (set! *aura-drops* (+ *aura-drops* 2))
+       (list "RACE" "DROP" "DROP" sg sb))
+      (#t
+       (list "RACE" "?" "?" sg sb)))))
+
+(define (pad:aura-stats-line!)
+  (display "M13STATS refuses=") (display (number->string *aura-refuses*))
+  (display " drops=") (display (number->string *aura-drops*))
+  (display " keeps=") (display (number->string *aura-keeps*))
+  (display " hygienic=") (display (if *aura-hygienic* "yes" "no"))
+  (display " gaps=") (display (if (string=? *aura-gaps* "") "none" *aura-gaps*))
+  (newline))
