@@ -39,7 +39,9 @@
 # steps through every KEEP's snapshot and a saved book reopens with its
 # story via serialize/deserialize-workspace (PAD_M11_TIME_OK); AI ideas
 # race in sandbox child worlds and only a winner comes back by rebind
-# (PAD_M11_WORLD_OK). C unchanged.
+# (PAD_M11_WORLD_OK); the kid changes editor rules (tab size, say
+# length) live through a gated typed write that ctrl-z and the time
+# machine undo (PAD_M11_RULES_OK). C unchanged.
 # → gap round: one Soft entry per key (play_in.aura), flat line scanner,
 # C cell-diff tty update with IL/DL (Soft tests PAD_GAP_TEST_OK, batched
 # lines == byte lines, term model TERM_MODEL_OK; PAD_GAP_OK).
@@ -118,7 +120,7 @@ bash "$ROOT/scripts/smoke_m9.sh"
 echo "smoke: m10 who wrote this + engine dirty"
 bash "$ROOT/scripts/smoke_m10.sh"
 
-echo "smoke: m11 Aura-unique features (robot txn undo, engine who, kid why, blast card, time machine, sandbox worlds)"
+echo "smoke: m11 Aura-unique features (robot txn undo, engine who, kid why, blast card, time machine, sandbox worlds, kid rules)"
 bash "$ROOT/scripts/smoke_m11.sh"
 
 echo "smoke: gap round (one Soft entry per key + C cell-diff tty update)"
