@@ -102,12 +102,14 @@
          ;; lexing. qq = end of that token, -2 = no closing quote here
          ;; (the whole line is string and it stays open), -1 = not in one.
          (qq (if (and ins (= r 0))
+                 (if (< (string-index s "\"" 0) 0)
+                     -2                     ; no quote at all: stays open
                  (let str0 ((j 0))
                    (cond
                      ((>= j n) -2)
                      ((= (string-ref s j) 92) (if (>= (+ j 1) n) -2 (str0 (+ j 2))))
                      ((= (string-ref s j) 34) (+ j 1))
-                     (#t (str0 (+ j 1)))))
+                     (#t (str0 (+ j 1))))))
                  -1))
          (open-all (= qq -2))
          (q (cond (open-all n) (#t qq)))
@@ -245,9 +247,27 @@
 
 ;; Entry: (codes str toks tape open last1 last2 syms rtoks ins) -- one
 ;; scan; ins = the line starts inside a string (previous line open).
-(define (pad:lc-entry codes ins)
+(define (pad:lc-entry codes ins) (pad:lc-entry2 codes #f ins))
+
+;; Same entry, with the line string already known (str0, or #f to build
+;; it from codes). A line that starts inside a string and holds no quote
+;; is one T token that stays open: built directly (string-index is a
+;; builtin), no per-char scan. Equal to pad:lc-scan by construction
+;; (emacs_test checks it).
+(define (pad:lc-entry2 codes str0 ins)
   (set! *lc-retok* (+ *lc-retok* 1))
-  (pad:lc-scan (list->string (map integer->char codes)) codes 0 (list) (list) (list) ins))
+  (let ((s (if str0 str0 (list->string (map integer->char codes)))))
+    (if (and ins (< (string-index s "\"" 0) 0))
+        (let ((n (string-length s)))
+          (if (= n 0)
+              (list codes s (list) "" #t #f #f (list) (list) #t)
+              (let ((t (list "T" 0 n s)))
+                (list codes s (list t)
+                      (if (> n *lc-run-max*)
+                          (pad:hl-color-from-tokens s (list t))
+                          (substring *lc-run-T* 0 n))
+                      #t t #f (list) (list t) #t))))
+        (pad:lc-scan s codes 0 (list) (list) (list) ins))))
 
 (define (pad:lc-e-str e) (list-ref e 1))
 (define (pad:lc-e-toks e) (list-ref e 2))
@@ -319,10 +339,19 @@
         (#t (loop (+ i 1) ts prev prev2 (cons #\. acc)))))))
 
 ;; --- cache state (only pad:lc-* write it) ---
-;; record = (entry mkey mrow p1 p2); mrow #f = rebuild on next fast frame.
+;; record = (entry mkey mrow p1 p2 alt); mrow #f = rebuild on next fast
+;; frame. alt = #f or (entry mkey mrow row) of the SAME text lexed from
+;; the other start state (the syntax-ppss cache idea, kept per row):
+;; closing a string you just opened gets every row below back without a
+;; re-lex or a row rebuild.
 (define *lc-recv* (make-vector 0 0))   ; records of the last frame
-(define *lc-altv* (make-vector 0 0))   ; records before the last string flip
-(define *lc-altw* (make-vector 0 ""))  ; their row strings
+(define *lc-nopen* 0)                  ; rows whose entry ends open
+;; Tail memo for pad:lc-line! (the rows below an edit, as they were before
+;; the edit changed their start state): (l ins d1 d2 name Ltail recs rows).
+;; Records are a pure function of (codes, start state, carry key, name),
+;; so the memo is checked by content and reused whole: closing a string
+;; just opened (or opening it again) brings every row below back at once.
+(define *lc-tail* #f)
 (define *lc-hint* #f)                  ; entry lc-line! just scanned, or #f
 (define *lc-rowv* (make-vector 0 ""))  ; row strings of the last frame
 (define *lc-body* "")                  ; the row strings joined (SNAP body)
@@ -340,8 +369,8 @@
 
 (define (pad:lc-reset!)
   (set! *lc-recv* (make-vector 0 0))
-  (set! *lc-altv* (make-vector 0 0))
-  (set! *lc-altw* (make-vector 0 ""))
+  (set! *lc-nopen* 0)
+  (set! *lc-tail* #f)
   (set! *lc-hint* #f)
   (set! *lc-rowv* (make-vector 0 ""))
   (set! *lc-body* "")
@@ -364,14 +393,13 @@
 ;; join keeps every later row cached). The start state is the syntax-ppss
 ;; fact "this line starts inside a string" (previous entry open); when it
 ;; flips, the row is re-lexed even if its text did not change
-;; (jit-lock-contextually). A row that misses every shift may still match
-;; the records saved before the last string open/close flip (*lc-altv*):
-;; closing a string you just opened gets the old rows back without a
-;; re-lex. Entries are a pure function of (codes, start state), so any
-;; equal pair is safe to reuse. Returns list of
-;; (entry old-record-or-#f old-row-string-or-""); a kept row reuses its
+;; (jit-lock-contextually) -- unless the old record's alt already holds
+;; that text lexed from the new state (per-row syntax-ppss memo), which
+;; also brings its mark row and row string. Entries are a pure function
+;; of (codes, start state), so any equal pair is safe to reuse. Returns
+;; list of (entry old-or-#f old-row-string-or-"" alt); old has the
+;; record layout for fields 0..2 (entry mkey mrow); a kept row reuses its
 ;; old row string (try_window_reusing_current_matrix).
-;; Inlined (formerly pad:lc-match / pad:lc-old-at).
 (define (pad:lc-entries L)
   (let ((ov *lc-recv*) (ow *lc-rowv*) (on (vector-length *lc-recv*)))
     (let loop ((xs L) (i 0) (d 0) (ins #f) (acc (list)))
@@ -388,20 +416,27 @@
                  (r3 (and (not h0) (not h1) (not h2) (>= j3 0) (< j3 on) (vector-ref ov j3)))
                  (h3 (and r3 (eq? (list-ref (car r3) 9) ins) (equal? (car (car r3)) codes))))
             (cond
-              (h0 (loop (cdr xs) (+ i 1) d (list-ref (car r0) 4) (cons (list (car r0) r0 (vector-ref ow j0)) acc)))
-              (h1 (loop (cdr xs) (+ i 1) 0 (list-ref (car r1) 4) (cons (list (car r1) r1 (vector-ref ow j1)) acc)))
-              (h2 (loop (cdr xs) (+ i 1) -1 (list-ref (car r2) 4) (cons (list (car r2) r2 (vector-ref ow j2)) acc)))
-              (h3 (loop (cdr xs) (+ i 1) 1 (list-ref (car r3) 4) (cons (list (car r3) r3 (vector-ref ow j3)) acc)))
-              (#t (let* ((ra (and (< i (vector-length *lc-altv*)) (vector-ref *lc-altv* i)))
-                         (ha (and ra (eq? (list-ref (car ra) 9) ins) (equal? (car (car ra)) codes))))
-                    (cond
-                      (ha
-                        (loop (cdr xs) (+ i 1) d (list-ref (car ra) 4) (cons (list (car ra) ra (vector-ref *lc-altw* i)) acc)))
-                      ((and *lc-hint* (eq? (car *lc-hint*) codes) (eq? (list-ref *lc-hint* 9) ins))
-                        (loop (cdr xs) (+ i 1) d (list-ref *lc-hint* 4) (cons (list *lc-hint* #f "") acc)))
-                      (#t
-                        (let ((e (pad:lc-entry codes ins)))
-                          (loop (cdr xs) (+ i 1) d (list-ref e 4) (cons (list e #f "") acc)))))))))))))
+              (h0 (loop (cdr xs) (+ i 1) d (list-ref (car r0) 4) (cons (list (car r0) r0 (vector-ref ow j0) (list-ref r0 5)) acc)))
+              (h1 (loop (cdr xs) (+ i 1) 0 (list-ref (car r1) 4) (cons (list (car r1) r1 (vector-ref ow j1) (list-ref r1 5)) acc)))
+              (h2 (loop (cdr xs) (+ i 1) -1 (list-ref (car r2) 4) (cons (list (car r2) r2 (vector-ref ow j2) (list-ref r2 5)) acc)))
+              (h3 (loop (cdr xs) (+ i 1) 1 (list-ref (car r3) 4) (cons (list (car r3) r3 (vector-ref ow j3) (list-ref r3 5)) acc)))
+              (#t
+               ;; same text, other start state: the memo, else a re-lex
+               (let* ((jc (cond ((and r0 (equal? (car (car r0)) codes)) j0)
+                                ((and r1 (equal? (car (car r1)) codes)) j1)
+                                ((and r2 (equal? (car (car r2)) codes)) j2)
+                                ((and r3 (equal? (car (car r3)) codes)) j3)
+                                (#t -1)))
+                      (rc (if (>= jc 0) (vector-ref ov jc) #f))
+                      (alt (and rc (list-ref rc 5)))
+                      (ae (and alt (eq? (list-ref (car alt) 9) ins) (car alt)))
+                      (nalt (and rc (list (car rc) (list-ref rc 1) (list-ref rc 2) (vector-ref ow jc)))))
+                 (if ae
+                     (loop (cdr xs) (+ i 1) d (list-ref ae 4) (cons (list ae alt (list-ref alt 3) nalt) acc))
+                     (let ((e (if (and *lc-hint* (eq? (car *lc-hint*) codes) (eq? (list-ref *lc-hint* 9) ins))
+                                  *lc-hint*
+                                  (pad:lc-entry2 codes (and rc (list-ref (car rc) 1)) ins))))
+                       (loop (cdr xs) (+ i 1) d (list-ref e 4) (cons (list e #f "" nalt) acc))))))))))))
 
 ;; Fast rows from per-line entries: list of (record row-string). The
 ;; def-carry key (pad:lc-ckey) and the no-mark row are inlined.
@@ -430,7 +465,7 @@
                (q1 (if a a p1))
                (q2 (cond ((not a) p2) ((not b) p1) (#t b))))
           (loop (cdr xs) (+ i 1) q1 q2
-                (cons (list (list e mkey mrow p1 p2)
+                (cons (list (list e mkey mrow p1 p2 (list-ref (car xs) 3))
                             (if keep
                                 (list-ref (car xs) 2)
                                 (string-append "T " str "\nH " (list-ref e 3) "\nM " mrow "\n")))
@@ -462,18 +497,16 @@
 (define (pad:lc-generic! L l col)
   (let* ((es (pad:lc-entries L))
          (h0 (set! *lc-hint* #f))
-         (full (let any ((xs es))                 ; any row ends inside a string?
-                 (cond ((null? xs) #f)
-                       ((list-ref (car (car xs)) 4) #t)
-                       (#t (any (cdr xs))))))
+         (nopen (let cnt ((xs es) (c 0))          ; rows ending inside a string
+                  (if (null? xs) c (cnt (cdr xs) (if (list-ref (car (car xs)) 4) (+ c 1) c)))))
+         (full (> nopen 0))
          (name (pad:lc-name-at (car (list-ref es l)) col))
          (rr (pad:lc-fast-recs es name))
          (rows (map cadr rr))
          (dirty (if (= *lc-framed* 0)
                     (list)
                     (pad:lc-dirty (vector->list *lc-rowv*) rows l))))
-    (if (not (eq? full (= *lc-full* 1)))
-        (begin (set! *lc-altv* *lc-recv*) (set! *lc-altw* *lc-rowv*)))
+    (set! *lc-nopen* nopen)
     (set! *lc-recv* (list->vector (map car rr)))
     (set! *lc-rowv* (list->vector rows))
     (set! *lc-body* (apply string-append rows))
@@ -542,7 +575,7 @@
                                             (mk (cdr ts) t prev j acc))))))))
                        (row (string-append "T " str "\nH " (list-ref e 3) "\nM " mrow "\n")))
                   (loop (cdr rs) (cdr ws) (+ i 1)
-                        (cons (list e (cons name (cdr (list-ref r 1))) mrow p1 p2) racc)
+                        (cons (list e (cons name (cdr (list-ref r 1))) mrow p1 p2 (list-ref r 5)) racc)
                         (cons row wacc)
                         (if (string=? row (car ws)) dacc (cons i dacc))))
                 (loop (cdr rs) (cdr ws) (+ i 1) (cons r racc) (cons (car ws) wacc) dacc)))))))
@@ -566,13 +599,30 @@
     (set! *lc-frames* (+ *lc-frames* 1))
     dirty))
 
+;; Ascending row lists a, b -> ascending union.
+(define (pad:lc-union a b)
+  (let u ((a a) (b b) (acc (list)))
+    (cond
+      ((null? a) (append (reverse acc) b))
+      ((null? b) (append (reverse acc) a))
+      ((= (car a) (car b)) (u (cdr a) (cdr b) (cons (car a) acc)))
+      ((< (car a) (car b)) (u (cdr a) b (cons (car a) acc)))
+      (#t (u a (cdr b) (cons (car b) acc))))))
+
 ;; One-line edit frame = Emacs try_window_id for a change confined to
-;; one row: re-tokenize row l only (jit-lock: fontify just the changed
-;; line). If the name under the cursor and the def-carry out of row l
-;; are unchanged (jit-lock-contextually: nothing after the line needs
-;; refontifying), no other row can change; else fall back to the
-;; generic frame (entries still reused). The record/row vectors are
-;; rebuilt with builtins (no vector-set!, see the header note).
+;; one row: re-lex row l only from the change on (jit-lock-after-change),
+;; then walk the rows below the way jit-lock-context / syntax-ppss do:
+;; a row is touched only while its start state (inside a string?) or the
+;; def-carry into it differs from what its cached record was built with,
+;; and the walk STOPS at the first row whose start state and carry match
+;; (every later row is then unchanged and kept as is). A touched row with
+;; the same text gets its entry from the record (same state), from the
+;; record's alt (the other state, lexed before: closing a string just
+;; opened), from the direct no-quote build, or from one scan. Mark rows
+;; are built for the old name; if the name under the cursor changed,
+;; pad:lc-remark! then fixes exactly the rows holding the old or new
+;; name. The record/row vectors are rebuilt with builtins (no
+;; vector-set!, see the header note).
 (define (pad:lc-line! L l col)
   (let* ((codes (list-ref L l))
          (old (vector-ref *lc-recv* l))
@@ -599,16 +649,14 @@
                     (list xs mr))))
          (acc0 (car cut))
          (r (if (pair? acc0) (caddr (car acc0)) 0))
-         (e (begin (set! *lc-retok* (+ *lc-retok* 1))      ; pad:lc-entry, inlined
+         (le (begin (set! *lc-retok* (+ *lc-retok* 1))      ; pad:lc-entry, inlined
                    (pad:lc-scan news codes r acc0
                                 (if (> r 0) (list (substring (list-ref oe 3) 0 r)) (list))
                                 (drop (list-ref oe 7) (cadr cut))
                                 (list-ref oe 9)))))
-    ;; the row's end state flipped (a string now runs past it, or no
-    ;; longer does): the rows below start in a new syntax state
-    (if (or (not (eq? (list-ref e 4) (list-ref oe 4))) (not (list-ref old 2)))
-        (begin (set! *lc-hint* e) (pad:lc-generic! L l col))
-        (let* ((name (let loop ((ts (list-ref e 2)))   ; pad:lc-name-at, inlined
+    (if (not (list-ref old 2))
+        (begin (set! *lc-hint* le) (pad:lc-generic! L l col))
+        (let* ((name (let loop ((ts (list-ref le 2)))   ; pad:lc-name-at, inlined
                        (if (null? ts)
                            ""
                            (let* ((t (car ts)) (kd (car t)))
@@ -617,58 +665,160 @@
                                       (>= col (cadr t)) (< col (caddr t)))
                                  (list-ref t 3)
                                  (loop (cdr ts)))))))
-               (p1 (list-ref old 3))
-               (p2 (list-ref old 4))
+               (oname *lc-name*)
+               (mx *lc-run-max*)
+               (mk00 (list *lc-name* 0 0))
                (rs (vector->list *lc-recv*))
-               (n (length rs))
-               (keep (- n l))
-               (after (+ l 1)))
-          (if (and (string=? name *lc-name*)
-                   ;; carry out of row l unchanged? (pad:lc-cokey, inlined
-                   ;; for the new and the old entry)
-                   (let* ((a (list-ref e 5)) (b (list-ref e 6))
-                          (q1 (if a a p1)) (q2 (cond ((not a) p2) ((not b) p1) (#t b)))
-                          (oa (list-ref oe 5)) (ob (list-ref oe 6))
-                          (o1 (if oa oa p1)) (o2 (cond ((not oa) p2) ((not ob) p1) (#t ob)))
-                          (d1 (and q1 (string=? (car q1) "K") (string=? (list-ref q1 3) "define")))
-                          (d2 (and q1 (string=? (car q1) "P") q2 (string=? (car q2) "K")
-                                   (string=? (list-ref q2 3) "define")))
-                          (e1 (and o1 (string=? (car o1) "K") (string=? (list-ref o1 3) "define")))
-                          (e2 (and o1 (string=? (car o1) "P") o2 (string=? (car o2) "K")
-                                   (string=? (list-ref o2 3) "define"))))
-                     (and (eq? (not d1) (not e1)) (eq? (not d2) (not e2)))))
-              (let* ((str (list-ref e 1))
-                     (k (string-length str))
-                     (mrow (if (and (<= k *lc-run-max*)
-                                    (or (string=? name "") (not (member name (list-ref e 7)))))
-                               (substring *lc-dots* 0 k)
-                               (pad:lc-mrow e name p1 p2)))
-                     (row (string-append "T " str "\nH " (list-ref e 3) "\nM " mrow "\n"))
-                     (ws (vector->list *lc-rowv*))
-                     (wpre (reverse (drop (reverse ws) keep)))
-                     (wpost (drop ws after)))
-                (set! *lc-recv*
-                      (list->vector
-                        (append (reverse (drop (reverse rs) keep))
-                                (cons (list e (cons name (cdr (list-ref old 1))) mrow p1 p2)
-                                      (drop rs after)))))
-                (set! *lc-rowv* (list->vector (append wpre (cons row wpost))))
-                (set! *lc-body* (string-append (apply string-append wpre) row
-                                               (apply string-append wpost)))
-                (set! *lc-lines* (+ *lc-lines* 1))
-                (set! *lc-L* L)
-                (set! *lc-cur* l)
+               (ws (vector->list *lc-rowv*))
+               (keep (- (length rs) l))
+               ;; walk rows l, l+1, ... -> (records rows nopen dirty)
+               (res
+                (let rw ((rr (drop rs l)) (ww (drop ws l)) (i l) (ins (list-ref oe 9))
+                         (p1 (list-ref old 3)) (p2 (list-ref old 4))
+                         (racc (list)) (wacc (list)) (dacc (list)) (nopen *lc-nopen*))
+                  (let* ((rc (if (pair? rr) (car rr) #f))
+                         (d1 (if (and p1 (string=? (car p1) "K") (string=? (list-ref p1 3) "define")) 1 0))
+                         (d2 (if (and p1 (string=? (car p1) "P") p2 (string=? (car p2) "K")
+                                      (string=? (list-ref p2 3) "define"))
+                                 1 0)))
+                    (if (or (not rc)
+                            (and (> i l)
+                                 (eq? ins (list-ref (car rc) 9))
+                                 (list-ref rc 2)
+                                 (= (cadr (list-ref rc 1)) d1)
+                                 (= (caddr (list-ref rc 1)) d2)))
+                        ;; start state and carry match the cache: stop here
+                        (list (append (reverse racc) rr) (append (reverse wacc) ww) nopen (reverse dacc))
+                        (let* ((tm (and (= i (+ l 1)) *lc-tail*))
+                               (hit (and tm (= (car tm) l) (eq? (cadr tm) ins)
+                                         (= (caddr tm) d1) (= (list-ref tm 3) d2)
+                                         (string=? (list-ref tm 4) oname)
+                                         (equal? (list-ref tm 5) (drop L i))))
+                               ;; the rows below are about to change: remember
+                               ;; them as they are (the memo for the way back)
+                               (sv (if (= i (+ l 1))
+                                       (set! *lc-tail*
+                                             (list l (list-ref (car rc) 9)
+                                                   (cadr (list-ref rc 1)) (caddr (list-ref rc 1))
+                                                   oname (drop *lc-L* i) rr ww))
+                                       0)))
+                          (cond
+                            ((= i l)
+                             ;; the edited row itself (fresh entry le, carry in
+                             ;; unchanged); marks for the old name
+                             (let* ((str (list-ref le 1))
+                                    (k (string-length str))
+                                    (mrow (if (and (<= k mx)
+                                                   (or (string=? oname "")
+                                                       (not (member oname (list-ref le 7)))))
+                                              (substring *lc-dots* 0 k)
+                                              (pad:lc-mrow le oname p1 p2)))
+                                    (a (list-ref le 5))
+                                    (b (list-ref le 6)))
+                               (rw (cdr rr) (cdr ww) (+ i 1) (list-ref le 4)
+                                   (if a a p1)
+                                   (cond ((not a) p2) ((not b) p1) (#t b))
+                                   (cons (list le (list oname d1 d2) mrow p1 p2 #f) racc)
+                                   (cons (string-append "T " str "\nH " (list-ref le 3) "\nM " mrow "\n") wacc)
+                                   (cons i dacc)
+                                   (+ nopen (if (list-ref le 4) 1 0) (if (list-ref oe 4) -1 0)))))
+                            (hit
+                             ;; memo rows back whole; one pass for dirty rows
+                             ;; and the open-row count of the swapped tails
+                             (let dl ((xs (list-ref tm 7)) (ys ww) (sr (list-ref tm 6)) (orr rr)
+                                      (j i) (acc dacc) (no nopen))
+                               (if (null? xs)
+                                   (list (append (reverse racc) (list-ref tm 6))
+                                         (append (reverse wacc) (list-ref tm 7))
+                                         no (reverse acc))
+                                   (dl (cdr xs) (cdr ys) (cdr sr) (cdr orr) (+ j 1)
+                                       (if (string=? (car xs) (car ys)) acc (cons j acc))
+                                       (+ no (if (list-ref (car (car sr)) 4) 1 0)
+                                          (if (list-ref (car (car orr)) 4) -1 0))))))
+                            ;; a quote-free row now starting inside a string,
+                            ;; no usable memo: one open T token, no mark (the
+                            ;; common case under a string just opened)
+                            ((and ins (> i l) (= d1 0) (= d2 0)
+                                  (not (list-ref (car rc) 9))
+                                  (not (and (list-ref rc 5) (list-ref (car (list-ref rc 5)) 9)))
+                                  (let* ((s (list-ref (car rc) 1)) (n (string-length s)))
+                                    (and (> n 0) (<= n mx) (< (string-index s "\"" 0) 0))))
+                             (let* ((oe-i (car rc))
+                                    (s (list-ref oe-i 1))
+                                    (n (string-length s))
+                                    (t (list "T" 0 n s))
+                                    (tape (substring *lc-run-T* 0 n))
+                                    (mrow (substring *lc-dots* 0 n))
+                                    (row (string-append "T " s "\nH " tape "\nM " mrow "\n")))
+                               (set! *lc-retok* (+ *lc-retok* 1))
+                               (rw (cdr rr) (cdr ww) (+ i 1) #t t p1
+                                   (cons (list (list (car oe-i) s (list t) tape #t t #f (list) (list t) #t)
+                                               mk00 mrow p1 p2
+                                               (list oe-i (list-ref rc 1) (list-ref rc 2) (car ww)))
+                                         racc)
+                                   (cons row wacc)
+                                   (if (string=? row (car ww)) dacc (cons i dacc))
+                                   (+ nopen (if (list-ref oe-i 4) 0 1)))))
+                            (#t
+                             (let* ((oe-i (car rc))
+                                    (oins (list-ref oe-i 9))
+                                    (alt (list-ref rc 5))
+                                    (same (and (> i l) (eq? ins oins)))
+                                    (altok (and (> i l) (not same) alt (eq? (list-ref (car alt) 9) ins)))
+                                    (ne (cond
+                                          ((= i l) le)
+                                          (same oe-i)
+                                          (altok (car alt))
+                                          (#t (pad:lc-entry2 (car oe-i) (list-ref oe-i 1) ins))))
+                                    (nalt (cond
+                                            ((= i l) #f)
+                                            (same alt)
+                                            (#t (list oe-i (list-ref rc 1) (list-ref rc 2) (car ww)))))
+                                    (mkey (list oname d1 d2))
+                                    ;; cached (mkey mrow row) already built for ne
+                                    (src (cond
+                                           (same (list (list-ref rc 1) (list-ref rc 2) (car ww)))
+                                           (altok (cdr alt))
+                                           (#t #f)))
+                                    (kp (and src (cadr src) (equal? (car src) mkey)))
+                                    (str (list-ref ne 1))
+                                    (k (string-length str))
+                                    (mrow (cond
+                                            (kp (cadr src))
+                                            ((and (<= k mx)
+                                                  (or (string=? oname "") (not (member oname (list-ref ne 7)))))
+                                             (substring *lc-dots* 0 k))
+                                            (#t (pad:lc-mrow ne oname p1 p2))))
+                                    (row (if kp
+                                             (caddr src)
+                                             (string-append "T " str "\nH " (list-ref ne 3) "\nM " mrow "\n")))
+                                    (a (list-ref ne 5))
+                                    (b (list-ref ne 6)))
+                               (rw (cdr rr) (cdr ww) (+ i 1) (list-ref ne 4)
+                                   (if a a p1)
+                                   (cond ((not a) p2) ((not b) p1) (#t b))
+                                   (cons (list ne mkey mrow p1 p2 nalt) racc)
+                                   (cons row wacc)
+                                   (if (or (= i l) (not (string=? row (car ww)))) (cons i dacc) dacc)
+                                   (+ nopen (if (list-ref ne 4) 1 0) (if (list-ref oe-i 4) -1 0)))))))))))
+               (recs (append (reverse (drop (reverse rs) keep)) (car res)))
+               (rows (append (reverse (drop (reverse ws) keep)) (cadr res)))
+               (nopen (caddr res)))
+          (set! *lc-recv* (list->vector recs))
+          (set! *lc-rowv* (list->vector rows))
+          (set! *lc-body* (apply string-append rows))
+          (set! *lc-nopen* nopen)
+          (set! *lc-full* (if (> nopen 0) 1 0))
+          (set! *lc-lines* (+ *lc-lines* 1))
+          (set! *lc-L* L)
+          (set! *lc-cur* l)
+          (set! *lc-framed* 1)
+          (set! *lc-frames* (+ *lc-frames* 1))
+          (if (string=? name oname)
+              (list-ref res 3)
+              (let ((dm (pad:lc-remark! name l)))
                 (set! *lc-name* name)
-                (set! *lc-framed* 1)
-                (set! *lc-frames* (+ *lc-frames* 1))
-                (list l))
-              (begin
-                ;; let the generic frame reuse the fresh entry for row l
-                (set! *lc-recv*
-                      (list->vector
-                        (append (reverse (drop (reverse rs) keep))
-                                (cons (list e #f #f p1 p2) (drop rs after)))))
-                (pad:lc-generic! L l col)))))))
+                (pad:lc-union (list-ref res 3) dm)))))))
 
 ;; One frame. Returns dirty rows; () on the first frame (Soft omits
 ;; DIRTY; C full-blits). Frame choice = Emacs redisplay_window's ladder:
