@@ -12,6 +12,54 @@ bash scripts/smoke_perf.sh    # pad/perf.aura → PAD_PERF_OK + PAD_M7_PERF_OK,
 bash scripts/smoke_m7.sh      # tests + DIRTY audit + perf → PAD_M7_OK
 ```
 
+## Wire v2 (`SNAP v2 pad`): no gain, v1 stays the default
+
+The last lever in the ROADMAP latency table is to skip the SNAP rows C
+already has. v2 sends only Soft's DIRTY rows plus `GEN`/`base=` and the
+body length, and C rebuilds the rest or drops the block (DESIGN §7.1,
+`PAD_WIRE2_OK`).
+
+```bash
+bash scripts/bench_wire2.sh   # pad-w1 / pad-w2 / pad-tip, interleaved per round
+```
+
+Same pty harness as `bench_editors.sh`: the 12-row page, cursor at the
+end of row 6, dev:v1.0.9, Soft `c69e644`, 8 cores shared with the
+`aura-build-burn` container. Each round runs w1 and w2 in alternating
+order, then the tip. Six rounds of n=60 (120 samples per key per run).
+The tables show the median of the six per-run medians, "done" ms per key.
+
+| key | before: tip `6b51057` | v1 (`--wire1`) | v2, frame in a Soft call (run 1) | v2, one-row frame inlined (run 2) |
+|-----|------------------|----------------|----------------------------------|-----------------------------------|
+| insert | 3.15 / 3.27 | 3.23 / 3.24 | **3.52** | **3.16** |
+| cursor | 1.74 / 1.79 | 1.78 / 1.71 | **2.26** | **1.86** |
+
+Read each "a / b" cell as run 1 / run 2.
+
+- Run 1: v2 was slower in all six rounds, by +0.3 ms (insert) and
+  +0.5 ms (cursor). The frame was built by one more Soft call
+  (`pad:w2-frame`). On this tip a loop step with an empty call (two
+  Soft calls) costs ~0.26 ms (#4350), which is more than v2 can save.
+- Run 2: the one-row frame is inlined at `pad:play-snap` and in the
+  play_in fast path. The streams stay byte-identical. The paired per-round
+  difference w2 − w1 is +0.14 ms for cursor and −0.13 ms for insert. Per-run
+  values overlap (cursor w1 1.63–2.11, w2 1.61–1.96), so this is **no
+  measurable gain**.
+- What v2 does save: on the big page the wire drops from **44 lines /
+  1 044 B per frame to 12 lines / 319 B**, with a median of 1 row sent
+  (`wire2_check.py`, 208 frames). Soft writes one `write()` per line
+  (`stdbuf -oL`). Under strace the Soft write span per key fell from
+  1.2 ms to 0.4 ms, but strace inflates every syscall. Without strace,
+  32 fewer small writes are worth ~0.1 ms.
+- Where the time goes: Soft compute before the first byte is still
+  1.2–1.7 ms per cursor key. A v2 frame string costs ~40 µs more to build
+  (two more `number->string`). Terminal bytes are unchanged (81 / 83 B per
+  key): C repaints the same rows either way.
+- Decision: `pad_play` keeps v1 by default (`--wire1`). v2 stays
+  available behind `--wire2` with the full fail-closed smoke, so it can
+  become the default when it wins: either when Soft calls get cheap
+  (#4350), or when a slow pipe makes wire bytes matter.
+
 ## Now: gap2 + Aura-native round (see [`perf-aura.md`](perf-aura.md))
 
 Same pty harness, two runs, ms per key (`out/bench/editors_aura.txt`).
@@ -268,3 +316,10 @@ Aura 原生一轮（perf-aura.md）：gap2 把字符串打开从 ~7.2 降到 ~5.
 相同。实测的负面结论：`mutate:rebind` 每次 12–18 ms，workspace 代码与文件代码
 同速，CLI 的 fiber 是线程且与 `read-line` 竞争（aura#4356），所以对按键没有加速。
 vim/Emacs 仍快 3–17×。
+
+wire v2（只发 Soft DIRTY 行，`GEN`/`base=` + body 长度，C 失败关闭并
+请求整帧）：同机交错 A/B，每轮 6 次、n=60。第一次（帧在一次 Soft 调用
+里）v2 更慢：光标 2.26 vs 1.78 ms，插入 3.52 vs 3.23 ms。内联单行帧后
+第二次：光标 1.86 vs 1.71，插入 3.16 vs 3.24，属于噪声，**没有可测收益**。
+线上字节从每帧 44 行 / 1 044 B 降到 12 行 / 319 B，但瓶颈是 Soft 计算
+（每键 1.2–1.7 ms）。v1 仍是默认，v2 用 `--wire2` 开启（`PAD_WIRE2_OK`）。
