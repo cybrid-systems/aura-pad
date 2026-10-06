@@ -32,6 +32,12 @@
 #      set-code) with who/why recovered from log reasons + pad stamps
 #      (aura#4365, aura#4366)                         -> M11E_ACC 1..3 OK
 #                                                                   -> PAD_M11_TIME_OK
+#   8. M11f sandbox worlds: each AI idea is tried in its own child world
+#      (workspace :create / :switch, one typed-mutate-atomic, goal checks
+#      run there); root is healed after every idea (aura#4368); only an
+#      idea that beats the page comes back, as a robot KEEP (rebind, never
+#      workspace :merge)                               -> M11F_ACC 1..2 OK
+#                                                                   -> PAD_M11_WORLD_OK
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$ROOT/out/m11"
@@ -40,13 +46,14 @@ soft_errs() { grep -qiE 'error:|unbound variable' "$@"; }
 python3 "$ROOT/scripts/paren_check.py" \
   "$ROOT"/soft/pad/robot.aura "$ROOT"/soft/pad/eng_who.aura "$ROOT"/soft/pad/why.aura \
   "$ROOT"/soft/pad/blast.aura "$ROOT"/soft/pad/time.aura "$ROOT"/soft/pad/ws.aura \
-  "$ROOT"/soft/pad/m11_test.aura "$ROOT"/soft/pad/m11_cases.aura "$ROOT"/soft/pad/m11e_cases.aura
+  "$ROOT"/soft/pad/world.aura "$ROOT"/soft/pad/m11_test.aura "$ROOT"/soft/pad/m11_cases.aura \
+  "$ROOT"/soft/pad/m11e_cases.aura "$ROOT"/soft/pad/m11f_cases.aura
 
 echo "smoke_m11: Soft tests (AURA_MUTATE_TYPE_GATE=hard)"
 T="$ROOT/out/m11/m11_test.txt"
 AURA_MUTATE_TYPE_GATE=hard bash "$ROOT/scripts/run_soft.sh" /workspace/aura-pad/soft/pad/m11_test.aura \
   </dev/null >"$T" 2>"$ROOT/out/m11/m11_test.err"
-grep -E '^(M11[A-Z_]*|M11GATE|M11STATS|M11TXN|KEEP robot|DROP robot|REJECT robot|CARD robot|BLAST|EWHOROWS|TIME|OPEN|SAVE|TESTS|PAD_M11_TEST)' "$T" || true
+grep -E '^(M11[A-Z_]*|M11GATE|M11STATS|M11TXN|KEEP robot|DROP robot|REJECT robot|CARD robot|BLAST|EWHOROWS|TIME|OPEN|SAVE|WORLD|WIN|NOWIN|TESTS|PAD_M11_TEST)' "$T" || true
 if ! grep -q '^PAD_M11_TEST_OK$' "$T" || grep -q 'WANT=' "$T" \
    || soft_errs "$T" "$ROOT/out/m11/m11_test.err"; then
   grep -E 'WANT=|FAIL' "$T" >&2 || true
@@ -143,3 +150,21 @@ if [[ "$fail" -ne 0 ]]; then
   echo "smoke_m11: PAD_M11_TIME_OK checks failed" >&2; exit 1
 fi
 echo "smoke_m11: PAD_M11_TIME_OK"
+
+fail=0
+for n in 1 2; do
+  grep -qx "M11F_ACC $n OK" "$T" || { echo "smoke_m11: missing: M11F_ACC $n OK" >&2; fail=1; }
+done
+for want in 'T F1_TAG=WIN OK' 'T F1_VERDICT=agree OK' 'T F1_ROOT_SAME_DURING=yes OK' \
+            'T F1_IDEA1_SCORE=3 OK' 'T F1_IDEA1_ENG=hello OK' 'T F1_IDEA3=refused OK' \
+            'T F1_ROOT_CURRENT=0 OK' 'T F1_HELLO_ROOT=6 OK' 'T F1_UNDO_HELLO=4 OK' \
+            'T F2_TAG=NOWIN OK' 'T F2_CODE_SAME=yes OK' 'T F2_GREET_ROOT=2 OK' 'T F2_ROOT_CURRENT=0 OK'; do
+  grep -qF -- "$want" "$T" || { echo "smoke_m11: missing: $want" >&2; fail=1; }
+done
+if grep -q '^M11_WORLD_DISAGREE' "$T"; then
+  echo "smoke_m11: sandbox worlds disagreed with the engine" >&2; fail=1
+fi
+if [[ "$fail" -ne 0 ]]; then
+  echo "smoke_m11: PAD_M11_WORLD_OK checks failed" >&2; exit 1
+fi
+echo "smoke_m11: PAD_M11_WORLD_OK"
