@@ -3,7 +3,7 @@
 Requirements: [`REQUIREMENTS.md`](REQUIREMENTS.md) · Design:
 [`DESIGN.md`](DESIGN.md) · Engine gaps: [`ISSUES.md`](ISSUES.md).
 
-M0–M6 shipped (see `m0.md` … `m6.md`). **M7 shipped** (`m7.md`). M8 shipped (`m8.md`). **M9 shipped** (`m9.md`). The
+M0–M6 shipped (see `m0.md` … `m6.md`). **M7 shipped** (`m7.md`). M8 shipped (`m8.md`). **M9 shipped** (`m9.md`). **M10 shipped** (`m10.md`). The
 earlier M7–M12 sketch in [`NEXT.md`](NEXT.md) (kept for its detail) is
 renumbered here; where they disagree, this file wins:
 NEXT's "M7 workspace" is now **M9**, "M8 intent worldline" stays **M8**,
@@ -107,7 +107,7 @@ own `display` output goes straight to stdout and Soft tip has no output
 capture, so a check would corrupt the SNAP stream. The `pad:nb-line!`
 key handler is tested in Soft only.
 
-## M10 — who wrote this + engine dirty (next)
+## M10 — who wrote this + engine dirty (done)
 
 Every KEEP stamps `(who why gen)` on the rows it touched (`who` ∈ kid,
 helper, macro, law; `gen` from `mutate:summary`). Kid key `ctrl-o`
@@ -118,22 +118,33 @@ and Soft DIRTY stays the only source.
 
 Acceptance tests:
 
-1. `WHO who=helper why=closer gen=4` on a row a helper KEEP wrote;
+- [x] 1. `WHO who=helper why=closer gen=4` on a row a helper KEEP wrote;
    `no-who` "nobody has changed this yet" on an untouched row.
-2. Kid typing on a stamped row restamps it `who=kid`; undo restores the
+- [x] 2. Kid typing on a stamped row restamps it `who=kid`; undo restores the
    previous stamp with the text (same snapshot).
-3. Undo of a KEEP is `ast:restore` of the pre-race snapshot + re-project;
+- [x] 3. Undo of a KEEP is `ast:restore` of the pre-race snapshot + re-project;
    Soft undo stack and restore agree or the test fails loud.
-4. Engine dirty cross-check: rows of nodes reported dirty ⊆ Soft DIRTY ∪
+- [x] 4. Engine dirty cross-check: rows of nodes reported dirty ⊆ Soft DIRTY ∪
    cursor row (or `GAPS` line printed). → `PAD_M10_OK`.
+
+Shipped ([`m10.md`](m10.md)): `who.aura` (row stamps, ctrl-o in
+`play.aura`), `who_pen.aura` (pen stamps, undo agree check, engine dirty
+cross-check). `query:dirty-nodes` is bound on `c69e644`; nodes are
+placed on rows through `query:defines` + `query:dirty-subtree` (no node →
+row query on tip, so a dirty node outside every page define is printed
+as `GAPS query:node-row unmapped=N`, never guessed). Stamps are
+row-level; `gen` is read from the engine metrics face (`pad:pen-gen`),
+not `mutate:summary`. Filed while building it: #4353.
 
 ## Latency track (runs alongside M8–M10)
 
 Goal: insert < 16 ms on kid pages (one 60 fps frame). **Met** with the
 Emacs ports: insert ~3.6 ms and cursor ~1.3 ms on the twelve-row page on
 Aura `c69e644`, down from ~33–35 / 17–19 ms (see `perf.md`,
-`perf-emacs.md`). Still over a frame: opening a string above many rows
-(~24 ms).
+`perf-emacs.md`). Opening a string above many rows is now under a frame
+too: ~7–9 ms (was ~24 ms), the close after it ~6–7 ms (was ~14 ms), via
+the syntax-ppss / jit-lock-context region walk. Same-harness vim / Emacs
+numbers are in `perf-emacs.md` (they are 10–30× faster per key).
 
 | lever | owner | expected |
 |-------|-------|----------|

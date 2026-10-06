@@ -1,7 +1,7 @@
 # aura-pad issues
 
 Live plan: [`ROADMAP.md`](ROADMAP.md). Design: [`DESIGN.md`](DESIGN.md).
-M0–M9 stay green.
+M0–M10 stay green.
 
 Soft tip: `c69e644`. Aura issues filed from aura-pad. Pad work never
 invents a replacement API for any of them.
@@ -10,6 +10,7 @@ invents a replacement API for any of them.
 
 | Aura issue | What is wrong | Pad rule until it lands |
 |------------|---------------|-------------------------|
+| [aura#4353](https://github.com/cybrid-systems/aura/issues/4353) | An outer local (let / let* / parameter) captured inside a named-let or letrec body resolves to a same-named global (procedure or value). Silent wrong value (std/math `e`, pad globals `row`, `p1`, ...) | Do not read captured outer locals in named lets whose names exist as globals; new loops take their data as parameters; test globals carry a file prefix (`m10:`, `*m10-`) |
 | [aura#4352](https://github.com/cybrid-systems/aura/issues/4352) | A top-level named let that calls a user proc, in a loaded file, breaks later prelude calls (`reverse`: unbound `lst`). In the full stack this showed up as random type errors and calls to the wrong function | No top-level named let in loaded files; build tables with a named procedure (`pad:lc-cls-list`) |
 | [aura#4351](https://github.com/cybrid-systems/aura/issues/4351) | `null?` in a loaded file with `(require ... all:)` calls a pad global | Entry files load `std.aura` (the requires) before any pad file; `query.aura` has no requires |
 | [aura#4350](https://github.com/cybrid-systems/aura/issues/4350) | #4343 / #4346 repros still linear in define count on `c69e644`; calls ~1.5× slower than `73c012c` | One `set-code` per check, never per key. `list->vector`, no `vector-set!`. Numbers in `perf.md` |
@@ -57,13 +58,14 @@ Shipped ([`m9.md`](m9.md)). Filed while building it: #4347, #4348, #4349,
 - M9.3 Keystrokes between checks make zero `set-code` calls. REJECT does not bump generation.
 - M9.4 `PAD_M9_OK`. M0–M8 markers still print.
 
-## M10 — who wrote this + engine dirty
+## M10 — who wrote this + engine dirty (done)
 
-`query:dirty-nodes` is a landed name (#344 closed). If unbound on this tip, GAP and Soft DIRTY stays the only source.
+Shipped ([`m10.md`](m10.md)). Filed while building it: #4353.
+`query:dirty-nodes` is bound on `c69e644`.
 
-- M10.1 Stamp `who/why/gen` from `mutate:summary`.
-- M10.2 `who` command (`ctrl-o`). `ast:restore` undo. No guessed text.
-- M10.3 Soft DIRTY ↔ engine dirty-nodes cross-check (or `GAPS`).
+- M10.1 Stamp `who/why/gen` per row (`gen` from the engine metrics face, `pad:pen-gen`).
+- M10.2 `who` command (`ctrl-o`). Pen undo = `ast:restore` + re-project, agree or fail loud. No guessed text.
+- M10.3 Soft DIRTY ↔ engine dirty-nodes cross-check; nodes outside every page define print `GAPS query:node-row`.
 
 ## M11 — aura notebook
 
