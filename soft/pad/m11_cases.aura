@@ -2,7 +2,7 @@
 ;; Every section is a function; the entry file runs ONE top-level call
 ;; (forms after a set-code + eval-current are read back wrong, docs/m9.md).
 ;; Test globals carry an m11 prefix only (aura#4353). Prints T lines,
-;; M11A_ACC n OK per acceptance item, M11STATS, then PAD_M11_TEST_OK.
+;; M11A_ACC / M11B_ACC n OK per acceptance item, M11STATS, then PAD_M11_TEST_OK.
 ;; Soft reserved: never bind quote.
 
 (define *m11-fail* 0)
@@ -225,6 +225,114 @@
   (m11:acc-end! "M11A" 3)
   #t)
 
+;; M11b: engine-level "who wrote this" (eng_who.aura).
+(define (m11:ew! l)
+  (pad:pen-set-page! (pad:es-L *pl-st*))
+  (set! *pl-st* (pad:es (pad:es-L *pl-st*) l 0 (pad:es-kill *pl-st*) (pad:es-mark *pl-st*)
+                        (pad:es-undo *pl-st*)))
+  (let ((r (pad:ew-ask!)))
+    (newline) (display (car r)) (display " say=\"") (display (cadr r)) (display "\"") (newline)
+    r))
+(define (m11:ew-field tag key)
+  (pad:ew-field (string-split tag " ") key))
+(define (m11:ew-rows-line!)
+  (let ((rows (pad:ew-rows)))
+    (newline) (display "EWHOROWS ") (display (pad:ew-rows-str rows)) (newline)
+    rows))
+
+(define (m11:sec-b1)
+  ;; 1. A robot KEEP and a pen KEEP are stamped by the engine with the
+  ;;    writer's fingerprint; ctrl-o answers from query:node-provenance +
+  ;;    the rebind record's reason, and agrees with the Soft row stamp.
+  (m11:acc-begin!)
+  (m11:fresh!)
+  (m11:expect-true "B1_FP_BOUND" *ew-bound*)
+  (m11:expect "B1_FP_HELPER" (pad:ew-fp "helper") 42)
+  (m11:expect-str "B1_FP_WHO" (pad:ew-who-of 4) "law")
+  (let ((a (m11:ew! 0)))
+    (m11:expect-str "B1_FRESH_WHO" (m11:ew-field (car a) "who=") "nobody")
+    (m11:expect-str "B1_FRESH_V" (caddr a) "agree")
+    (m11:expect-str "B1_FRESH_SAY" (cadr a) "nobody has changed this yet"))
+  (let* ((id0 (m11:last-id))
+         (r (pad:robot-step! "helper" *m11-ops-good* "closer"))
+         (m (m11:muts)))
+    (m11:expect-str "B1_KEEP" (car r) "KEEP")
+    (m11:expect-str "B1_AUTHORS" (pad:ws-names-str (m11:uniq (m11:rec-field m "author=" -1 id0 (list)) (list))) "42"))
+  (let ((a (m11:ew! 0)))
+    (m11:expect-str "B1_ROW0_WHO" (m11:ew-field (car a) "who=") "helper")
+    (m11:expect-str "B1_ROW0_WHY" (m11:ew-field (car a) "why=") "closer")
+    (m11:expect-str "B1_ROW0_SOFT" (m11:ew-field (car a) "soft=") "helper")
+    (m11:expect-str "B1_ROW0_V" (caddr a) "agree")
+    (m11:expect-true "B1_ROW0_SAY" (string-prefix? (cadr a) "the AI helper wrote hello: closer (change ")))
+  (let ((a (m11:ew! 1)))
+    (m11:expect-str "B1_ROW1_WHO" (m11:ew-field (car a) "who=") "helper")
+    (m11:expect-str "B1_ROW1_V" (caddr a) "agree"))
+  (let ((a (m11:ew! 2)))
+    (m11:expect-str "B1_ROW2_WHO" (m11:ew-field (car a) "who=") "nobody")
+    (m11:expect-str "B1_ROW2_V" (caddr a) "agree"))
+  (let ((a (m11:ew! 6)))
+    (m11:expect-str "B1_ROW6_V" (caddr a) "soft-only"))
+  ;; pen step by a law, under fingerprint 4
+  (let ((rs (pad:ew-pen-step! "law" "greet" "(lambda (n) (add n 2))" "rule")))
+    (m11:expect-str "B1_LAW_KEEP" (car (car rs)) "KEEP"))
+  (let ((a (m11:ew! 5)))
+    (m11:expect-str "B1_ROW5_WHO" (m11:ew-field (car a) "who=") "law")
+    (m11:expect-str "B1_ROW5_WHY" (m11:ew-field (car a) "why=") "rule")
+    (m11:expect-str "B1_ROW5_V" (caddr a) "agree")
+    (m11:expect-true "B1_ROW5_SAY" (string-prefix? (cadr a) "a law wrote greet: rule")))
+  (let ((rows (m11:ew-rows-line!)))
+    (m11:expect "B1_ROWS" (length rows) 5)
+    (m11:expect "B1_ROWS_DISAGREE" (pad:ew-count-v rows "disagree") 0))
+  (m11:acc-end! "M11B" 1)
+  #t)
+
+(define (m11:sec-b2)
+  ;; 2. Undo puts the engine's authorship back too: ast:restore restores
+  ;;    node provenance and the mutation log to the snapshot, so after
+  ;;    each ctrl-z the engine and the Soft stamps still agree.
+  (m11:acc-begin!)
+  (m11:fresh!)
+  (let* ((ra (pad:robot-step! "helper" (list (list "add" "(lambda (a b) (- a b))")) "swap"))
+         (rb (pad:robot-step! "macro" *m11-ops-good* "closer")))
+    (m11:expect-str "B2_KEEP_A" (car ra) "KEEP")
+    (m11:expect-str "B2_KEEP_B" (car rb) "KEEP"))
+  (m11:expect-str "B2_ROW0_MACRO" (m11:ew-field (car (m11:ew! 0)) "who=") "macro")
+  (m11:expect-str "B2_ROW2_HELPER" (m11:ew-field (car (m11:ew! 2)) "who=") "helper")
+  (m11:keys! (list "IN 26"))
+  (let ((a0 (m11:ew! 0)) (a2 (m11:ew! 2)))
+    (m11:expect-str "B2_UNDO1_ROW0" (m11:ew-field (car a0) "who=") "nobody")
+    (m11:expect-str "B2_UNDO1_ROW0_V" (caddr a0) "agree")
+    (m11:expect-str "B2_UNDO1_ROW2" (m11:ew-field (car a2) "who=") "helper")
+    (m11:expect-str "B2_UNDO1_ROW2_V" (caddr a2) "agree"))
+  (m11:keys! (list "IN 26"))
+  (let ((a2 (m11:ew! 2)))
+    (m11:expect-str "B2_UNDO2_ROW2" (m11:ew-field (car a2) "who=") "nobody")
+    (m11:expect-str "B2_UNDO2_ROW2_V" (caddr a2) "agree"))
+  (m11:expect "B2_ROWS_DISAGREE" (pad:ew-count-v (m11:ew-rows-line!) "disagree") 0)
+  (m11:acc-end! "M11B" 2)
+  #t)
+
+(define (m11:sec-b3)
+  ;; 3. ctrl-o (IN 15) on the notebook face answers in the say line; a
+  ;;    row the kid typed on after a helper KEEP says so; the checker
+  ;;    catches a forged Soft stamp.
+  (m11:acc-begin!)
+  (m11:fresh!)
+  (pad:robot-step! "helper" *m11-ops-good* "closer")
+  (m11:ew! 0)
+  (m11:keys! (list "KEY end" "IN 32" "IN 15"))
+  (m11:expect-str "B3_KEY_SAY" *pl-say* "the AI helper wrote hello, then you changed it")
+  (m11:expect-str "B3_KID_AFTER" (caddr (pad:ew-at 0)) "kid-after")
+  (let ((e (list "hello" "helper" "closer" 2 3 42)))
+    (m11:expect-str "B3_FORGED_WHO" (pad:ew-verdict (list "macro" "closer" 3) e) "disagree")
+    (m11:expect-str "B3_FORGED_WHY" (pad:ew-verdict (list "helper" "faster" 3) e) "disagree")
+    (m11:expect-str "B3_FORGED_NONE" (pad:ew-verdict #f e) "disagree")
+    (m11:expect-str "B3_REAL" (pad:ew-verdict (list "helper" "closer" 3) e) "agree")
+    (m11:expect-str "B3_ENGINE_NONE" (pad:ew-verdict (list "helper" "closer" 3) (list "hello" "nobody" "" 0 1 0)) "disagree"))
+  (m11:expect "B3_NO_DISAGREE" *ew-disagree* 0)
+  (m11:acc-end! "M11B" 3)
+  #t)
+
 (define (m11:outro)
   (newline)
   (display "M11STATS ") (display (pad:robot-stats-str))
@@ -240,4 +348,7 @@
   (m11:sec-a1)
   (m11:sec-a2)
   (m11:sec-a3)
+  (m11:sec-b1)
+  (m11:sec-b2)
+  (m11:sec-b3)
   (m11:outro))

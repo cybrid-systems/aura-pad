@@ -8,20 +8,26 @@
 #      code + page + stamps back in one key, an arity- or type-broken
 #      proposal moves nothing (no half change)        -> M11A_ACC 1..3 OK
 #                                                                   -> PAD_M11_UNDO_OK
+#   4. M11b engine "who wrote this": robot / pen writes run under
+#      mutate:set-agent-fingerprint (kid=1 helper=42 macro=3 law=4);
+#      ctrl-o answers from query:node-provenance + the rebind record's
+#      reason and agrees with the Soft row stamps, also after ctrl-z
+#                                                     -> M11B_ACC 1..3 OK
+#                                                                   -> PAD_M11_WHO_OK
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$ROOT/out/m11"
 soft_errs() { grep -qiE 'error:|unbound variable' "$@"; }
 
 python3 "$ROOT/scripts/paren_check.py" \
-  "$ROOT"/soft/pad/robot.aura \
+  "$ROOT"/soft/pad/robot.aura "$ROOT"/soft/pad/eng_who.aura \
   "$ROOT"/soft/pad/m11_test.aura "$ROOT"/soft/pad/m11_cases.aura
 
 echo "smoke_m11: Soft tests (AURA_MUTATE_TYPE_GATE=hard)"
 T="$ROOT/out/m11/m11_test.txt"
 AURA_MUTATE_TYPE_GATE=hard bash "$ROOT/scripts/run_soft.sh" /workspace/aura-pad/soft/pad/m11_test.aura \
   </dev/null >"$T" 2>"$ROOT/out/m11/m11_test.err"
-grep -E '^(M11[A-Z_]*|M11GATE|M11STATS|M11TXN|KEEP robot|DROP robot|REJECT robot|TESTS|PAD_M11_TEST)' "$T" || true
+grep -E '^(M11[A-Z_]*|M11GATE|M11STATS|M11TXN|KEEP robot|DROP robot|REJECT robot|EWHOROWS|TESTS|PAD_M11_TEST)' "$T" || true
 if ! grep -q '^PAD_M11_TEST_OK$' "$T" || grep -q 'WANT=' "$T" \
    || soft_errs "$T" "$ROOT/out/m11/m11_test.err"; then
   grep -E 'WANT=|FAIL' "$T" >&2 || true
@@ -48,3 +54,20 @@ if [[ "$fail" -ne 0 ]]; then
   echo "smoke_m11: PAD_M11_UNDO_OK checks failed" >&2; exit 1
 fi
 echo "smoke_m11: PAD_M11_UNDO_OK"
+
+fail=0
+for n in 1 2 3; do
+  grep -qx "M11B_ACC $n OK" "$T" || { echo "smoke_m11: missing: M11B_ACC $n OK" >&2; fail=1; }
+done
+for want in 'T B1_AUTHORS=42 OK' 'T B1_ROW0_WHO=helper OK' 'T B1_ROW5_WHO=law OK' \
+            'T B1_ROWS_DISAGREE=0 OK' 'T B2_UNDO1_ROW0=nobody OK' 'T B2_UNDO1_ROW2=helper OK' \
+            'T B3_KID_AFTER=kid-after OK' 'T B3_FORGED_WHO=disagree OK'; do
+  grep -qF -- "$want" "$T" || { echo "smoke_m11: missing: $want" >&2; fail=1; }
+done
+if grep -q '^M11_WHO_DISAGREE' "$T"; then
+  echo "smoke_m11: engine provenance disagreed with the Soft stamps" >&2; fail=1
+fi
+if [[ "$fail" -ne 0 ]]; then
+  echo "smoke_m11: PAD_M11_WHO_OK checks failed" >&2; exit 1
+fi
+echo "smoke_m11: PAD_M11_WHO_OK"

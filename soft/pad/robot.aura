@@ -1,6 +1,8 @@
 ;; aura-pad M11a -- "undo the robot": one AI proposal = ONE typed engine
 ;; transaction, one key takes it all back.
-;; Needs ws.aura, pen.aura, who.aura, who_pen.aura (and what they load).
+;; Needs ws.aura, pen.aura, who.aura, who_pen.aura, eng_who.aura (and what
+;; they load). The transaction runs under the writer's engine fingerprint
+;; (pad:ew-set!, M11b); the fingerprint goes back to kid right after.
 ;;
 ;; A robot proposal is a list of (name lam) edits plus one reason. It is
 ;; applied with typed-mutate-atomic: every edit is a mutate:rebind sexpr,
@@ -107,7 +109,9 @@
         (let* ((code0 (pad:q-code))
                (snap (ast:snapshot "robot"))
                (sx (pad:robot-sexprs ops why))
-               (r (try (typed-mutate-atomic sx) (catch (e) #f))))
+               (fp (pad:ew-set! who))
+               (r (try (typed-mutate-atomic sx) (catch (e) #f)))
+               (fp-back (pad:ew-set! "kid")))
           (set! *robot-last-sexprs* sx)
           (if (eq? r #t)
               (let* ((g1 (pad:pen-gen))
@@ -166,12 +170,15 @@
     ((string=? r "nothing-to-undo") "the helper has not changed anything to undo")
     (#t "undo got mixed up, the page and aura disagree")))
 
-;; Notebook key face: IN 26 (ctrl-z) undoes the last robot change; every
-;; other line goes to pad:play-line!. Returns what pad:play-line! returns.
+;; Notebook key face: IN 26 (ctrl-z) undoes the last robot change, IN 15
+;; (ctrl-o) answers "who wrote this" from the engine (eng_who.aura, M11b);
+;; every other line goes to pad:play-line!.
 (define (pad:robot-line! line)
-  (if (and (string? line) (string=? line "IN 26") (null? *pl-esc*))
-      (pad:play-ok! (pad:robot-undo-say (pad:robot-undo!)))
-      (pad:play-line! line)))
+  (cond
+    ((not (and (string? line) (null? *pl-esc*))) (pad:play-line! line))
+    ((string=? line "IN 26") (pad:play-ok! (pad:robot-undo-say (pad:robot-undo!))))
+    ((string=? line "IN 15") (pad:ew-key!))
+    (#t (pad:play-line! line))))
 
 (define (pad:robot-line-out! r who)
   (newline)

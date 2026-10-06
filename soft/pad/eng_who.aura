@@ -1,0 +1,234 @@
+;; aura-pad M11b -- engine-level "who wrote this".
+;; Needs who.aura, who_pen.aura, ws.aura (and what they load). Loaded
+;; before robot.aura, which sets the fingerprint around its transaction.
+;;
+;; Every pen / robot write runs under mutate:set-agent-fingerprint (kid=1,
+;; helper=42, macro=3, law=4) and the fingerprint goes back to kid after
+;; it. The engine then stamps every MutationRecord with that author, and
+;; ctrl-o asks the engine for the define on the cursor row:
+;;   define-lookup name -> node id
+;;   query:node-provenance id -> author-fingerprint, mutation_id, gen
+;;   query:mutations-since 0 -> the rebind record of that node -> sum= (why)
+;; and cross-checks the answer with the M10 Soft row stamp:
+;;   agree      same writer (and same reason for helper / macro / law), or
+;;              the engine has no write and the Soft stamp is kid / none
+;;              (kid typing reaches the engine at the next check)
+;;   kid-after  the engine writer wrote the define, then the kid typed on
+;;              the row (Soft says kid)
+;;   soft-only  the row starts no define (the engine granularity is the
+;;              define node), the Soft stamp answers
+;;   disagree   anything else; ctrl-o prints an M11_WHO_DISAGREE line
+;; ast:restore brings provenance and the mutation log back to the
+;; snapshot (probe out/m11/p/p5), so robot / pen undo needs no extra work.
+;; Soft reserved: never bind quote.
+
+(define *ew-fps* (list (list "kid" 1) (list "helper" 42) (list "macro" 3) (list "law" 4)))
+(define *ew-asks* 0)
+(define *ew-disagree* 0)
+
+(define (pad:ew-fp-in who xs)
+  (cond
+    ((null? xs) 0)
+    ((string=? (car (car xs)) who) (cadr (car xs)))
+    (#t (pad:ew-fp-in who (cdr xs)))))
+(define (pad:ew-fp who) (pad:ew-fp-in who *ew-fps*))
+
+(define (pad:ew-who-in fp xs)
+  (cond
+    ((null? xs) (if (= fp 0) "nobody" "someone"))
+    ((= (cadr (car xs)) fp) (car (car xs)))
+    (#t (pad:ew-who-in fp (cdr xs)))))
+(define (pad:ew-who-of fp) (pad:ew-who-in fp *ew-fps*))
+
+;; Set the engine author for the next mutations. #t when the engine took it.
+(define (pad:ew-set! who)
+  (let ((r (try (mutate:set-agent-fingerprint (pad:ew-fp who)) (catch (e) #f))))
+    (number? r)))
+(define *ew-bound* (pad:ew-set! "kid"))
+
+;; --- mutation records ---
+(define (pad:ew-num s)
+  (let ((n (if (string? s) (string->number s) #f)))
+    (if (number? n) n -1)))
+(define (pad:ew-field ts key)
+  (cond
+    ((null? ts) "")
+    ((string-prefix? (car ts) key) (substring (car ts) (string-length key) (string-length (car ts))))
+    (#t (pad:ew-field (cdr ts) key))))
+;; sum= runs until author= (the reason text has spaces)
+(define (pad:ew-sum ts on acc)
+  (cond
+    ((null? ts) (reverse acc))
+    ((string-prefix? (car ts) "author=") (reverse acc))
+    ((string-prefix? (car ts) "sum=")
+     (pad:ew-sum (cdr ts) #t (cons (substring (car ts) 4 (string-length (car ts))) acc)))
+    (on (pad:ew-sum (cdr ts) #t (cons (car ts) acc)))
+    (#t (pad:ew-sum (cdr ts) #f acc))))
+;; "id=1 target=5 op=rebind sum=closer to goal author=42 ..." -> (1 5 "rebind" "closer to goal" 42)
+(define (pad:ew-rec s)
+  (let ((ts (string-split s " ")))
+    (list (pad:ew-num (pad:ew-field ts "id=")) (pad:ew-num (pad:ew-field ts "target="))
+          (pad:ew-field ts "op=") (string-join (pad:ew-sum ts #f (list)) " ")
+          (pad:ew-num (pad:ew-field ts "author=")))))
+(define (pad:ew-recs xs)
+  (cond
+    ((null? xs) (list))
+    ((string? (car xs)) (cons (pad:ew-rec (car xs)) (pad:ew-recs (cdr xs))))
+    (#t (pad:ew-recs (cdr xs)))))
+(define (pad:ew-records)
+  (let ((m (try (query:mutations-since 0) (catch (e) (list)))))
+    (cond
+      ((pair? m) (pad:ew-recs m))
+      ((string? m) (list (pad:ew-rec m)))
+      (#t (list)))))
+
+;; Reason of the newest rebind of node nid with id <= mid.
+(define (pad:ew-why recs nid mid best)
+  (cond
+    ((null? recs) best)
+    ((and (= (cadr (car recs)) nid) (string=? (caddr (car recs)) "rebind")
+          (<= (car (car recs)) mid))
+     (pad:ew-why (cdr recs) nid mid (pad:nth (car recs) 3)))
+    (#t (pad:ew-why (cdr recs) nid mid best))))
+
+;; --- node provenance ---
+(define (pad:ew-nid name)
+  (try
+    (let ((r (define-lookup name)))
+      (if (and (pair? r) (pair? (car r)) (number? (car (car r)))) (car (car r)) #f))
+    (catch (e) #f)))
+(define (pad:ew-href h k) (try (hash-ref h k) (catch (e) #f)))
+
+;; Engine answer for a define: (name who why change gen fp), who "nobody"
+;; when the engine has no write to it since the check; #f when the engine
+;; cannot say.
+(define (pad:ew-prov name)
+  (let ((nid (pad:ew-nid name)))
+    (if (not nid)
+        #f
+        (let* ((h (try (query:node-provenance nid) (catch (e) #f)))
+               (fp (if h (pad:ew-href h "author-fingerprint") #f))
+               (mid (if h (pad:ew-href h "mutation_id") #f))
+               (gen (if h (pad:ew-href h "gen") #f)))
+          (if (not (and (number? fp) (number? mid)))
+              #f
+              (list name
+                    (if (= mid 0) "nobody" (pad:ew-who-of fp))
+                    (if (= mid 0) "" (pad:ew-why (pad:ew-records) nid mid ""))
+                    mid (if (number? gen) gen 0) fp))))))
+
+;; Name of the define that starts on row l, or #f.
+(define (pad:ew-row-name wl toks names l)
+  (cond
+    ((null? names) #f)
+    ((let ((ds (pad:find-defs-in toks (car names))))
+       (and (pair? ds) (= (car (pad:v-linecol wl (car ds))) l)))
+     (car names))
+    (#t (pad:ew-row-name wl toks (cdr names) l))))
+
+;; Soft stamp st (#f or (who why gen)) vs engine answer e.
+(define (pad:ew-verdict st e)
+  (let ((sw (if st (car st) "nobody"))
+        (ew (if e (cadr e) "nobody")))
+    (cond
+      ((not e) "soft-only")
+      ((and (string=? ew "nobody") (or (string=? sw "nobody") (string=? sw "kid"))) "agree")
+      ((string=? ew "nobody") "disagree")
+      ((string=? sw ew)
+       (if (or (string=? sw "kid") (string=? (cadr st) (caddr e))) "agree" "disagree"))
+      ((string=? sw "kid") "kid-after")
+      (#t "disagree"))))
+
+(define (pad:ew-who-words w)
+  (cond
+    ((string=? w "helper") "the AI helper")
+    ((string=? w "macro") "a macro")
+    ((string=? w "law") "a law")
+    ((string=? w "kid") "you")
+    (#t "someone")))
+
+(define (pad:ew-say v st e)
+  (cond
+    ((string=? v "disagree") "the pad and aura disagree about who wrote this")
+    ((or (string=? v "soft-only") (string=? (cadr e) "nobody")) (pad:who-say st))
+    ((string=? v "kid-after")
+     (string-append (pad:ew-who-words (cadr e)) " wrote " (car e) ", then you changed it"))
+    ((string=? (cadr e) "kid") (string-append "you wrote " (car e)))
+    (#t (string-append (pad:ew-who-words (cadr e)) " wrote " (car e) ": " (caddr e)
+                       " (change " (number->string (pad:nth e 3)) ")"))))
+
+;; Row l -> (st e verdict)
+(define (pad:ew-at l)
+  (let* ((wl (pad:es-L *pl-st*))
+         (toks (pad:hl-tokens (pad:v-src wl)))
+         (name (pad:ew-row-name wl toks (pad:ws-soft-defs toks) l))
+         (e (if name (pad:ew-prov name) #f))
+         (st (pad:who-stamp-of l)))
+    (list st e (pad:ew-verdict st e))))
+
+;; EWHO row=0 name=hello who=helper why=closer change=2 soft=helper verdict=agree
+(define (pad:ew-tag l x)
+  (let ((st (car x)) (e (cadr x)))
+    (string-append "EWHO row=" (number->string l)
+                   " name=" (if e (car e) "-")
+                   " who=" (if e (cadr e) "-")
+                   " why=" (if (and e (> (string-length (caddr e)) 0)) (caddr e) "-")
+                   " change=" (if e (number->string (pad:nth e 3)) "-")
+                   " soft=" (if st (car st) "-")
+                   " verdict=" (caddr x))))
+
+;; ctrl-o on the notebook: sync the Soft stamps, answer from the engine.
+;; Returns (tag say verdict).
+(define (pad:ew-ask!)
+  (pad:who-sync! "kid" "typed" *who-gen*)
+  (set! *ew-asks* (+ *ew-asks* 1))
+  (let* ((l (pad:es-l *pl-st*))
+         (x (pad:ew-at l))
+         (v (caddr x)))
+    (if (string=? v "disagree")
+        (begin
+          (set! *ew-disagree* (+ *ew-disagree* 1))
+          (newline) (display "M11_WHO_DISAGREE ") (display (pad:ew-tag l x)) (newline))
+        #f)
+    (list (pad:ew-tag l x) (pad:ew-say v (car x) (cadr x)) v)))
+
+(define (pad:ew-key!)
+  (pad:play-ok! (cadr (pad:ew-ask!))))
+
+;; Every define row of the page: ((row name who verdict) ...).
+(define (pad:ew-rows-of wl toks names)
+  (if (null? names)
+      (list)
+      (let* ((ds (pad:find-defs-in toks (car names)))
+             (rest (pad:ew-rows-of wl toks (cdr names))))
+        (if (null? ds)
+            rest
+            (let* ((l (car (pad:v-linecol wl (car ds))))
+                   (e (pad:ew-prov (car names)))
+                   (v (pad:ew-verdict (pad:who-stamp-of l) e)))
+              (cons (list l (car names) (if e (cadr e) "-") v) rest))))))
+(define (pad:ew-rows)
+  (pad:who-sync! "kid" "typed" *who-gen*)
+  (let* ((wl (pad:es-L *pl-st*))
+         (toks (pad:hl-tokens (pad:v-src wl))))
+    (pad:ew-rows-of wl toks (pad:ws-soft-defs toks))))
+(define (pad:ew-count-v rows v)
+  (cond
+    ((null? rows) 0)
+    ((string=? (pad:nth (car rows) 3) v) (+ 1 (pad:ew-count-v (cdr rows) v)))
+    (#t (pad:ew-count-v (cdr rows) v))))
+;; EWHOROWS 0=hello:helper:agree.1=bye:helper:agree ...
+(define (pad:ew-rows-str rows)
+  (if (null? rows)
+      ""
+      (string-append (number->string (car (car rows))) "=" (cadr (car rows)) ":"
+                     (caddr (car rows)) ":" (pad:nth (car rows) 3)
+                     (if (null? (cdr rows)) "" ".")
+                     (pad:ew-rows-str (cdr rows)))))
+
+;; Pen step under the writer's fingerprint (M10 who-pen-step! inside).
+(define (pad:ew-pen-step! who name lam why)
+  (pad:ew-set! who)
+  (let ((rs (pad:who-pen-step! who name lam why)))
+    (pad:ew-set! "kid")
+    rs))
