@@ -14,13 +14,19 @@
 #      reason and agrees with the Soft row stamps, also after ctrl-z
 #                                                     -> M11B_ACC 1..3 OK
 #                                                                   -> PAD_M11_WHO_OK
+#   5. M11c "why did it break": a refused proposal is replayed one rebind
+#      at a time; aura's own reason (type / arity / unbound / brackets,
+#      or a blamed caller line) becomes one kid sentence in the say line;
+#      false "unbound" diagnostics for notebook defines are dropped
+#      (aura#4363)                                    -> M11C_ACC 1..3 OK
+#                                                                   -> PAD_M11_WHY_OK
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$ROOT/out/m11"
 soft_errs() { grep -qiE 'error:|unbound variable' "$@"; }
 
 python3 "$ROOT/scripts/paren_check.py" \
-  "$ROOT"/soft/pad/robot.aura "$ROOT"/soft/pad/eng_who.aura \
+  "$ROOT"/soft/pad/robot.aura "$ROOT"/soft/pad/eng_who.aura "$ROOT"/soft/pad/why.aura \
   "$ROOT"/soft/pad/m11_test.aura "$ROOT"/soft/pad/m11_cases.aura
 
 echo "smoke_m11: Soft tests (AURA_MUTATE_TYPE_GATE=hard)"
@@ -71,3 +77,19 @@ if [[ "$fail" -ne 0 ]]; then
   echo "smoke_m11: PAD_M11_WHO_OK checks failed" >&2; exit 1
 fi
 echo "smoke_m11: PAD_M11_WHO_OK"
+
+fail=0
+for n in 1 2 3; do
+  grep -qx "M11C_ACC $n OK" "$T" || { echo "smoke_m11: missing: M11C_ACC $n OK" >&2; fail=1; }
+done
+for want in "T C2_ARITY_SAY=the helper's bye gives hello 2 things, it wants 1 OK" \
+            "T C2_TYPE_SAY=the helper's greet used a number where words go OK" \
+            "T C2_CALLER_SAY=the helper's hello now wants 2 things, but bye gives it 1 OK" \
+            "T C2_ONE_HEAL=1 OK" "T C2_CODE_SAME=yes OK" "T C3_NO_FALSE_WARN=0 OK" \
+            "T C3_CALLER_TYPE_SAY=the helper's bye does not fit (bye 4) OK"; do
+  grep -qF -- "$want" "$T" || { echo "smoke_m11: missing: $want" >&2; fail=1; }
+done
+if [[ "$fail" -ne 0 ]]; then
+  echo "smoke_m11: PAD_M11_WHY_OK checks failed" >&2; exit 1
+fi
+echo "smoke_m11: PAD_M11_WHY_OK"
