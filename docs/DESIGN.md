@@ -30,7 +30,10 @@ keywords, kid words and key-byte comparisons).
              m4.aura     story/scratch pads, find/replace, rec/play, law  (M4)
    analysis  hl.aura     tokenizer + HL tape  P K S T C Q M N .           (M5)
              jump.aura   goto-def / find-refs / jump-back (token based)   (M5)
-             query.aura  tip query:* / mutate:* bridge, GAPS list         (M5)
+             query.aura  tip query:* / mutate:* bridge, USED/GAPS lists   (M5)
+             std.aura    std/query + std/mutate requires, loaded first    (M9)
+             ws.aura     workspace notebook: check = set-code+eval-current (M9)
+             pen.aura    helper/macro/law rebind: REJECT/KEEP/DROP + heal  (M9)
    view      view.aura   SNAP v1 pad packer (whole page)                  (M6)
              lc.aura     line cache: per-line toks/tape/marks, DIRTY      (M7)
              keys.aura   keymap bytes→commands, play gate, play state     (M6/M7)
@@ -120,11 +123,18 @@ Only tip-bound surfaces: `query:list-categories`, `query:help`,
 `(query :find)`, `(query :def-use)`, `query:defines`,
 `query:find-by-name`, `mutate:summary`, `mutate:boundary-safe?`,
 `mutate:boundary-depth`, `mutate:rebind`, `ast:snapshot` /
-`ast:restore`. `set-code` + `eval-current` load a notebook. Unbound names
-print `GAPS define-lookup.query:code.query:ref-counts.query:node-types`
-and are filed on `cybrid-systems/aura` (#4344, #4345) — never wrapped.
-Because per-call cost scales with defines (#4343), the pad never
-`set-code`s per keystroke: one load per notebook / jump.
+`ast:restore`. `set-code` + `eval-current` load a notebook. Since Soft
+tip `c69e644` (#4344 / #4345 closed) `define-lookup`, `query:code`,
+`query:ref-counts` and `query:node-types` are bound too. `pad:q-probe`
+calls each one in a `try` at load, so a smoke prints
+`USED define-lookup.query:code.query:ref-counts.query:node-types` and
+`GAPS none`. Any name that comes back unbound still goes on `GAPS` and
+gets filed, never wrapped. Jump takes engine define points only when they
+land on the name. `define-lookup` line/col are 0 today (#4347), so jump
+stays on Soft HL. Entry files load `std.aura` (the std/query + std/mutate
+requires) before any other pad file (#4351). Because per-call cost
+scales with defines (#4343, still linear on tip: #4350), the pad never
+`set-code`s per keystroke: one load per notebook check (M9, `ws.aura`).
 
 ## 7. SNAP protocol (`SNAP v1 pad`)
 
@@ -216,7 +226,7 @@ and keeps per-key Soft calls to O(edited line + rows touched).
   rejected= cursor=`.
 - Host audits: `*_model.py` byte oracles, `dirty_check.py`
   (`M7_DIRTY blocks= pairs= partial=`).
-- Every smoke marker is greppable: `PAD_M0_OK` … `PAD_M8_OK`,
+- Every smoke marker is greppable: `PAD_M0_OK` … `PAD_M9_OK`,
   `PAD_SMOKE_OK`.
 
 ## 10. Honesty rules (all milestones)
@@ -252,7 +262,7 @@ and keeps per-key Soft calls to O(edited line + rows touched).
 | M6 | done | thin C viewport, SNAP v1 pad, Soft keymap/play; key-latency cache |
 | **M7** | **done** | **snappy pad: line-incremental Soft key path, exact DIRTY** |
 | **M8** | **done** | **kid onboarding card + intent worldline (goal race, story cards)** |
-| M9 | next | workspace notebook: load once, pen at mutation boundaries |
+| **M9** | **done** | **workspace notebook: load once per check, pen at mutation boundaries** |
 | M10 | next | provenance (`who`) + engine dirty nodes |
 | M11 | later | `aura` notebook pad, hygienic macro play |
 | M12 | later | persist: open is restore |
