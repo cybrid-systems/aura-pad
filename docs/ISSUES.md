@@ -95,6 +95,8 @@ the poll path on by itself when `char-ready?` appears.
 [`m11.md`](m11.md), from the ranked list in [`aura-vs-rust.md`](aura-vs-rust.md).
 M11a "undo the robot" is done (`PAD_M11_UNDO_OK`): one AI proposal is one
 `typed-mutate-atomic` transaction, and ctrl-z undoes it whole. Filed #4362.
+M11b engine "who wrote this" is done (`PAD_M11_WHO_OK`): agent fingerprints
+plus `query:node-provenance` answer ctrl-o and agree with the Soft stamps.
 
 ## M11 — aura notebook
 
