@@ -139,8 +139,15 @@
 ;; pad:lc-line! with the entry already scanned (*lc-pre*), so the frame
 ;; is the one lc-line! builds either way. Written inline in
 ;; pad:play-step! (a Soft call costs ~0.23 ms). Yields the dirty rows.
+;; An edit at the end of the row (most typing) does not call pad:lc-scan
+;; at all: the last token grows, shrinks, is dropped or a new one-char
+;; token is added, built from the cached entry with builtins (~0.5 ms
+;; less per key). A quote, a comment start, a string token at the end or
+;; an open row still scans. gap_test.aura (GAP3_EOL_ENTRY) checks every
+;; such entry against a full scan of the row.
 (define *pi-symk* (list "S" "K" "Q" "M"))
 (define *pi-rows* 0)    ; keys spliced here (row l only)
+(define *pi-fe* 0)      ; of those, entries built without pad:lc-scan
 ;; Early frame (PAD_DEFER=1, docs/perf-aura.md): when a key changes the
 ;; start state of the rows below (a string opened or closed), first write
 ;; a frame with row l exact and the rows below as cached (DIRTY = l), then
@@ -270,15 +277,94 @@
                         (x4 (and t4 (>= (caddr t4) p))))
                    (if (or x4 (not (list-ref old 2)))
                        (pad:lc-line! L2 l col2)
-                       (let* ((acc0 (cond (x3 (cdddr xs)) (x2 (cddr xs)) (x1 (cdr xs)) (#t xs)))
-                              (mr (+ (if (and x1 (member (car t1) *pi-symk*)) 1 0)
-                                     (if (and x2 (member (car t2) *pi-symk*)) 1 0)
-                                     (if (and x3 (member (car t3) *pi-symk*)) 1 0)))
-                              (r (if (pair? acc0) (caddr (car acc0)) 0))
-                              (le (pad:lc-scan (list->string ln2) ln2 r acc0
-                                               (if (> r 0) (list (substring (list-ref oe 3) 0 r)) (list))
-                                               (drop (list-ref oe 7) mr)
-                                               (list-ref oe 9)))
+                       (let* ((fe (and (= col len) (not (list-ref oe 4)) (< len *lc-run-max*)
+                                       ;; end-of-row edit (most typing): the
+                                       ;; entry pad:lc-scan would return, built
+                                       ;; from the cached one; #f = scan
+                                       (let* ((s2 (list->string ln2))
+                                              (tp0 (list-ref oe 3))
+                                              (sy0 (list-ref oe 7))
+                                              (k1 (if t1 (car t1) ""))
+                                              (nm1 (and t1 (member k1 *pi-symk*)))
+                                              (at-end (and t1 (= (caddr t1) len)))
+                                              (n2 (if ins (+ len 1) (- len 1)))
+                                              (k (if ins (vector-ref *lc-cls* c) 0))
+                                              (pc (if (and ins (> len 0)) (string-ref s2 (- len 1)) 32))
+                                              (pk (if (< pc 128) (vector-ref *lc-cls* pc) 0))
+                                              ;; how the last token changes:
+                                              ;; 1 grows/shrinks, 2 dropped,
+                                              ;; 3 new token, 0 no token, -1 scan
+                                              (how (cond
+                                                     ((not ins)
+                                                      (cond ((not at-end) 0)
+                                                            ((string=? k1 "T") -1)
+                                                            ((= (cadr t1) n2) 2)
+                                                            (#t 1)))
+                                                     ((and at-end (or (string=? k1 "C")
+                                                                      (and (string=? k1 "N") (= k 2))
+                                                                      (and nm1 (or (= k 2) (= k 3)))))
+                                                      1)
+                                                     ((or (= k 0) (= k 1)) 0)
+                                                     ((or (= k 2) (= k 3) (= k 4)) 3)
+                                                     (#t -1)))
+                                              (a (cond ((= how 1) (cadr t1)) ((= how 3) len) (#t 0)))
+                                              (txt (if (or (= how 1) (= how 3)) (substring s2 a n2) ""))
+                                              (w (- n2 a))
+                                              (kd (cond
+                                                    ((= how 1) (if (or (string=? k1 "C") (string=? k1 "N")) k1 ""))
+                                                    ((= how 3) (cond ((= k 4) "P")
+                                                                     ((and (= k 2) (or (= len 0) (= pk 1) (= pk 4))) "N")
+                                                                     (#t "")))
+                                                    (#t "")))
+                                              (kd2 (cond
+                                                     ((not (string=? kd "")) kd)
+                                                     ((not (or (= how 1) (= how 3))) "")
+                                                     ((and (>= w 6) (string=? (substring txt 0 6) "query:")) "Q")
+                                                     ((and (>= w 7) (string=? (substring txt 0 7) "mutate:")) "M")
+                                                     ((member txt *hl-keywords*) "K")
+                                                     (#t "S")))
+                                              (nm2 (member kd2 *pi-symk*))
+                                              (rt (cond
+                                                    ((= how 0) xs)
+                                                    ((= how 2) (cdr xs))
+                                                    ((= how 1) (cons (list kd2 a n2 txt) (cdr xs)))
+                                                    (#t (cons (list kd2 a n2 txt) xs))))
+                                              (tape (cond
+                                                      ((= how 0) (if ins (string-append tp0 ".") (substring tp0 0 n2)))
+                                                      ((= how 2) (substring tp0 0 n2))
+                                                      (#t (string-append
+                                                            (substring tp0 0 a)
+                                                            (substring (cond
+                                                                         ((string=? kd2 "S") *lc-run-S*)
+                                                                         ((string=? kd2 "K") *lc-run-K*)
+                                                                         ((string=? kd2 "N") *lc-run-N*)
+                                                                         ((string=? kd2 "P") *lc-run-P*)
+                                                                         ((string=? kd2 "C") *lc-run-C*)
+                                                                         ((string=? kd2 "Q") *lc-run-Q*)
+                                                                         (#t *lc-run-M*))
+                                                                       0 w)))))
+                                              (sy (cond
+                                                    ((= how 0) sy0)
+                                                    ((= how 2) (if nm1 (cdr sy0) sy0))
+                                                    ((= how 1) (if nm2 (cons txt (cdr sy0)) sy0))
+                                                    (#t (if nm2 (cons txt sy0) sy0)))))
+                                         (if (< how 0)
+                                             #f
+                                             (list ln2 s2 (reverse rt) tape #f
+                                                   (if (pair? rt) (car rt) #f)
+                                                   (if (and (pair? rt) (pair? (cdr rt))) (cadr rt) #f)
+                                                   sy rt (list-ref oe 9))))))
+                              (le (if fe
+                                      (begin (set! *pi-fe* (+ *pi-fe* 1)) fe)
+                                      (let* ((acc0 (cond (x3 (cdddr xs)) (x2 (cddr xs)) (x1 (cdr xs)) (#t xs)))
+                                             (mr (+ (if (and x1 (member (car t1) *pi-symk*)) 1 0)
+                                                    (if (and x2 (member (car t2) *pi-symk*)) 1 0)
+                                                    (if (and x3 (member (car t3) *pi-symk*)) 1 0)))
+                                             (r (if (pair? acc0) (caddr (car acc0)) 0)))
+                                        (pad:lc-scan (list->string ln2) ln2 r acc0
+                                                     (if (> r 0) (list (substring (list-ref oe 3) 0 r)) (list))
+                                                     (drop (list-ref oe 7) mr)
+                                                     (list-ref oe 9)))))
                               (h0 (set! *lc-retok* (+ *lc-retok* 1)))
                               (a (list-ref le 5))
                               (b (list-ref le 6))

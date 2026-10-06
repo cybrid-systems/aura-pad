@@ -12,6 +12,10 @@
 ;;              typing inside strings and words): frames == reference, the
 ;;              row splice and the O(1) memo swap were taken, and the cached
 ;;              ROWS body == a whole-page pad:snap-text render after every key
+;;  GAP3_*      end-of-row typing (letters, digits, keywords, query:/mutate:
+;;              prefixes, comments, parens, spaces, backspace): frames ==
+;;              reference, and every row entry play-step! built without
+;;              pad:lc-scan equals a full scan of that row, field by field
 ;; Soft reserved: never bind quote.
 
 (define gp-checks 0)
@@ -229,6 +233,41 @@
       bad
       (begin (pad:play-step! (gp:join (car ks) "IN"))
              (gp:step-keys-chk (cdr ks) (if (gp:body-ok) bad (+ bad 1))))))
+;; GAP3: end-of-row typing. A fixed run first (keywords form and break,
+;; query:/mutate: prefixes, a comment, digits after a paren and after a
+;; name), then random keys from gp-keys3.
+(define gp-keys3
+  (list (list 5) (list 5) (list 97) (list 120) (list 100) (list 101) (list 102)
+        (list 105) (list 110) (list 49) (list 50) (list 32) (list 32) (list 40)
+        (list 41) (list 59) (list 39) (list 45) (list 58) (list 127) (list 127)
+        (list 127) (list 27 91 65) (list 27 91 66) (list 34)))
+(define (gp:keylist3 k acc)
+  (if (<= k 0) (reverse acc) (gp:keylist3 (- k 1) (cons (list-ref gp-keys3 (gp:rand (length gp-keys3))) acc))))
+(define (gp:bytes-of str i acc)
+  (if (>= i (string-length str))
+      (reverse acc)
+      (gp:bytes-of str (+ i 1) (cons (list (char->integer (string-ref str i))) acc))))
+(define gp-fe-run
+  (append (list (list 5) (list 32))
+          (gp:bytes-of "define" 0 (list)) (list (list 127) (list 101) (list 120) (list 127) (list 127))
+          (list (list 32) (list 40)) (gp:bytes-of "query:ab" 0 (list))
+          (list (list 127) (list 127) (list 127) (list 127)) (gp:bytes-of " mutate:x 12a(3" 0 (list))
+          (list (list 127) (list 127) (list 32) (list 59) (list 32) (list 120) (list 127) (list 127) (list 127))
+          (list (list 27 91 66) (list 5) (list 41) (list 41) (list 127) (list 49) (list 97) (list 127) (list 127))))
+;; keys whose entry was built without pad:lc-scan: does it equal a full scan?
+(define (gp:fe-chk ks bad)
+  (if (null? ks)
+      bad
+      (let ((f0 *pi-fe*))
+        (pad:play-step! (gp:join (car ks) "IN"))
+        (gp:fe-chk (cdr ks)
+                   (if (= *pi-fe* f0)
+                       bad
+                       (let* ((l (cadr *pl-st*))
+                              (le (car (vector-ref *lc-recv* l)))
+                              (codes (car le))
+                              (full (pad:lc-scan (list->string codes) codes 0 (list) (list) (list) (list-ref le 9))))
+                         (if (equal? le full) bad (+ bad 1))))))))
 (define (gp:first-diff a b i)
   (cond
     ((and (null? a) (null? b)) -1)
@@ -275,5 +314,23 @@
          (bad (gp:step-keys-chk ks 0))
          (r2 (set! *pi-collect* #f)))
     (gp:expect "GAP2_BODY_VS_FULL" (= bad 0) bad))
+  (let* ((ks (append gp-fe-run (gp:keylist3 300 (list))))
+         (r0 (gp:start!))
+         (ref (gp:ref-keys ks (list)))
+         (r1 (gp:start!))
+         (r2 (set! *pi-collect* #t))
+         (got (gp:step-keys ks))
+         (r3 (set! *pi-collect* #f))
+         (d (gp:first-diff ref got 0))
+         (r4 (gp:start!))
+         (r5 (set! *pi-collect* #t))
+         (f0 *pi-fe*)
+         (bad (gp:fe-chk ks 0))
+         (r6 (set! *pi-collect* #f))
+         (nf (- *pi-fe* f0)))
+    (display "GAP3STATS keys=") (display (length ks)) (display " frames=") (display (length got))
+    (display " end_of_row_entries=") (display nf) (newline)
+    (gp:expect "GAP3_EOL_FRAMES" (= d -1) (if (= d -1) "" (string-append "frame " (number->string d))))
+    (gp:expect "GAP3_EOL_ENTRY" (and (= bad 0) (> nf 40)) (list bad nf)))
   (display "TESTS checks=") (display gp-checks) (display " fail=") (display gp-fails) (newline)
   (if (= gp-fails 0) (begin (display "PAD_GAP_TEST_OK") (newline)) 0))
