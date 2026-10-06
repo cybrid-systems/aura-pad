@@ -132,15 +132,24 @@ idea in a child world (never evals generated code, aura#4359) and answers
 in kid words; Soft copies intend code/err with `string-append` before the
 next try (filed #4370); a passing idea is one robot KEEP.
 
-## M11 — aura notebook
+## M13 — aura notebook (done)
 
-Blocked on #4344 for engine goto-def, #4345 for code/refs/types, #4343 for load cost.
+Was the NEXT.md "M11 — aura notebook" sketch; M11 shipped as Aura-unique
+features. Soft tip `c69e644`. Marker `PAD_M13_OK`. [`m13.md`](m13.md).
 
-- M11.1 Third pad `aura`. HL tape reused. Jump does not call `define-lookup`.
-- M11.2 Hygienic play: missing surface → `GAPS hygienic-play`, no mutate.
-- M11.3 Fixture race. Record call cost next to #4343 numbers.
+- M13.1 Third pad `aura`: sexp projection, M5 HL tape (`P K S T C Q M N`).
+- M13.2 Jump: Soft HL goto-def; workspace load consults `define-lookup`
+  (`query:find-by-name` unbound on tip — not called; #4347 line/col 0).
+- M13.3 Hygienic macro play: `clone_macro_body` unbound → `GAPS hygienic-play`,
+  refuse to mutate. Do not re-file #165.
+- M13.4 Fixture race: helper that fails `(hello 3)=>4` DROPs.
 
-## M12 — book
+## M12 — the book closes (done)
 
-- M12.1 `std/persist` probe. Unbound → `GAPS persist` + Soft snapshot file.
-- M12.2 Open is restore. `who` still answers.
+[`m12.md`](m12.md). Soft tip `c69e644`.
+
+- M12.1 `std/persist` unbound → `GAPS persist`. Soft snapshot =
+  `serialize-workspace` (`.aw`) + `.pad` sidecar (`book.aura`). No new
+  Aura issue: missing `std/persist` is the expected GAP on this tip.
+- M12.2 Open is `deserialize-workspace` + sidecar restore. `who` still
+  answers (#4365/#4367). → `PAD_M12_OK`.
