@@ -38,7 +38,10 @@ M6 “加c”：一个很薄的 C 画面。编辑、高亮、跳转标记、按�
 把字母换成颜色画到终端（以及把原始按键字节转发给 Soft）。
 按键延迟：M6 缓存后小页面约 49/29 ms；M7 行级缓存后约 23/12 ms，
 12 行页面插入约 230→26–30 ms；Soft tip `c69e644` 上约 33–35/17–19 ms
-（#4343 关闭但没变快，#4350；见 docs/perf.md）。不声称比 vi/Emacs 快。
+（#4343 关闭但没变快，#4350）。参考 Emacs 算法（直接命令、
+try_cursor_movement、try_window_id、jit-lock、syntax-ppss）移植到 Soft
+后：12 行插入约 3.6 ms、光标约 1.3 ms、只跑命令约 0.6 ms（见
+docs/perf-emacs.md）。不声称比 vi/Emacs 快。
 M8 欢迎卡 + 意图世界线：首帧欢迎词、`goal:` 命令、两条助手赛跑、
 CARD 行、门卫（含 capability）、撤销 KEEP → `PAD_M8_OK`。
 M9 工作区笔记本：ctrl-s 才 `set-code` + `eval-current`（打字零次），
@@ -132,6 +135,18 @@ M9 工作区笔记本：ctrl-s 才 `set-code` + `eval-current`（打字零次）
   `c69e644` the same keys measure ~33–35 / 17–19 ms. #4343 closed but did
   not speed up the file runner (#4350). The floor is ~0.3 ms per Soft
   call.
+- **Emacs algorithms in Soft** — ported from Emacs:
+  - direct commands (`command_loop_1`);
+  - `try_cursor_movement`;
+  - `try_window_id` row reuse;
+  - jit-lock fontify of the changed line only, as one inline pass that resumes after the unchanged prefix;
+  - a syntax-ppss start state per line, which replaces the whole-page fallback when a string is open.
+
+  Twelve-row page: insert ~33 → **~3.6 ms**, cursor ~13 → **~1.3 ms**,
+  command only ~9.5 → **~0.6 ms**, typing inside an open string ~220 →
+  **~3.5 ms**. Every fast path equals its reference or the whole-page
+  oracle (30 checks, `PAD_PERF_EMACS_OK`). We still do not claim to beat
+  vi/Emacs. See [`docs/perf-emacs.md`](docs/perf-emacs.md).
 - **M9 workspace notebook** — `ws.aura`: ctrl-s (byte 19) runs one
   `set-code` + `eval-current` of the page plus a char-code row define.
   Typing makes zero `set-code` calls. Engine names (`define-lookup`) are
@@ -165,7 +180,7 @@ bash scripts/smoke_c.sh       # M6 Soft dump → thin C blit … PAD_C_OK (PAD_C
 bash scripts/smoke_m7.sh      # M7 Soft tests + DIRTY audit + perf → PAD_M7_OK
 bash scripts/smoke_m8.sh      # M8 welcome card + intent race → PAD_M8_OK
 bash scripts/smoke_m9.sh      # M9 workspace notebook + pen → PAD_M9_OK
-bash scripts/smoke_perf.sh    # key-path ms/key → PAD_PERF_OK + PAD_M7_PERF_OK
+bash scripts/smoke_perf.sh    # key-path ms/key → PAD_PERF_OK + PAD_M7_PERF_OK + PAD_PERF_EMACS_OK
 PAD_LIVE=0 bash scripts/smoke.sh     # skip live MiniMax (includes M8, M9)
 ```
 

@@ -2,7 +2,8 @@
 
 Requirements: [`REQUIREMENTS.md`](REQUIREMENTS.md). Roadmap:
 [`ROADMAP.md`](ROADMAP.md). Milestone detail: [`m0.md`](m0.md) …
-[`m6.md`](m6.md), [`m7.md`](m7.md). Latency: [`perf.md`](perf.md).
+[`m6.md`](m6.md), [`m7.md`](m7.md). Latency: [`perf.md`](perf.md),
+[`perf-emacs.md`](perf-emacs.md).
 Engine gaps: [`ISSUES.md`](ISSUES.md). Later notes: [`NEXT.md`](NEXT.md).
 
 ## 1. One rule
@@ -173,41 +174,50 @@ END
   `KEY <word>` scripted, `QUIT`. Escape sequences are decoded in Soft
   (`pad:key-step`).
 
-## 8. Key path and performance budget (M6 → M7)
+## 8. Key path and performance budget (M6 → M7 → Emacs ports)
 
 Per key: `play-line!` (decode) → `play-cmd!` (gate + apply) →
 `play-snap` → `display`. Budget on kid pages (≤ 12 × 40):
 
-| stage | M6 tip | M7 | note |
-|-------|--------|----|------|
-| gate + apply (insert) | ~12 ms | ~6 ms | `pad:take`/`drop`/`nth` on builtins |
-| re-tokenize | whole page (~1 ms/char) | edited line only | `lc.aura` |
-| HL tape | per char | per token slice | |
-| marks | whole page per name change | rows holding old/new name | carry key per row |
-| SNAP rows | rebuilt | cached row strings | `apply string-append` |
-| **insert total, 12 rows** | **~230 ms** | **~26–30 ms** | `PAD_M7_PERF_OK` |
-| **cursor total, 12 rows** | ~40 ms | **~13 ms** | |
+| stage | M6 tip | M7 | Emacs ports | note |
+|-------|--------|----|-------------|------|
+| gate + apply (insert) | ~12 ms | ~6–9 ms | ~0.6 ms | direct commands `pad:play-cmd!` |
+| re-tokenize | whole page (~1 ms/char) | edited line only (~15 ms) | tail of the edited line, one inline pass (~3 ms full row) | `pad:lc-scan` |
+| HL tape | per char | per token slice | run-string slices in the scan | |
+| marks | whole page per name change | rows holding old/new name | same, inline | carry key per row |
+| SNAP rows | rebuilt | cached row strings | + cached body; kept rows reuse their string | `*lc-body*` |
+| string left open | whole page | whole-page fallback | per-line start state (syntax-ppss) | `ins` field |
+| **insert total, 12 rows** | **~230 ms** | **~26–35 ms** | **~3.6 ms** | `PAD_PERF_EMACS_OK` |
+| **cursor total, 12 rows** | ~40 ms | **~13–19 ms** | **~1.3 ms** | |
+
+The Emacs mapping (file/function → Soft function → µs) is in
+[`perf-emacs.md`](perf-emacs.md).
 
 **Line cache (M7, `lc.aura`).** Per line an entry `(codes str toks tape
-open last1 last2 syms)` and a record `(entry mkey mrow p1 p2)`. Frames:
+open last1 last2 syms rtoks ins)` and a record `(entry mkey mrow p1 p2)`.
+`ins` is the line's start state (it starts inside a string). Frames:
 
 - *move* (same lines object): name under cursor unchanged → only the
   cursor row is dirty; changed → rebuild mark rows only where the old or
   new name occurs (`member` on the row's symbol list; carry `p1 p2` kept
   per row).
 - *one-line edit* (rows differ only at the cursor row; checked with
-  builtin `list-tail`/`reverse`/`equal?`): re-tokenize that row; if the
-  name and the def-carry out of the row are unchanged, no other row can
-  change.
-- *generic* (enter, join, yank, undo, region kill): match each new row to
-  an old row by `equal?` on its codes at shift `d, 0, -1, +1`; reuse
-  entries; rebuild marks with carry.
-- *full fallback*: a row whose string runs off the line unclosed (the only
-  token that can cross a newline) switches the frame to the M6 whole-page
-  tokenize. Exact, just slower; counted as `full_frames`.
+  builtin `drop`/`reverse`/`equal?`): re-scan that row from the end of
+  its unchanged prefix. If the name, the def-carry and the end state of
+  the row are all unchanged, no other row can change.
+- *generic* (enter, join, yank, undo, region kill, end-state flip): match
+  each new row to an old row by codes **and** start state, at shift
+  `d, 0, -1, +1`, then against the rows saved before the last string flip.
+  Reuse entries and row strings; rebuild marks with carry.
+- A string that runs off a line unclosed (the only token that can cross a
+  newline) no longer forces a whole-page tokenize. The rows below are
+  re-scanned with the new start state (like Emacs `jit-lock-contextually`,
+  but at once instead of after idle time). `full_frames` counts these
+  generic frames.
 
-**Soft floor.** With the pad loaded a Soft call costs ~0.2 ms (Aura
-#4343: linear in top-level defines) and an in-place `vector-set!` /
+**Soft floor.** With the pad loaded a Soft call costs ~0.25–0.3 ms on
+`c69e644` (Aura #4343 → #4350: linear in top-level defines; primitives
+slow down too) and an in-place `vector-set!` /
 `set-car!` ~15 ms (slope ~6× steeper than calls; drafted to file from
 aura-pad, see `ISSUES.md` / `perf.md`). So the pad avoids per-char Soft
 loops where a builtin can do it, never mutates a vector or pair in place,
@@ -277,7 +287,10 @@ query/mutate 桥、SNAP 打包与 M7 行缓存、按键表与播放循环）→ 
 SNAP、失败关闭、上色、转发字节）。SNAP v1 pad 的 `DIRTY` 在 M7 起精确
 表示「T/H/M 变了的行 + 光标行」，由 `dirty_check.py` 审计。M7 让每键
 只重新分词被编辑的那一行，光标移动只重画含新旧名字的行；整页 12 行
-插入从 ~230 ms 降到 ~26–30 ms，光标 ~13 ms。下限是 Soft 解释器
+插入从 ~230 ms 降到 ~26–30 ms，光标 ~13 ms。参考 Emacs 算法
+（command_loop_1 直接命令、try_cursor_movement、try_window_id、
+jit-lock、syntax-ppss 行首状态，见 perf-emacs.md）后插入 ~3.6 ms、
+光标 ~1.3 ms。下限是 Soft 解释器
 （#4343 每次调用 ~0.2 ms；原地 `vector-set!` ~15 ms，已整理为新
 issue 草稿）。诚实规则：拒绝不改、严格更高分才 KEEP、fiber 只在真实
 join 时称 live、未绑定的名字写 GAPS 并提 issue、缓存必须等于全量
