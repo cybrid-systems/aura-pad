@@ -22,6 +22,10 @@
 # → M8 kid onboarding card + intent worldline (welcome CARD,
 # goal: command, pd:goal race, gate/capability, undo KEEP;
 # PAD_M8_OK). Soft owns cards; C unchanged.
+# → M9 workspace notebook + pen (ctrl-s = set-code + eval-current, engine
+# names vs Soft names, define-lookup marks, pen KEEP/DROP/REJECT with
+# ast:snapshot heal, zero set-code between checks; M9_ACC 1..6 OK,
+# PAD_M9_OK). Soft owns the notebook; C unchanged.
 # Ends with PAD_SMOKE_OK.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -87,5 +91,8 @@ bash "$ROOT/scripts/smoke_m7.sh"
 
 echo "smoke: m8 kid card + intent worldline"
 bash "$ROOT/scripts/smoke_m8.sh"
+
+echo "smoke: m9 workspace notebook + pen"
+bash "$ROOT/scripts/smoke_m9.sh"
 
 echo "smoke: PAD_SMOKE_OK"

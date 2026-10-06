@@ -1,0 +1,23 @@
+;; aura-pad M9 tests: workspace notebook (ws.aura) + pen (pen.aura).
+;; Prints T lines, M9LOAD / M9CHECK / M9MARKS / M9NODES / M9REFS / pen
+;; verdict lines / M9STATS, one "M9_ACC <n> OK" per ROADMAP acceptance
+;; item, then PAD_M9_TEST_OK. No HTTP. Soft reserved: never bind quote.
+;; Page output from eval-current (the 12-row page displays "cat") lands
+;; on stdout between lines; every printer here starts on a fresh line.
+;; std modules first, before any other load (aura#4351), via std.aura.
+;; Cases live in m9_cases.aura; this file makes one top-level call.
+(load "/workspace/aura-pad/soft/pad/std.aura")
+(load "/workspace/aura-pad/soft/pad/buffer.aura")
+(load "/workspace/aura-pad/soft/pad/lines.aura")
+(load "/workspace/aura-pad/soft/pad/edit.aura")
+(load "/workspace/aura-pad/soft/pad/hl.aura")
+(load "/workspace/aura-pad/soft/pad/jump.aura")
+(load "/workspace/aura-pad/soft/pad/view.aura")
+;; query.aura before lc.aura: aura#4351 (null? aliasing after require).
+(load "/workspace/aura-pad/soft/pad/query.aura")
+(load "/workspace/aura-pad/soft/pad/lc.aura")
+(load "/workspace/aura-pad/soft/pad/keys.aura")
+(load "/workspace/aura-pad/soft/pad/ws.aura")
+(load "/workspace/aura-pad/soft/pad/pen.aura")
+(load "/workspace/aura-pad/soft/pad/m9_cases.aura")
+(m9:run-all)
