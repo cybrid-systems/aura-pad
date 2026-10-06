@@ -32,6 +32,9 @@
 # → gap round: one Soft entry per key (play_in.aura), flat line scanner,
 # C cell-diff tty update with IL/DL (Soft tests PAD_GAP_TEST_OK, batched
 # lines == byte lines, term model TERM_MODEL_OK; PAD_GAP_OK).
+# → aura-perf round: PAD_DEFER early frame for string edits (settled
+# stream == plain stream, early rows exact), Aura surface facts
+# (rebind / snapshot / fiber / relower), tty model (PAD_AURA_PERF_OK).
 # Ends with PAD_SMOKE_OK.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -106,5 +109,8 @@ bash "$ROOT/scripts/smoke_m10.sh"
 
 echo "smoke: gap round (one Soft entry per key + C cell-diff tty update)"
 bash "$ROOT/scripts/smoke_gap.sh"
+
+echo "smoke: aura-perf round (early frame + Aura surface facts)"
+bash "$ROOT/scripts/smoke_aura_perf.sh"
 
 echo "smoke: PAD_SMOKE_OK"

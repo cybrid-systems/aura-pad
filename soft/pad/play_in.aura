@@ -141,6 +141,16 @@
 ;; pad:play-step! (a Soft call costs ~0.23 ms). Yields the dirty rows.
 (define *pi-symk* (list "S" "K" "Q" "M"))
 (define *pi-rows* 0)    ; keys spliced here (row l only)
+;; Early frame (PAD_DEFER=1, docs/perf-aura.md): when a key changes the
+;; start state of the rows below (a string opened or closed), first write
+;; a frame with row l exact and the rows below as cached (DIRTY = l), then
+;; the exact frame, which is byte for byte the frame written without
+;; deferral (its DIRTY = rows changed + cursor row, the same set relative
+;; to the early frame). jit-lock-defer style: the key's own row shows at
+;; once, the rows below follow ~2 ms later. Done on the main thread: a
+;; fiber cannot run this while the loop waits in read-line (aura#4356).
+(define *pi-defer* #f)
+(define *pi-early* 0)   ; early frames written
 ;; One protocol line: dispatch, run, write the frame. Returns "quit" or
 ;; "go". One Soft entry per key on the hot paths: when the lc cache is in
 ;; step with the state (*lc-L* is the current lines object), a cursor
@@ -270,7 +280,46 @@
                                                          (string=? (list-ref q2 3) "define"))
                                                     1 0))))))
                          (if (not keep)
-                             (begin (set! *lc-pre* le) (pad:lc-line! L2 l col2))
+                             (begin
+                               (if (and *pi-defer*
+                                       ;; same name under the cursor: a new one
+                                       ;; re-marks other rows (settled frame only)
+                                       (let* ((tp (list-ref le 3))
+                                              (tc (if (< col2 (string-length tp)) (string-ref tp col2) 46)))
+                                         (if (or (= tc 83) (= tc 75) (= tc 81) (= tc 77))
+                                             (string=? *lc-name* (pad:lc-name-at le col2))
+                                             (string=? *lc-name* ""))))
+                                   ;; early frame: row l exact, rows below as
+                                   ;; cached (their start state is stale for
+                                   ;; ~2 ms); the exact frame follows at once
+                                   (let* ((oname *lc-name*)
+                                          (str (list-ref le 1))
+                                          (k (string-length str))
+                                          (mrow (if (and (<= k *lc-run-max*)
+                                                         (or (string=? oname "") (not (member oname (list-ref le 7)))))
+                                                    (substring *lc-dots* 0 k)
+                                                    (pad:lc-mrow le oname p1 p2)))
+                                          (ws (vector->list *lc-rowv*))
+                                          (n (length ws))
+                                          (fr (string-append
+                                                "SNAP v1 pad\n"
+                                                "TITLE aura pad (Soft) keys=" (number->string *pl-keys*)
+                                                " no=" (number->string *pl-rej*) "\n"
+                                                "CURSOR line=" (number->string l) " col=" (number->string col2) "\n"
+                                                "SAY " *pl-say* "\n"
+                                                "LEGEND " *view-legend* "\n"
+                                                "DIRTY lines=" (number->string l) "\n"
+                                                "ROWS n=" (number->string n) "\n"
+                                                (apply string-append
+                                                       (append (reverse (drop (reverse ws) (- n l)))
+                                                               (cons (string-append "T " str "\nH " (list-ref le 3) "\nM " mrow "\n")
+                                                                     (drop ws (+ l 1)))))
+                                                "END\n")))
+                                     (set! *pi-early* (+ *pi-early* 1))
+                                     (if *pi-collect* (set! *pi-out* (cons (string-append "EARLY\n" fr) *pi-out*)) (display fr)))
+                                   0)
+                               (set! *lc-pre* le)
+                               (pad:lc-line! L2 l col2))
                              (let* ((tp (list-ref le 3))
                                     (tc (if (< col2 (string-length tp)) (string-ref tp col2) 46))
                                     (name (if (not (or (= tc 83) (= tc 75) (= tc 81) (= tc 77)))
