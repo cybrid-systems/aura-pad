@@ -6,6 +6,10 @@
 ;;                   l replaced, and that row already equals row l of the
 ;;                   exact frame after it (so DIRTY lines=l is exact)
 ;;  AP_EARLY_TAKEN   early frames were written (strings opened / closed)
+;;  AP_POLL_SKIP     settle skip (the path a stdin poll, aura#4358, turns
+;;                   on), driven by a fake "key waiting" at every 2nd early
+;;                   frame: after every key whose settle ran, the cached
+;;                   ROWS body == a whole-page render; skips were taken
 ;; Prints T lines, APSTATS, then PAD_AURA_PERF_TEST_OK.
 ;; Soft reserved: never bind quote.
 (load "/workspace/aura-pad/soft/pad/buffer.aura")
@@ -61,6 +65,16 @@
        (ap:walk (cdr fs) e kept (if ok bad (+ bad 1)))))
     (#t (ap:walk (cdr fs) (car fs) (cons (car fs) kept) bad))))
 
+;; keys with the fake poll: count keys whose settle ran but whose cached
+;; body is not the whole-page render
+(define (ap:step-skip ks bad)
+  (if (null? ks)
+      bad
+      (let ((s0 *pi-skips*))
+        (pad:play-step! (gp:join (car ks) "IN"))
+        (ap:step-skip (cdr ks)
+                      (if (or (> *pi-skips* s0) (gp:body-ok)) bad (+ bad 1))))))
+
 (define (ap:run)
   (display "AURA_PERF early frame on Soft tip") (newline)
   (let* ((ks (gp:keylist2 260 (list)))
@@ -81,6 +95,21 @@
     (gp:expect "AP_EARLY_FRAMES" (= d -1) (if (= d -1) "" (string-append "frame " (number->string d))))
     (gp:expect "AP_EARLY_ROWS" (= (cadr w) 0) (cadr w))
     (gp:expect "AP_EARLY_TAKEN" (and (> ne 5) (= (length got) (+ (length ref) ne))) ne))
+  (let* ((ks (gp:keylist2 260 (list)))
+         (r0 (gp:start!))
+         (r1 (set! *pi-collect* #t))
+         (r2 (set! *pi-defer* #t))
+         (r3 (set! *pi-tp-k* 2))
+         (r4 (set! *pi-pending* pad:pi-test-pending))
+         (sk0 *pi-skips*)
+         (bad (ap:step-skip (append ks (list (list 27 91 68) (list 27 91 67))) 0))
+         (r5 (set! *pi-pending* #f))
+         (r6 (set! *pi-defer* #f))
+         (r7 (set! *pi-collect* #f))
+         (nsk (- *pi-skips* sk0)))
+    (display "APSTATS poll_skip keys=") (display (+ (length ks) 2)) (display " skips=") (display nsk)
+    (display " cap_poll=") (display (if (string=? (pad:pi-cap-poll) "") "none" (pad:pi-cap-poll))) (newline)
+    (gp:expect "AP_POLL_SKIP" (and (= bad 0) (> nsk 3)) (list bad nsk)))
   (display "TESTS checks=") (display gp-checks) (display " fail=") (display gp-fails) (newline)
   (if (= gp-fails 0) (begin (display "PAD_AURA_PERF_TEST_OK") (newline)) 0))
 (ap:run)

@@ -27,8 +27,20 @@
 ;; PAD_PAGE=big starts on the twelve-row page (scripts/bench_editors.sh)
 (pad:play-reset! (if (equal? (getenv "PAD_PAGE") "big") *lc-big-page* *play-start*))
 (pad:who-reset!)
-;; PAD_DEFER=1: early frame before the rows below a string edit settle
-(set! *pi-defer* (equal? (getenv "PAD_DEFER") "1"))
+;; PAD_DEFER=1: early frame before the rows below a string edit settle.
+;; With a stdin poll primitive (aura#4358) the early frame is on by
+;; default (PAD_DEFER=0 turns it off) and a waiting key skips the settle.
+(define *play-poll* (pad:pi-cap-poll))
+(set! *pi-defer* (or (equal? (getenv "PAD_DEFER") "1")
+                     (and (not (string=? *play-poll* "")) (not (equal? (getenv "PAD_DEFER") "0")))))
+(if (string=? *play-poll* "char-ready?")
+    (set! *pi-pending* (lambda () (eq? (eval "(char-ready?)") #t)))
+    0)
+;; smoke only: pretend a key is waiting at every k-th early frame
+(if (and (string? (getenv "PAD_TEST_PENDING")) (string->number (getenv "PAD_TEST_PENDING")))
+    (begin (set! *pi-tp-k* (string->number (getenv "PAD_TEST_PENDING")))
+           (set! *pi-pending* pad:pi-test-pending))
+    0)
 (pad:play-emit!)
 (let loop ()
   (let ((line (read-line)))

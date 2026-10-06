@@ -12,6 +12,9 @@
 #      minus early ones == PAD_DEFER unset, byte for byte    -> DEFER_STREAM_OK
 #   5. C tty update over the deferred stream: pad_view --replay leaves the
 #      same screen as --replay-full after every frame       -> TERM_MODEL_OK
+#   6. settle skip (the path a stdin poll turns on, aura#4358) driven by
+#      PAD_TEST_PENDING=2: tty diff == full repaint after every frame, the
+#      last frame's rows == the plain stream's, fewer frames  -> POLL_SKIP_OK
 # Ends with PAD_AURA_PERF_OK.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -46,7 +49,7 @@ pool = [[97], [98], [32], [34], [34], [34], [40], [41], [49], [59], [92],
         [127], [127], [27, 91, 68], [27, 91, 67], [27, 91, 65], [27, 91, 66],
         [1], [5], [13], [11], [25], [31]]
 keys = [random.choice(pool) for _ in range(240)]
-lines = setup + ["IN " + " ".join(map(str, k)) for k in keys] + ["QUIT"]
+lines = setup + ["IN " + " ".join(map(str, k)) for k in keys] + ["IN 27 91 68", "IN 27 91 67", "QUIT"]
 open(f"{out}/defer.in", "w").write("\n".join(lines) + "\n")
 PY
 for v in 0 1; do
@@ -98,5 +101,28 @@ fi
 "${V[@]}" --replay-full "$OUT/defer_1.out" >"$OUT/replay_full.bin"
 python3 "$ROOT/scripts/term_model.py" "$OUT/replay_diff.bin" "$OUT/replay_full.bin" | tee "$OUT/term_model.txt"
 grep -q '^TERM_MODEL_OK ' "$OUT/term_model.txt" || { echo "smoke_aura_perf: tty update drifted" >&2; exit 1; }
+
+echo "smoke_aura_perf: settle skip (fake key-waiting poll)"
+PAD_DEFER=1 PAD_TEST_PENDING=2 bash "$ROOT/scripts/run_soft.sh" /workspace/aura-pad/soft/pad/play.aura \
+  <"$OUT/defer.in" >"$OUT/skip.out" 2>"$OUT/skip.err"
+if soft_errs "$OUT/skip.out" "$OUT/skip.err"; then
+  cat "$OUT/skip.err" >&2; echo "smoke_aura_perf: play skip errors" >&2; exit 1
+fi
+"${V[@]}" --replay "$OUT/skip.out" >"$OUT/skip_diff.bin"
+"${V[@]}" --replay-full "$OUT/skip.out" >"$OUT/skip_full.bin"
+python3 "$ROOT/scripts/term_model.py" "$OUT/skip_diff.bin" "$OUT/skip_full.bin" | tee "$OUT/skip_term.txt"
+python3 - "$OUT" <<'PY' | tee "$OUT/skip_stream.txt"
+import sys
+out = sys.argv[1]
+def frames(p):
+    return [f + "END\n" for f in open(p).read().split("END\n")[:-1]]
+def rows(f):
+    return f[f.index("ROWS n="):]
+ref, dfr, sk = frames(f"{out}/defer_0.out"), frames(f"{out}/defer_1.out"), frames(f"{out}/skip.out")
+ok = rows(sk[-1]) == rows(ref[-1]) and len(ref) <= len(sk) < len(dfr)
+print(f"{'POLL_SKIP_OK' if ok else 'POLL_SKIP_FAIL'} frames={len(sk)} plain={len(ref)} deferred={len(dfr)}")
+PY
+grep -q '^TERM_MODEL_OK ' "$OUT/skip_term.txt" && grep -q '^POLL_SKIP_OK ' "$OUT/skip_stream.txt" \
+  || { echo "smoke_aura_perf: settle skip path drifted" >&2; exit 1; }
 
 echo "smoke_aura_perf: PAD_AURA_PERF_OK"

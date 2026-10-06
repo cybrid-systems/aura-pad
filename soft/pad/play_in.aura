@@ -151,6 +151,25 @@
 ;; fiber cannot run this while the loop waits in read-line (aura#4356).
 (define *pi-defer* #f)
 (define *pi-early* 0)   ; early frames written
+;; Settle skip (Aura-native path, off until Aura has a stdin poll,
+;; aura#4358): *pi-pending* is #f or a thunk that says a key is already
+;; waiting. Then the early frame is the key's only frame: the cached rows
+;; take the early frame's rows (what the screen shows), *lc-L* stays
+;; behind, and the next key takes the play-cmd! + play-snap path, which
+;; re-matches the rows and dirties every row that differs from the
+;; screen. play.aura sets it when primitive:describe finds a poll
+;; primitive (pad:pi-cap-poll), or from PAD_TEST_PENDING=k (every k-th
+;; early frame, smoke only).
+(define *pi-pending* #f)
+(define *pi-skips* 0)   ; settles skipped because a key was waiting
+(define *pi-tp-k* 0)
+(define *pi-tp-n* 0)
+(define (pad:pi-test-pending)
+  (set! *pi-tp-n* (+ *pi-tp-n* 1))
+  (= 0 (modulo *pi-tp-n* *pi-tp-k*)))
+;; Name of a stdin poll primitive on this Aura, or "" (none on c69e644).
+(define (pad:pi-cap-poll)
+  (if (pair? (primitive:describe "char-ready?")) "char-ready?" ""))
 ;; One protocol line: dispatch, run, write the frame. Returns "quit" or
 ;; "go". One Soft entry per key on the hot paths: when the lc cache is in
 ;; step with the state (*lc-L* is the current lines object), a cursor
@@ -281,7 +300,7 @@
                                                     1 0))))))
                          (if (not keep)
                              (begin
-                               (if (and *pi-defer*
+                               (let ((ef (if (and *pi-defer*
                                        ;; same name under the cursor: a new one
                                        ;; re-marks other rows (settled frame only)
                                        (let* ((tp (list-ref le 3))
@@ -301,6 +320,10 @@
                                                     (pad:lc-mrow le oname p1 p2)))
                                           (ws (vector->list *lc-rowv*))
                                           (n (length ws))
+                                          (erows (append (reverse (drop (reverse ws) (- n l)))
+                                                         (cons (string-append "T " str "\nH " (list-ref le 3) "\nM " mrow "\n")
+                                                               (drop ws (+ l 1)))))
+                                          (ebody (apply string-append erows))
                                           (fr (string-append
                                                 "SNAP v1 pad\n"
                                                 "TITLE aura pad (Soft) keys=" (number->string *pl-keys*)
@@ -310,16 +333,22 @@
                                                 "LEGEND " *view-legend* "\n"
                                                 "DIRTY lines=" (number->string l) "\n"
                                                 "ROWS n=" (number->string n) "\n"
-                                                (apply string-append
-                                                       (append (reverse (drop (reverse ws) (- n l)))
-                                                               (cons (string-append "T " str "\nH " (list-ref le 3) "\nM " mrow "\n")
-                                                                     (drop ws (+ l 1)))))
+                                                ebody
                                                 "END\n")))
                                      (set! *pi-early* (+ *pi-early* 1))
-                                     (if *pi-collect* (set! *pi-out* (cons (string-append "EARLY\n" fr) *pi-out*)) (display fr)))
-                                   0)
-                               (set! *lc-pre* le)
-                               (pad:lc-line! L2 l col2))
+                                     (if *pi-collect* (set! *pi-out* (cons (string-append "EARLY\n" fr) *pi-out*)) (display fr))
+                                     (list erows ebody))
+                                   #f)))
+                                 (if (and ef *pi-pending* (*pi-pending*))
+                                     ;; a key is waiting: skip the settle
+                                     (begin
+                                       (set! *lc-rowv* (list->vector (car ef)))
+                                       (set! *lc-body* (cadr ef))
+                                       (set! *pi-skips* (+ *pi-skips* 1))
+                                       "go")
+                                     (begin
+                                       (set! *lc-pre* le)
+                                       (pad:lc-line! L2 l col2)))))
                              (let* ((tp (list-ref le 3))
                                     (tc (if (< col2 (string-length tp)) (string-ref tp col2) 46))
                                     (name (if (not (or (= tc 83) (= tc 75) (= tc 81) (= tc 77)))

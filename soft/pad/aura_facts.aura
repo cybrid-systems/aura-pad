@@ -8,7 +8,7 @@
 ;;  F_RESTORE       ast:snapshot / ast:restore + eval-current rolls it back
 ;;  F_RELOWER       engine:metrics "query:incremental-relower-stats" is a
 ;;                  hash; compile:relower-strategy answers a keyword
-;; Prints T lines, APFACTS (measured ms), then PAD_AURA_FACTS_OK.
+;; Prints T lines, APFACTS (measured ms + capabilities), then PAD_AURA_FACTS_OK.
 (define af-fails 0)
 (define (af:expect name ok got)
   (display "T ") (display name)
@@ -50,6 +50,10 @@
     (display " rebind_ms=") (display (- t3 t2))
     (display " restore_eval_ms=") (display (- t5 t4))
     (display " relower_keys=") (display (length (hash-keys h)))
-    (display " strategy=") (display st) (newline))
+    (display " strategy=") (display st)
+    ;; capabilities the pad switches on by itself when Aura grows them
+    ;; (aura#4358 poll, aura#4357 specialising relower)
+    (display " cap_poll=") (display (if (pair? (primitive:describe "char-ready?")) "char-ready?" "none"))
+    (display " cap_relower=") (display (if (eq? st ':none) "none" st)) (newline))
   (if (= af-fails 0) (begin (display "PAD_AURA_FACTS_OK") (newline)) 0))
 (af:run)
