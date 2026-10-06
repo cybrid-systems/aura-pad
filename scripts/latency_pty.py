@@ -49,7 +49,7 @@ def drain(fd, quiet_s, max_s):
 
 def pct(xs, p):
     xs = sorted(xs)
-    return xs[min(len(xs) - 1, int(round(p * (len(xs) - 1))))]
+    return xs[min(len(xs) - 1, int(p * len(xs)))]
 
 def main():
     ap = argparse.ArgumentParser()
@@ -104,9 +104,9 @@ def main():
                     "bytes_med": round(statistics.median(res["bytes"])) if res["bytes"] else -1}
     if a.cold:
         k, u = a.cold.split(":")
-        opens, closes, opens_q, closes_q = [], [], [], []
+        opens, closes, opens_q, closes_q, opens_f, closes_f = [], [], [], [], [], []
         for _ in range(a.cold_n):
-            for key, dst, dstq in ((k, opens, opens_q), (u, closes, closes_q)):
+            for key, dst, dstq, dstf in ((k, opens, opens_q, opens_f), (u, closes, closes_q, closes_f)):
                 ts = time.perf_counter()
                 os.write(fd, bytes.fromhex(key))
                 # immediate frame (short quiet), then anything deferred
@@ -114,10 +114,13 @@ def main():
                 f2, l2, nb2 = drain(fd, a.cold_quiet / 1000.0, 5.0)
                 if l is not None:
                     dst.append((l - ts) * 1e6)
+                    dstf.append((f - ts) * 1e6)
                     dstq.append(((l2 if l2 else l) - ts) * 1e6)
-        out["string_open"] = {"n": len(opens), "done_med_us": round(statistics.median(opens)) if opens else -1,
+        out["string_open"] = {"n": len(opens), "first_med_us": round(statistics.median(opens_f)) if opens_f else -1,
+                              "done_med_us": round(statistics.median(opens)) if opens else -1,
                               "all_output_med_us": round(statistics.median(opens_q)) if opens_q else -1}
-        out["string_close"] = {"n": len(closes), "done_med_us": round(statistics.median(closes)) if closes else -1,
+        out["string_close"] = {"n": len(closes), "first_med_us": round(statistics.median(closes_f)) if closes_f else -1,
+                               "done_med_us": round(statistics.median(closes)) if closes else -1,
                                "all_output_med_us": round(statistics.median(closes_q)) if closes_q else -1}
     try:
         os.kill(pid, signal.SIGTERM)

@@ -6,6 +6,7 @@
 #   vim  : vim -u NONE -N, syntax on, ft=scheme (insert mode)
 #   emacs: emacs -nw -Q (scheme-mode, font-lock/jit-lock, show-paren)
 #   pad  : out/bench/pad_play --ansi -> Soft play.aura (PAD_PAGE=big)
+#   pad-defer: same with PAD_DEFER=1 (docs/perf-aura.md early frame)
 # Output: out/bench/editors.txt (LATENCY lines). Not a smoke: timing on a
 # shared box; see docs/perf-emacs.md for what is and is not comparable.
 # Needs network once to apt-get emacs-nox inside the throwaway container.
@@ -33,7 +34,7 @@ PY
   -w /workspace/aura-pad \
   -e AURA_PATH=/workspace/aura-grok/lib -e AURA_PIPELINE_STRICT=0 -e AURA_SANDBOX=off \
   -e AURA_BIN=/workspace/aura-grok/build/aura -e PAD_PAGE=big \
-  -e N="$N" -e RUNS="$RUNS" "$IMG" -s <<'IN'
+  -e N="$N" -e RUNS="$RUNS" -e COLD_N="${BENCH_COLD_N:-12}" "$IMG" -s <<'IN'
 set -euo pipefail
 cd /workspace/aura-pad
 if ! command -v emacs >/dev/null 2>&1; then
@@ -41,13 +42,16 @@ if ! command -v emacs >/dev/null 2>&1; then
 fi
 cc -std=c11 -O2 -Wall -Wextra c/snap.c c/pad_play.c -o out/bench/pad_play
 P=out/bench/page.scm
-L="python3 scripts/latency_pty.py --n $N --cold 22:7f"
+L="python3 scripts/latency_pty.py --n $N --cold 22:7f --cold-n ${COLD_N:-12}"
 DOWN6=1b5b42,1b5b42,1b5b42,1b5b42,1b5b42,1b5b42
 {
   echo "BENCH host=$(hostname) nproc=$(nproc) date=$(date -Is)"
   echo "VERSIONS vim=\"$(vim --version | head -1)\" emacs=\"$(emacs --version 2>/dev/null | head -1 || echo missing)\" aura=$(cd /workspace/aura-grok && git rev-parse --short HEAD 2>/dev/null || echo ?)"
   for r in $(seq 1 "$RUNS"); do
     $L --name pad --setup-keys "$DOWN6,05" --startup-quiet 2500 -- \
+      out/bench/pad_play --ansi scripts/bench_soft_play.sh
+    # PAD_DEFER=1: early frame for string edits, exact frame right after
+    PAD_DEFER=1 $L --name pad-defer --setup-keys "$DOWN6,05" --startup-quiet 2500 -- \
       out/bench/pad_play --ansi scripts/bench_soft_play.sh
     $L --name vim --setup-keys 3747,24,61 -- \
       vim -u NONE -i NONE -N -n --cmd 'set bs=2 ttimeoutlen=10' --cmd 'syntax on' -c 'set ft=scheme' "$P"

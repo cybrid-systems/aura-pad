@@ -10,6 +10,8 @@ invents a replacement API for any of them.
 
 | Aura issue | What is wrong | Pad rule until it lands |
 |------------|---------------|-------------------------|
+| [aura#4356](https://github.com/cybrid-systems/aura/issues/4356) | CLI fibers are OS threads (`fiber:spawn-backend` 2). The main thread does not take the fiber body mutex, and `read-line` pushes to the string heap unlocked, so a fiber allocating strings while main waits in `read-line` corrupts strings or SIGSEGVs | No fiber runs while the play loop is in `read-line`; the early frame and settle stay on the main thread (`perf-aura.md`) |
+| [aura#4355](https://github.com/cybrid-systems/aura/issues/4355) | A top-level unbound-variable error re-runs earlier top-level forms; closures defined before a `set-code` can be invalid afterwards | Keep `set-code` out of files that hold pad closures (`aura_facts.aura` is separate); M9/M10 use it only on their notebook paths |
 | [aura#4354](https://github.com/cybrid-systems/aura/issues/4354) | `(define base f)` then `(define (f x) ... (base x))` inside a LOADED file: `base` runs the new `f` (infinite loop). Inline in the main file it works | Never save-and-redefine a procedure in a loaded file; wrappers get a new name (`pad:pi-line!` in `play_in.aura`) |
 | [aura#4353](https://github.com/cybrid-systems/aura/issues/4353) | An outer local (let / let* / parameter) captured inside a named-let or letrec body resolves to a same-named global (procedure or value). Silent wrong value (std/math `e`, pad globals `row`, `p1`, ...) | Do not read captured outer locals in named lets whose names exist as globals; new loops take their data as parameters; test globals carry a file prefix (`m10:`, `*m10-`) |
 | [aura#4352](https://github.com/cybrid-systems/aura/issues/4352) | A top-level named let that calls a user proc, in a loaded file, breaks later prelude calls (`reverse`: unbound `lst`). In the full stack this showed up as random type errors and calls to the wrong function | No top-level named let in loaded files; build tables with a named procedure (`pad:lc-cls-list`) |
@@ -74,6 +76,13 @@ The pty bench went from insert 7.9–8.2 to 4.5–4.6 ms per key and from cursor
 6.8–7.0 to 1.8–1.9 ms per key. Numbers are in [`perf.md`](perf.md) and
 [`perf-emacs.md`](perf-emacs.md); the gate is `PAD_GAP_OK`. The parent filed #4354 while building it. New
 Soft cost numbers (named-let entry, `map integer->char`) went to #4350.
+
+## Aura-native perf round (done)
+
+[`perf-aura.md`](perf-aura.md): the `PAD_DEFER` early frame (string open
+first byte 5.5 → 3.5–3.8 ms; settled frames byte for byte the plain
+stream). Measured why rebind/relower and CLI fibers give no per-key gain.
+Gate `PAD_AURA_PERF_OK`. Filed #4355, #4356.
 
 ## M11 — aura notebook
 
