@@ -49,7 +49,7 @@ def drain(fd, quiet_s, max_s):
 
 def pct(xs, p):
     xs = sorted(xs)
-    return xs[min(len(xs) - 1, int(p * len(xs)))]
+    return xs[min(len(xs) - 1, int(round(p * (len(xs) - 1))))]
 
 def main():
     ap = argparse.ArgumentParser()
