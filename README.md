@@ -14,7 +14,8 @@ Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 Milestones: [`docs/m0.md`](docs/m0.md), [`docs/m1.md`](docs/m1.md),
 [`docs/m2.md`](docs/m2.md), [`docs/m3.md`](docs/m3.md), [`docs/m35.md`](docs/m35.md),
 [`docs/m4.md`](docs/m4.md), [`docs/m5.md`](docs/m5.md), [`docs/m6.md`](docs/m6.md),
-[`docs/m7.md`](docs/m7.md), [`docs/m8.md`](docs/m8.md).
+[`docs/m7.md`](docs/m7.md), [`docs/m8.md`](docs/m8.md), [`docs/m9.md`](docs/m9.md),
+[`docs/m10.md`](docs/m10.md).
 Repo: https://github.com/cybrid-systems/aura-pad
 
 中文简介：Aura Pad 是给小朋友也能玩的 Soft 小编辑器。缓冲区、光标、按键
@@ -41,12 +42,17 @@ M6 “加c”：一个很薄的 C 画面。编辑、高亮、跳转标记、按�
 （#4343 关闭但没变快，#4350）。参考 Emacs 算法（直接命令、
 try_cursor_movement、try_window_id、jit-lock、syntax-ppss）移植到 Soft
 后：12 行插入约 3.6 ms、光标约 1.3 ms、只跑命令约 0.6 ms（见
-docs/perf-emacs.md）。不声称比 vi/Emacs 快。
+docs/perf-emacs.md）。打开字符串约 24→7–9 ms，紧接着的关闭约 14→6–7 ms
+（syntax-ppss / jit-lock-context 区域遍历）。同一 pty 计时下 vim/Emacs
+每键快 10–30 倍，不声称比 vi/Emacs 快。
 M8 欢迎卡 + 意图世界线：首帧欢迎词、`goal:` 命令、两条助手赛跑、
 CARD 行、门卫（含 capability）、撤销 KEEP → `PAD_M8_OK`。
 M9 工作区笔记本：ctrl-s 才 `set-code` + `eval-current`（打字零次），
 引擎名字 ⊇ Soft 名字、标记/引用/节点类型、助手笔 KEEP/DROP/REJECT 与
 `ast:restore` 修复 → `PAD_M9_OK`。
+M10 谁写的：ctrl-o 回答"这一行是谁写的"（孩子 / 助手 / 宏 / 规则，
+带原因和代数），助手 KEEP 盖章、撤销 KEEP 时 Soft 与引擎恢复必须一致，
+引擎 `query:dirty-nodes` 行 ⊆ Soft DIRTY ∪ 光标行 → `PAD_M10_OK`。
 
 - **M0** races `map-gentle` (mid 1) and `map-bold` (mid 2) on 24 seeded
   key steps toward the goal fixture `"hi aura"`. Score is
@@ -144,9 +150,12 @@ M9 工作区笔记本：ctrl-s 才 `set-code` + `eval-current`（打字零次）
 
   Twelve-row page: insert ~33 → **~3.6 ms**, cursor ~13 → **~1.3 ms**,
   command only ~9.5 → **~0.6 ms**, typing inside an open string ~220 →
-  **~3.5 ms**. Every fast path equals its reference or the whole-page
-  oracle (30 checks, `PAD_PERF_EMACS_OK`). We still do not claim to beat
-  vi/Emacs. See [`docs/perf-emacs.md`](docs/perf-emacs.md).
+  **~3.5 ms**, opening a string above many rows ~24 → **~7–9 ms** and the
+  close after it ~14 → **~6–7 ms** (syntax-ppss / jit-lock-context region
+  walk). Every fast path equals its reference or the whole-page oracle
+  (43 checks, `PAD_PERF_EMACS_OK`). On the same pty harness
+  (`scripts/bench_editors.sh`) vim and Emacs are 10–30× faster per key;
+  we do not claim to beat vi/Emacs. See [`docs/perf-emacs.md`](docs/perf-emacs.md).
 - **M9 workspace notebook** — `ws.aura`: ctrl-s (byte 19) runs one
   `set-code` + `eval-current` of the page plus a char-code row define.
   Typing makes zero `set-code` calls. Engine names (`define-lookup`) are
@@ -157,6 +166,13 @@ M9 工作区笔记本：ctrl-s 才 `set-code` + `eval-current`（打字零次）
   +1 exactly, page row re-projected, undo via `ast:restore`) or DROPped
   (`ast:restore` heal). Tests: 113 Soft checks, `M9_ACC 1..6 OK`,
   `PAD_M9_OK`. See [`docs/m9.md`](docs/m9.md).
+- **M10 who wrote this** — `who.aura`: ctrl-o (byte 15) answers "who
+  wrote this line?" from row stamps `(who why gen)` (kid / helper /
+  macro / law), synced by row identity at ctrl-o and pen steps only, so
+  typing pays nothing. `who_pen.aura`: pen KEEP stamps, pen undo =
+  `ast:restore` + re-project with a loud agree check, and an engine
+  `query:dirty-nodes` cross-check against Soft DIRTY. Tests: 58 Soft
+  checks, `M10_ACC 1..4 OK`, `PAD_M10_OK`. See [`docs/m10.md`](docs/m10.md).
 
 ## Soft smoke
 
@@ -167,7 +183,7 @@ Soft runs natively in that container (no nested docker). Never
 `build_soft4132`. Needs `AURA_SANDBOX=off`.
 
 ```bash
-bash scripts/smoke.sh         # M0..M9 (+ live MiniMax if keyed) → PAD_SMOKE_OK
+bash scripts/smoke.sh         # M0..M10 (+ live MiniMax if keyed) → PAD_SMOKE_OK
 bash scripts/smoke_soft.sh    # M0 → PAD_M0_OK
 bash scripts/smoke_m1.sh      # M1 → PAD_M1_OK
 bash scripts/smoke_m2.sh      # M2 fixtures → PAD_M2_PROPOSE_OK
@@ -180,8 +196,9 @@ bash scripts/smoke_c.sh       # M6 Soft dump → thin C blit … PAD_C_OK (PAD_C
 bash scripts/smoke_m7.sh      # M7 Soft tests + DIRTY audit + perf → PAD_M7_OK
 bash scripts/smoke_m8.sh      # M8 welcome card + intent race → PAD_M8_OK
 bash scripts/smoke_m9.sh      # M9 workspace notebook + pen → PAD_M9_OK
+bash scripts/smoke_m10.sh     # M10 who wrote this + engine dirty → PAD_M10_OK
 bash scripts/smoke_perf.sh    # key-path ms/key → PAD_PERF_OK + PAD_M7_PERF_OK + PAD_PERF_EMACS_OK
-PAD_LIVE=0 bash scripts/smoke.sh     # skip live MiniMax (includes M8, M9)
+PAD_LIVE=0 bash scripts/smoke.sh     # skip live MiniMax (includes M8, M9, M10)
 ```
 
 Scripts may be mode `100644` in git. Always invoke them with `bash`.
@@ -220,7 +237,8 @@ bash scripts/run_soft.sh /workspace/aura-pad/soft/pad/m6_smoke.aura | ./out/c/pa
 ```
 
 In `pad_play`: type, arrows move, ctrl-g finds where a name is born,
-ctrl-r counts uses, ctrl-b jumps back, ctrl-q says bye — all decided by
+ctrl-r counts uses, ctrl-b jumps back, ctrl-o says who wrote the line,
+ctrl-q says bye — all decided by
 Soft (`soft/pad/keys.aura`). C forwards bytes and paints.
 
 ## License
