@@ -137,7 +137,7 @@ requires) before any other pad file (#4351). Because per-call cost
 scales with defines (#4343, still linear on tip: #4350), the pad never
 `set-code`s per keystroke: one load per notebook check (M9, `ws.aura`).
 
-## 7. SNAP protocol (`SNAP v1 pad`)
+## 7. SNAP protocol (`SNAP v1 pad`, opt-in `SNAP v2 pad`)
 
 Same `SNAP v1 … END` family as aura-parkour / aura-tetris.
 
@@ -173,6 +173,50 @@ END
 - Input side (`pad_play` → Soft): `IN <byte>` per raw key byte,
   `KEY <word>` scripted, `QUIT`. Escape sequences are decoded in Soft
   (`pad:key-step`).
+
+### 7.1 Wire v2 (`SNAP v2 pad`, opt-in)
+
+v1 resends every row on every frame (12-row page: 44 lines, ~1 KB per
+key). v2 carries only the rows Soft already marked DIRTY:
+
+```
+SNAP v2 pad
+GEN 7 base=6               # rows not sent = rows of frame 6; base=- : full
+TITLE aura pad (Soft) keys=11 no=1
+CURSOR line=1 col=1
+SAY jumped to where hello is born
+LEGEND K=magic-word ...
+ROWS n=2 body=123          # body = bytes of the whole v1 ROWS body
+R 1                        # once per sent row (Soft's DIRTY set)
+T (hello 4)
+H PSSSSS.NP
+M .rrrrr...
+END
+```
+
+- Soft decides: the rows sent are the exact M7 DIRTY rows
+  (`soft/pad/wire2.aura`, `pad:w2-frame`). After an early frame
+  (`PAD_DEFER`) Soft also resends row l in the next frame, because C
+  holds the early row l.
+- C (`c/snap.c`) only rebuilds. A delta is accepted only if `base` is the
+  generation of the frame C holds, every unsent row exists there, no `R`
+  is repeated or out of range, `body=` matches the rebuilt rows and the
+  cursor is in range. A full frame must send every row. Anything else
+  drops the whole block, and C keeps the last good frame. C never picks
+  or guesses a row.
+- Recovery: after a dropped v2 block `pad_play` writes `WIRE 2 FULL` once.
+  Soft answers with a full frame, and every later delta is based on it.
+  A bad full frame earns at most 3 asks in a row. `pad_view` (file
+  replay) has no channel back, so it only drops.
+- Handshake: `pad_play --wire2` writes `WIRE 2` to Soft first, and Soft
+  answers with a full v2 frame. `WIRE 1` switches Soft back to v1.
+  Without the offer, Soft writes v1 only, which is the default
+  (`--wire1`). See `perf.md` "wire v2" for why.
+- Oracle: `scripts/wire2_check.py` rebuilds v2 frames independently and
+  requires them to equal the v1 frames for the same keys, one for one.
+  It also requires the C `--replay-full` bytes to match per frame and
+  runs `term_model.py` on the v2 cell diff (`smoke_wire2.sh` →
+  `PAD_WIRE2_OK`).
 
 ## 8. Key path and performance budget (M6 → M7 → Emacs ports)
 
