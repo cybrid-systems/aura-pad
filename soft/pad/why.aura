@@ -1,0 +1,202 @@
+;; aura-pad M11c -- "why did it break?" in kid words.
+;; Needs ws.aura, eng_who.aura (and what they load). Loaded before
+;; robot.aura, which calls pad:why-probe! when aura refuses a proposal.
+;;
+;; typed-mutate-atomic answers only #t / #f, so after a refusal the pad
+;; replays the proposal one mutate:rebind at a time (still before the
+;; heal, so the robot's single ast:restore + eval-current puts back
+;; whatever the replay committed). The first edit aura refuses gives the
+;; engine's own text:
+;;   type error: argument 1: expected String, got Int / blamed: caller
+;;   arity mismatch: call 'hello': expected 1 arguments, got 2
+;;   unbound variable: frob
+;;   (parse-error "1:21: unexpected ')'")
+;; and a Soft table turns it into one short sentence for the say line:
+;;   "the helper's greet used a number where words go"
+;;   "the helper's bye gives hello 2 things, it wants 1"
+;;   "the helper's bye uses frob, nothing is called that yet"
+;;   "the helper's bye has a bracket in the wrong place"
+;; When aura blames a line that uses the changed define (a caller), the
+;; sentence names that line instead:
+;;   "the helper's hello now wants 2 things, but bye gives it 1"
+;;   "the helper's bye does not fit (bye 4)"
+;; typecheck-incremental lines (after a KEEP) go through the same table.
+;; "unbound variable: X" is dropped when X is a notebook define:
+;; typecheck-incremental reports value defines as unbound (aura#4363).
+;; The engine silently closes a missing ")" in a rebind body, so the
+;; robot gate counts brackets itself (pad:why-brackets-ok?).
+;; Soft reserved: never bind quote.
+
+(define *why-probes* 0)
+(define *why-last* (list #f "none" "" ""))   ; (name kind text sentence)
+
+;; --- tiny string search (texts are short) ---
+(define (pad:why-find s pat i)
+  (cond
+    ((> (+ i (string-length pat)) (string-length s)) -1)
+    ((string=? (substring s i (+ i (string-length pat))) pat) i)
+    (#t (pad:why-find s pat (+ i 1)))))
+(define (pad:why-has? s pat) (>= (pad:why-find s pat 0) 0))
+;; s from i up to the first char whose code is in stops
+(define (pad:why-until s i j stops)
+  (cond
+    ((>= j (string-length s)) (substring s i j))
+    ((member (char->integer (string-ref s j)) stops) (substring s i j))
+    (#t (pad:why-until s i (+ j 1) stops))))
+;; text after the first pat, up to a stop char; "" when pat is missing
+(define (pad:why-after s pat stops)
+  (let ((k (pad:why-find s pat 0)))
+    (if (< k 0)
+        ""
+        (pad:why-until s (+ k (string-length pat)) (+ k (string-length pat)) stops))))
+(define *why-stops* (list 10 59 44 39 32))   ; \n ; , ' space
+
+(define (pad:why-type-word t)
+  (cond
+    ((string=? t "String") "words")
+    ((member t (list "Int" "Integer" "Float" "Number" "Num" "Real")) "a number")
+    ((member t (list "Bool" "Boolean")) "yes or no")
+    ((string=? t "Char") "a letter")
+    ((member t (list "List" "Pair")) "a list")
+    ((string=? t "Symbol") "a name")
+    ((string=? t "") "something")
+    ((let ((c (char->integer (string-ref t 0)))) (and (>= c 97) (<= c 122))) "something else")
+    (#t t)))
+
+(define (pad:why-things n)
+  (string-append n (if (string=? n "1") " thing" " things")))
+
+(define (pad:why-owner who name)
+  (string-append
+    (cond
+      ((string=? who "helper") "the helper's ")
+      ((string=? who "macro") "the macro's ")
+      ((string=? who "law") "the law's ")
+      ((string=? who "kid") "your ")
+      (#t "the "))
+    name))
+
+;; engine text -> kind: arity | type | unbound | brackets | other
+(define (pad:why-kind text)
+  (cond
+    ((pad:why-has? text "arity mismatch") "arity")
+    ((pad:why-has? text "type error") "type")
+    ((pad:why-has? text "incompatible ground types") "type")
+    ((pad:why-has? text "unbound variable: ") "unbound")
+    ((or (pad:why-has? text "parse-error") (pad:why-has? text "unexpected ')'")
+         (pad:why-has? text "unexpected end")) "brackets")
+    (#t "other")))
+
+;; Where aura points: the 1-based line after "(selective) failed: " (lines
+;; of the notebook as checked), or -1. ("mutation-failed: " comes first.)
+(define (pad:why-line text)
+  (pad:ew-num (pad:why-after text ") failed: " (list 58 10 59 32))))
+(define (pad:why-row-src l)
+  (if (and (>= l 0) (< l (length (pad:es-L *pl-st*))))
+      (pad:v-src (list (list-ref (pad:es-L *pl-st*) l)))
+      ""))
+(define (pad:why-row-def src)
+  (let ((ds (if (string=? src "") (list) (pad:ws-soft-defs (pad:hl-tokens src)))))
+    (if (pair? ds) (car ds) #f)))
+;; The error sits in a line that USES name (not in name's new body):
+;; a caller no longer fits the change.
+(define (pad:why-caller? text name)
+  (let* ((line (pad:why-line text))
+         (src (pad:why-row-src (- line 1)))
+         (d (pad:why-row-def src)))
+    (and (> line 0)
+         (string-contains? src (string-append "(" name))
+         (not (and d (string=? d name))))))
+;; Kid name for a line: the define it starts, the row itself when short,
+;; else "line N".
+(define (pad:why-where text)
+  (let* ((line (pad:why-line text))
+         (src (pad:why-row-src (- line 1)))
+         (d (pad:why-row-def src)))
+    (cond
+      (d d)
+      ((and (> (string-length src) 0) (<= (string-length src) 18)) src)
+      (#t (string-append "line " (number->string line))))))
+
+;; One kid sentence for engine text about define name, written by who.
+(define (pad:why-kid text who name)
+  (let ((k (pad:why-kind text))
+        (o (pad:why-owner who name)))
+    (cond
+      ((and (string=? k "arity") (pad:why-caller? text name))
+       (string-append o " now wants " (pad:why-things (pad:why-after text "expected " *why-stops*))
+                      ", but " (pad:why-where text) " gives it "
+                      (pad:why-after text "got " *why-stops*)))
+      ((and (string=? k "type") (pad:why-caller? text name))
+       (string-append o " does not fit " (pad:why-where text)))
+      ((string=? k "arity")
+       (string-append o " gives " (pad:why-after text "call '" *why-stops*) " "
+                      (pad:why-things (pad:why-after text "got " *why-stops*))
+                      ", it wants " (pad:why-after text "expected " *why-stops*)))
+      ((string=? k "type")
+       (string-append o " used " (pad:why-type-word (pad:why-after text "got " *why-stops*))
+                      " where " (pad:why-type-word (pad:why-after text "expected " *why-stops*))
+                      " go"))
+      ((string=? k "unbound")
+       (string-append o " uses " (pad:why-after text "unbound variable: " *why-stops*)
+                      ", nothing is called that yet"))
+      ((string=? k "brackets") (string-append o " has a bracket in the wrong place"))
+      (#t "aura said no to the whole change, nothing moved"))))
+
+;; Text of a mutate result: "" for #t, the reason string for a refusal.
+(define (pad:why-text r)
+  (cond
+    ((eq? r #t) "")
+    ((and (pair? r) (string? (car r)) (pair? (cdr r)) (string? (cadr r)))
+     (string-append (car r) ": " (cadr r)))
+    ((string? r) r)
+    (#t "refused")))
+
+;; Replay ops one rebind at a time; first refusal -> (name kind text sentence).
+;; Call it while the snapshot taken before the proposal is still to be
+;; restored (the replay may commit the good edits).
+(define (pad:why-replay who ops why)
+  (if (null? ops)
+      (list #f "other" "" "aura said no to the whole change, nothing moved")
+      (let* ((op (car ops))
+             (r (try (mutate:rebind (car op) (cadr op) why) (catch (e) "raised")))
+             (t (pad:why-text r)))
+        (if (string=? t "")
+            (pad:why-replay who (cdr ops) why)
+            (list (car op) (pad:why-kind t) t (pad:why-kid t who (car op)))))))
+
+(define (pad:why-probe! who ops why)
+  (set! *why-probes* (+ *why-probes* 1))
+  (let ((w (pad:why-replay who ops why)))
+    (set! *why-last* w)
+    w))
+
+;; --- brackets (the engine closes a missing ")" by itself) ---
+(define (pad:why-brackets-ok? lam)
+  (= (pad:ws-paren-depth (pad:hl-tokens lam)) 0))
+
+;; --- typecheck-incremental diagnostics ---
+;; "  [3] 1:18: unbound variable: pet" -> "unbound variable: pet"
+(define (pad:why-diag-msg line)
+  (let ((k (pad:why-find line "] " 0)))
+    (if (< k 0)
+        ""
+        (let* ((rest (substring line (+ k 2) (string-length line)))
+               (c (pad:why-find rest ": " 0)))
+          (if (and (>= c 0) (< c 8)) (substring rest (+ c 2) (string-length rest)) rest)))))
+;; keep a message unless it is a false "unbound" for a notebook define
+(define (pad:why-diag-real? msg)
+  (if (string-prefix? msg "unbound variable: ")
+      (not (pad:ew-nid (pad:why-after msg "unbound variable: " *why-stops*)))
+      (> (string-length msg) 0)))
+(define (pad:why-diag-msgs lines acc)
+  (cond
+    ((null? lines) (reverse acc))
+    ((and (string-prefix? (car lines) "  [") (pad:why-diag-real? (pad:why-diag-msg (car lines))))
+     (pad:why-diag-msgs (cdr lines) (cons (pad:why-diag-msg (car lines)) acc)))
+    (#t (pad:why-diag-msgs (cdr lines) acc))))
+;; typecheck-incremental text -> real diagnostic messages
+(define (pad:why-diags tc)
+  (if (string? tc) (pad:why-diag-msgs (string-split tc "\n") (list)) (list)))
+(define (pad:why-tc-now)
+  (try (pad:why-diags (typecheck-incremental)) (catch (e) (list))))
