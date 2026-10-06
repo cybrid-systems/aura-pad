@@ -33,4 +33,5 @@
 (load "/workspace/aura-pad/soft/pad/m11e_cases.aura")
 (load "/workspace/aura-pad/soft/pad/m11f_cases.aura")
 (load "/workspace/aura-pad/soft/pad/m11g_cases.aura")
+(load "/workspace/aura-pad/soft/pad/m11g_wire.aura")
 (m11:run-all)

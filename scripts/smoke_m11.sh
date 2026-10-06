@@ -56,7 +56,8 @@ python3 "$ROOT/scripts/paren_check.py" \
   "$ROOT"/soft/pad/blast.aura "$ROOT"/soft/pad/time.aura "$ROOT"/soft/pad/ws.aura \
   "$ROOT"/soft/pad/world.aura "$ROOT"/soft/pad/m11_test.aura "$ROOT"/soft/pad/m11_cases.aura \
   "$ROOT"/soft/pad/m11e_cases.aura "$ROOT"/soft/pad/m11f_cases.aura \
-  "$ROOT"/soft/pad/kid_rules.aura "$ROOT"/soft/pad/m11g_cases.aura
+  "$ROOT"/soft/pad/kid_rules.aura "$ROOT"/soft/pad/m11g_cases.aura \
+  "$ROOT"/soft/pad/m11g_wire.aura
 
 echo "smoke_m11: Soft tests (AURA_MUTATE_TYPE_GATE=hard)"
 T="$ROOT/out/m11/m11_test.txt"
