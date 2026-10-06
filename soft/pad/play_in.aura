@@ -15,8 +15,9 @@
 ;; for backspace.
 ;;
 ;; The hot cases are table lookups made with builtins:
-;; - one byte, idle escape state: *pi-keyv*, the idle-state result of
-;;   pad:key-step for each byte 0..255, computed once at load;
+;; - one byte, idle escape state: the idle-state result of pad:key-step
+;;   for that byte, memoized on first use in *pi-kb* / *pi-kc* (a table
+;;   for all 256 bytes built at load cost ~1 s of pad startup);
 ;; - a whole escape sequence on one line ("IN 27 91 68"): *pi-seq-lines*.
 ;; Anything else (an escape split over lines, as the smoke streams send
 ;; it, several keys in one read, byte 15) goes through pad:pi-bytes!,
@@ -26,11 +27,18 @@
 ;; No named let captures an outer local here (aura#4353).
 ;; Soft reserved: never bind quote.
 
-(define (pad:pi-keyv-list b acc)
-  (if (< b 0)
-      acc
-      (pad:pi-keyv-list (- b 1) (cons (car (pad:key-step (list) b)) acc))))
-(define *pi-keyv* (list->vector (pad:pi-keyv-list 255 (list))))
+;; Idle key-step memo: bytes seen (newest first) and their commands; a
+;; hit is member + length + list-ref (builtins), a miss runs pad:key-step
+;; once (what the old path ran for every byte) and remembers it.
+(define *pi-kb* (list))
+(define *pi-kc* (list))
+(define *pi-kn* 0)
+(define (pad:pi-key-miss! b)
+  (let ((c (car (pad:key-step (list) b))))
+    (set! *pi-kb* (cons b *pi-kb*))
+    (set! *pi-kc* (cons c *pi-kc*))
+    (set! *pi-kn* (+ *pi-kn* 1))
+    c))
 
 ;; "IN 27 91 X" / "IN 27 79 X" for every arrow X -> its command word.
 (define (pad:pi-seq-lines xs)
@@ -58,7 +66,7 @@
 ;; "quit" or a reason; the caller writes the frame). A new name, not a
 ;; redefinition: in a loaded file, "(define base f) (define (f ..))"
 ;; makes base run the NEW f on Soft tip c69e644 (inline it works), so the
-;; old wrapper moved here looped forever on QUIT (repro filed upstream).
+;; old wrapper moved here looped forever on QUIT (aura#4354).
 (define (pad:pi-line! line)
   (if (and (string? line) (string=? line "IN 15") (null? *pl-esc*))
       (pad:who-key!)
@@ -132,7 +140,10 @@
          (b (and in idle (string->number (substring line 3 n0))))
          (c (cond
               ((not (and in idle)) #f)
-              ((number? b) (if (and (>= b 0) (< b 256) (not (= b 15))) (vector-ref *pi-keyv* b) #f))
+              ((number? b) (if (and (>= b 0) (< b 256) (not (= b 15)))
+                               (let ((t (member b *pi-kb*)))
+                                 (if t (list-ref *pi-kc* (- *pi-kn* (length t))) (pad:pi-key-miss! b)))
+                               #f))
               (#t (let ((t (member line *pi-seq-lines*)))
                     (if t (list-ref *pi-seq-cmds* (- *pi-seq-n* (length t))) #f)))))
          (fast (and c (not (equal? c "pending"))))

@@ -9,7 +9,8 @@ measured key write the key bytes and time
   done   = last output byte before the output stays quiet for --quiet ms
 
 over --n repetitions (each key is followed by its undo key, also
-measured). Reports median / p90 in microseconds per key. This measures
+measured). Reports median / p90 in microseconds per key and the median
+number of bytes the editor wrote to the terminal per key. This measures
 what the editor writes to the terminal, not photons: the terminal
 emulator's own rendering is excluded for every editor alike.
 
@@ -83,7 +84,7 @@ def main():
     labels = a.labels.split(",")
     for lab, pair in zip(labels, a.pairs.split(",")):
         k, u = pair.split(":")
-        res = {"first": [], "done": [], "ufirst": [], "udone": []}
+        res = {"first": [], "done": [], "ufirst": [], "udone": [], "bytes": []}
         for _ in range(a.n):
             for key, fk, dk in ((k, "first", "done"), (u, "ufirst", "udone")):
                 ts = time.perf_counter()
@@ -93,12 +94,14 @@ def main():
                     continue
                 res[fk].append((f - ts) * 1e6)
                 res[dk].append((l - ts) * 1e6)
+                res["bytes"].append(nb)
         both = res["done"] + res["udone"]
         bothf = res["first"] + res["ufirst"]
         out[lab] = {"n": len(both),
                     "first_med_us": round(statistics.median(bothf)) if bothf else -1,
                     "done_med_us": round(statistics.median(both)) if both else -1,
-                    "done_p90_us": round(pct(both, 0.9)) if both else -1}
+                    "done_p90_us": round(pct(both, 0.9)) if both else -1,
+                    "bytes_med": round(statistics.median(res["bytes"])) if res["bytes"] else -1}
     if a.cold:
         k, u = a.cold.split(":")
         opens, closes, opens_q, closes_q = [], [], [], []
