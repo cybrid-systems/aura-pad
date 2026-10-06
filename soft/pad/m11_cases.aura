@@ -2,8 +2,8 @@
 ;; Every section is a function; the entry file runs ONE top-level call
 ;; (forms after a set-code + eval-current are read back wrong, docs/m9.md).
 ;; Test globals carry an m11 prefix only (aura#4353). Prints T lines,
-;; M11A_ACC .. M11E_ACC n OK per acceptance item (M11e cases live in
-;; m11e_cases.aura), M11STATS, then PAD_M11_TEST_OK.
+;; M11A_ACC .. M11F_ACC n OK per acceptance item (M11e / M11f cases live
+;; in m11e_cases.aura / m11f_cases.aura), M11STATS, then PAD_M11_TEST_OK.
 ;; Soft reserved: never bind quote.
 
 (define *m11-fail* 0)
@@ -532,6 +532,7 @@
   (newline)
   (display "M11STATS ") (display (pad:robot-stats-str))
   (display " ") (display (pad:time-stats-str))
+  (display " ") (display (pad:world-stats-str))
   (newline)
   (display "TESTS checks=") (display (number->string *m11-checks*))
   (display " fail=") (display (number->string *m11-fail*))
@@ -556,4 +557,6 @@
   (m11:sec-e1)
   (m11:sec-e2)
   (m11:sec-e3)
+  (m11:sec-f1)
+  (m11:sec-f2)
   (m11:outro))
