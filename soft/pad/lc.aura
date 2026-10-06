@@ -33,10 +33,13 @@
     ((pad:hl-sym? c) 3)
     (#t 0)))
 
-(define *lc-cls*
-  (list->vector
-    (let loop ((c 127) (acc (list)))
-      (if (< c 0) acc (loop (- c 1) (cons (pad:lc-cls-of c) acc))))))
+;; Built by a named procedure, not a top-level named let: a top-level
+;; named let that calls a user procedure, in a loaded file, broke later
+;; prelude calls such as reverse (aura#4352).
+(define (pad:lc-cls-list c acc)
+  (if (< c 0) acc (pad:lc-cls-list (- c 1) (cons (pad:lc-cls-of c) acc))))
+
+(define *lc-cls* (list->vector (pad:lc-cls-list 127 (list))))
 
 (define (pad:lc-k s i)
   (let ((c (char->integer (string-ref s i))))

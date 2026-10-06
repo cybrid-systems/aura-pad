@@ -1,0 +1,370 @@
+;; aura-pad M9 -- workspace notebook.
+;; The Aura workspace holds the notebook, but only at "check" time:
+;; pad:ws-load! is set-code + eval-current, once per notebook open or
+;; explicit check (ctrl-s, byte 19). Typing stays on the M7 Soft line
+;; cache and never touches the workspace (M9STATS counts set-code calls).
+;;
+;; Notebook source = page text (so the engine sees the kid's defines) +
+;; one data define holding the page rows as char codes:
+;;   (define pad-nb-rows (list (list 104 105) (list 32 32 97 ...) ...))
+;; query:code canonicalizes source (drops comments and layout), so rows
+;; come back from that define, never from re-printed page text.
+;; Char codes also avoid Soft string escapes (aura#4348).
+;;
+;; eval-current runs the page in the pad's Soft env, so page output
+;; (display ...) reaches stdout and page defines become Soft globals.
+;; The guard refuses pad-owned names; play.aura (C SNAP stream) does
+;; not wire ctrl-s yet because tip has no output capture.
+;; Needs buffer/lines/edit/hl/jump/view/lc/keys + query.aura.
+;; Soft reserved: never bind quote.
+
+(define *ws-row-tag* "pad-nb-rows")
+(define *ws-set-code-n* 0)   ; set-code calls since boot
+(define *ws-eval-n* 0)       ; eval-current calls since boot
+(define *ws-loads* 0)        ; loads that reached eval-current
+(define *ws-checks* 0)       ; check requests (ctrl-s)
+(define *ws-heals* 0)        ; eval-current after ast:restore (aura#4349)
+(define *ws-src* "")         ; notebook source last pushed through set-code
+(define *ws-L* (list))       ; page lines at last load
+(define *ws-eval* "none")    ; ok | note (page evaluated to an engine note)
+(define *ws-load-ms* 0)
+(define *ws-gaps* (list))    ; load surfaces that were unbound
+
+;; Load surfaces go through these slots so a test can stand in an
+;; unbound name and watch the GAPS path (pad keeps the Soft buffer).
+(define *ws-set-code-fn* (lambda (s) (set-code s)))
+(define *ws-eval-fn* (lambda () (eval-current)))
+
+(define (pad:ws-gap! name)
+  (if (not (member name *ws-gaps*))
+      (set! *ws-gaps* (append *ws-gaps* (list name))))
+  name)
+
+(define (pad:ws-set-code! src)
+  (set! *ws-set-code-n* (+ *ws-set-code-n* 1))
+  (try
+    (let ((v (*ws-set-code-fn* src)))
+      ;; set-code answers #t; anything else means the workspace still
+      ;; holds the old code, so stop at "fail" before eval-current.
+      (if (eq? v #t) "ok" "fail"))
+    (catch (e)
+      (if (pad:unbound-msg? e) (begin (pad:ws-gap! "set-code") "gap") "fail"))))
+
+(define (pad:ws-eval!)
+  (set! *ws-eval-n* (+ *ws-eval-n* 1))
+  (try
+    (let ((v (*ws-eval-fn*)))
+      (if (pad:eng-err? v) "note" "ok"))
+    (catch (e)
+      (if (pad:unbound-msg? e) (begin (pad:ws-gap! "eval-current") "gap") "fail"))))
+
+;; --- notebook source ---
+;; No (map number->string ...) here: passing a builtin as a value from
+;; this file resolved to the wrong procedure on tip (aura#4351), so the
+;; row text is built with plain recursion.
+(define (pad:ws-nums ln)
+  (cond
+    ((null? ln) "")
+    ((null? (cdr ln)) (number->string (car ln)))
+    (#t (string-append (number->string (car ln)) " " (pad:ws-nums (cdr ln))))))
+
+(define (pad:ws-row-src ln)
+  (if (null? ln)
+      "(list)"
+      (string-append "(list " (pad:ws-nums ln) ")")))
+
+(define (pad:ws-rows-src L)
+  (cond
+    ((null? L) "")
+    ((null? (cdr L)) (pad:ws-row-src (car L)))
+    (#t (string-append (pad:ws-row-src (car L)) " " (pad:ws-rows-src (cdr L))))))
+
+(define (pad:ws-source L)
+  (string-append (pad:v-src L) "\n(define " *ws-row-tag* " (list "
+                 (pad:ws-rows-src L) "))\n"))
+
+;; set-code + eval-current only. Returns "ok", "gap" or "fail".
+(define (pad:ws-load! L)
+  (let* ((src (pad:ws-source L))
+         (t0 (current-time-ms))
+         (r1 (pad:ws-set-code! src)))
+    (if (not (string=? r1 "ok"))
+        r1
+        (let ((r2 (pad:ws-eval!)))
+          (set! *ws-load-ms* (- (current-time-ms) t0))
+          (set! *ws-src* src)
+          (set! *ws-L* L)
+          (set! *ws-loads* (+ *ws-loads* 1))
+          (set! *ws-eval* r2)
+          (if (or (string=? r2 "ok") (string=? r2 "note")) "ok" r2)))))
+
+;; --- projection: engine source -> page rows ---
+;; Index of needle in s at or after i, or -1. Check time only.
+(define (pad:ws-find s needle i)
+  (let ((n (string-length s)) (m (string-length needle)))
+    (let loop ((k i))
+      (cond
+        ((> (+ k m) n) -1)
+        ((string=? (substring s k (+ k m)) needle) k)
+        (#t (loop (+ k 1)))))))
+
+;; Tokens "(" ")" and words from s starting at i, until depth returns 0.
+(define (pad:ws-lex s i)
+  (let ((n (string-length s)))
+    (let loop ((k i) (depth 0) (word (list)) (acc (list)))
+      (let ((flush (if (null? word)
+                       acc
+                       (cons (pad:v-src (list (reverse word))) acc))))
+        (cond
+          ((>= k n) (reverse flush))
+          (#t
+           (let ((c (string-ref s k)))
+             (cond
+               ((= c 40) (loop (+ k 1) (+ depth 1) (list) (cons "(" flush)))
+               ((= c 41)
+                (if (= depth 1)
+                    (reverse (cons ")" flush))
+                    (loop (+ k 1) (- depth 1) (list) (cons ")" flush))))
+               ((or (= c 32) (= c 10) (= c 9)) (loop (+ k 1) depth (list) flush))
+               (#t (loop (+ k 1) depth (cons c word) acc))))))))))
+
+;; (list ROW*) with ROW = (list INT*). Returns rows or #f.
+(define (pad:ws-parse-row ts)
+  ;; ts starts at "(" "list"; returns (row . rest) or #f
+  (if (and (pair? ts) (string=? (car ts) "(")
+           (pair? (cdr ts)) (string=? (cadr ts) "list"))
+      (let loop ((xs (cddr ts)) (acc (list)))
+        (cond
+          ((null? xs) #f)
+          ((string=? (car xs) ")") (cons (reverse acc) (cdr xs)))
+          (#t (let ((v (string->number (car xs))))
+                (if (number? v) (loop (cdr xs) (cons v acc)) #f)))))
+      #f))
+
+(define (pad:ws-parse-rows ts)
+  (if (and (pair? ts) (string=? (car ts) "(")
+           (pair? (cdr ts)) (string=? (cadr ts) "list"))
+      (let loop ((xs (cddr ts)) (acc (list)))
+        (cond
+          ((null? xs) #f)
+          ((string=? (car xs) ")") (reverse acc))
+          (#t (let ((r (pad:ws-parse-row xs)))
+                (if r (loop (cdr r) (cons (car r) acc)) #f)))))
+      #f))
+
+;; Page rows from the live workspace (query:code), or #f.
+(define (pad:ws-project)
+  (let* ((code (pad:q-code))
+         (tag (string-append "(define " *ws-row-tag* " "))
+         (k (if (string=? code "") -1 (pad:ws-find code tag 0))))
+    (if (< k 0)
+        #f
+        (pad:ws-parse-rows (pad:ws-lex code (+ k (string-length tag)))))))
+
+;; --- guard (Soft only, before any set-code) ---
+(define (pad:ws-paren-depth toks)
+  (let loop ((ts toks) (d 0))
+    (cond
+      ((null? ts) d)
+      ((< d 0) d)
+      ((string=? (car (car ts)) "P")
+       (let ((t (pad:hl-nth (car ts) 3)))
+         (loop (cdr ts) (cond ((string=? t "(") (+ d 1))
+                              ((string=? t ")") (- d 1))
+                              (#t d)))))
+      (#t (loop (cdr ts) d)))))
+
+;; Names the page defines, by the Soft find-defs pattern, unique, in order.
+(define (pad:ws-soft-defs toks)
+  (let loop ((xs toks) (prev #f) (prev2 #f) (acc (list)))
+    (if (null? xs)
+        (reverse acc)
+        (let* ((t (car xs))
+               (txt (pad:hl-nth t 3))
+               (hit (and (or (string=? (car t) "S") (string=? (car t) "Q")
+                             (string=? (car t) "M"))
+                         (or (and prev (string=? (car prev) "K")
+                                  (string=? (pad:hl-nth prev 3) "define"))
+                             (and prev (string=? (car prev) "P")
+                                  (string=? (pad:hl-nth prev 3) "(")
+                                  prev2 (string=? (car prev2) "K")
+                                  (string=? (pad:hl-nth prev2 3) "define"))))))
+          (loop (cdr xs) t prev
+                (if (and hit (not (member txt acc))) (cons txt acc) acc))))))
+
+(define *ws-pad-prefixes* (list "pad" "pd:" "*"))
+
+(define (pad:ws-pad-name? s)
+  (let loop ((ps *ws-pad-prefixes*))
+    (cond
+      ((null? ps) #f)
+      ((string-prefix? s (car ps)) #t)
+      (#t (loop (cdr ps))))))
+
+(define (pad:ws-guard L)
+  (let* ((toks (pad:hl-tokens (pad:v-src L)))
+         (d (pad:ws-paren-depth toks)))
+    (cond
+      ((not (= d 0)) "open-paren")
+      ((let loop ((ns (pad:ws-soft-defs toks)))
+         (cond ((null? ns) #f)
+               ((pad:ws-pad-name? (car ns)) #t)
+               (#t (loop (cdr ns)))))
+       "pad-name")
+      (#t "ok"))))
+
+(define (pad:ws-say reason)
+  (cond
+    ((string=? reason "open-paren") "close every ( before checking")
+    ((string=? reason "pad-name") "that name belongs to the pad, pick another")
+    ((string=? reason "gap") "aura cannot read pages here yet, keep typing")
+    ((string=? reason "fail") "aura could not read this page, keep typing")
+    ((string=? reason "drift") "aura read the page back differently")
+    (#t "the gate said no")))
+
+;; --- engine findings ---
+(define (pad:ws-engine-born? name)
+  (if (pad:q-gap? "define-lookup")
+      (pair? (pad:q-defines-of name))
+      (pair? (pad:define-lookup name))))
+
+(define (pad:ws-diff xs ys)
+  (let loop ((as xs) (acc (list)))
+    (cond
+      ((null? as) (reverse acc))
+      ((member (car as) ys) (loop (cdr as) acc))
+      (#t (loop (cdr as) (cons (car as) acc))))))
+
+(define (pad:ws-names-str xs)
+  (if (null? xs) "none" (string-join xs ".")))
+
+;; Candidate names = every symbol token on the page; engine names are the
+;; candidates the engine says are born (define-lookup), so engine >= Soft
+;; is a real check, not a copy.
+(define (pad:ws-candidates toks)
+  (let loop ((ts toks) (acc (list)))
+    (if (null? ts)
+        (reverse acc)
+        (let* ((t (car ts)) (k (car t)) (txt (pad:hl-nth t 3)))
+          (if (and (or (string=? k "S") (string=? k "Q") (string=? k "M"))
+                   (not (member txt acc)))
+              (loop (cdr ts) (cons txt acc))
+              (loop (cdr ts) acc))))))
+
+(define (pad:ws-engine-defs toks)
+  (let loop ((cs (pad:ws-candidates toks)) (acc (list)))
+    (cond
+      ((null? cs) (reverse acc))
+      ((pad:ws-engine-born? (car cs)) (loop (cdr cs) (cons (car cs) acc)))
+      (#t (loop (cdr cs) acc)))))
+
+;; Marks: name@row:col for each engine-born name, placed by Soft find-defs
+;; (engine line/col are 0 on tip, aura#4347).
+(define (pad:ws-marks L toks names)
+  (let loop ((ns names) (acc (list)))
+    (if (null? ns)
+        (reverse acc)
+        (let ((ds (pad:find-defs-in toks (car ns))))
+          (if (null? ds)
+              (loop (cdr ns) acc)
+              (let ((lc (pad:v-linecol L (car ds))))
+                (loop (cdr ns)
+                      (cons (string-append (car ns) "@"
+                                           (number->string (car lc)) ":"
+                                           (number->string (cadr lc)))
+                            acc))))))))
+
+;; Plain recursion (no named let): named-let loops here tripped the Soft
+;; runtime in the full pad stack (see docs/m9.md).
+(define (pad:ws-ref-strs ns)
+  (if (null? ns)
+      (list)
+      (cons (string-append (car ns) "=" (number->string (pad:ws-ref-of (car ns))))
+            (pad:ws-ref-strs (cdr ns)))))
+
+(define (pad:ws-ref-of name)
+  (let ((recs (pad:define-lookup name)))
+    (if (pair? recs) (pad:q-ref-counts (car (car recs))) -1)))
+
+(define (pad:ws-ref-str names) (pad:ws-names-str (pad:ws-ref-strs names)))
+
+(define (pad:ws-type-ok? p)
+  (and (pair? p) (string? (car p)) (number? (cdr p))))
+
+(define (pad:ws-type-strs xs)
+  (cond
+    ((null? xs) (list))
+    ((pad:ws-type-ok? (car xs))
+     (cons (string-append (car (car xs)) "=" (number->string (cdr (car xs))))
+           (pad:ws-type-strs (cdr xs))))
+    (#t (pad:ws-type-strs (cdr xs)))))
+
+(define (pad:ws-types-str) (pad:ws-names-str (pad:ws-type-strs (pad:q-node-types))))
+
+;; Check (ctrl-s). Returns
+;;   (reason soft-names engine-names missing extra engine-total marks)
+;; A guard REJECT or a load GAP returns before/without changing the page.
+(define (pad:ws-check! L)
+  (set! *ws-checks* (+ *ws-checks* 1))
+  (let ((g (pad:ws-guard L)))
+    (if (not (string=? g "ok"))
+        (list g (list) (list) (list) (list) 0 (list))
+        (let ((r (pad:ws-load! L)))
+          (if (not (string=? r "ok"))
+              (list r (list) (list) (list) (list) 0 (list))
+              (let* ((rows (pad:ws-project))
+                     (toks (pad:hl-tokens (pad:v-src L)))
+                     (soft (pad:ws-soft-defs toks))
+                     (eng (pad:ws-engine-defs toks))
+                     (ids (pad:q-defines)))
+                (list (if (equal? rows L) "ok" "drift")
+                      soft eng
+                      (pad:ws-diff soft eng)
+                      (pad:ws-diff eng soft)
+                      (length ids)
+                      (pad:ws-marks L toks eng))))))))
+
+(define (pad:ws-check-line! r)
+  (newline)
+  (display "M9CHECK reason=") (display (car r))
+  (display " soft=") (display (pad:ws-names-str (pad:hl-nth r 1)))
+  (display " engine=") (display (pad:ws-names-str (pad:hl-nth r 2)))
+  (display " missing=") (display (pad:ws-names-str (pad:hl-nth r 3)))
+  (display " extra=") (display (pad:ws-names-str (pad:hl-nth r 4)))
+  (display " engine_total=") (display (number->string (pad:hl-nth r 5)))
+  (newline)
+  (display "M9MARKS ") (display (pad:ws-names-str (pad:hl-nth r 6)))
+  (newline)
+  r)
+
+(define (pad:ws-gaps-line!)
+  (display "GAPS ")
+  (display (pad:ws-names-str *ws-gaps*))
+  (newline)
+  0)
+
+(define (pad:ws-stats-str)
+  (string-append "set_code=" (number->string *ws-set-code-n*)
+                 " eval=" (number->string *ws-eval-n*)
+                 " loads=" (number->string *ws-loads*)
+                 " checks=" (number->string *ws-checks*)
+                 " heals=" (number->string *ws-heals*)))
+
+;; --- notebook keys: ctrl-s checks, every other line is the M7 play path ---
+(define *nb-say* "")
+
+(define (pad:nb-check!)
+  (let* ((L (pad:es-L *pl-st*))
+         (r (pad:ws-check! L)))
+    (set! *nb-say*
+          (if (string=? (car r) "ok")
+              (string-append "aura knows " (number->string (length (pad:hl-nth r 2)))
+                             " names on this page")
+              (pad:ws-say (car r))))
+    (set! *pl-say* *nb-say*)
+    r))
+
+(define (pad:nb-line! line)
+  (if (or (string=? line "IN 19") (string=? line "KEY check"))
+      (car (pad:nb-check!))
+      (pad:play-line! line)))
