@@ -24,7 +24,10 @@
 ;; A child's rebind changes the shared top-level bindings, and after a
 ;; child eval-current root's own eval-current does not put root's back
 ;; (aura#4368). So after every idea: workspace :switch 0, then
-;; ast:restore of the root snapshot + one eval-current.
+;; ast:restore of the root snapshot + one eval-current. Children are not
+;; removed: workspace:discard only resets a child to root's state (its
+;; documented meaning), and workspace:delete can leave root holding a
+;; binding into the freed child (aura#4369: SIGSEGV / hang).
 ;; Goal: ((label thunk want) ...); a check passes when (thunk) is equal?
 ;; to want; a thunk that raises fails. Workspace ids start at 0 and 0 is
 ;; false in Soft, so ids are tested with number?.
