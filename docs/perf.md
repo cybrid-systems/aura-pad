@@ -12,7 +12,34 @@ bash scripts/smoke_perf.sh    # pad/perf.aura → PAD_PERF_OK + PAD_M7_PERF_OK,
 bash scripts/smoke_m7.sh      # tests + DIRTY audit + perf → PAD_M7_OK
 ```
 
-## Now: end-to-end pty latency (gap round, see [`perf-emacs.md`](perf-emacs.md))
+## Now: gap2 + Aura-native round (see [`perf-aura.md`](perf-aura.md))
+
+Same pty harness, two runs, ms per key (`out/bench/editors_aura.txt`).
+"first" is the first byte, "done" the last byte before 60 ms of quiet.
+
+| key | pad gap round | pad now | pad `PAD_DEFER=1` first / done | vim | emacs -nw |
+|-----|---------------|---------|--------------------------------|-----|-----------|
+| insert | 4.6 / 4.5 | **4.0 / 4.1** | 3.9 / 4.0 | 0.39 / 0.35 | 0.69 / 0.71 |
+| cursor | 1.8 / 1.9 | **1.75 / 1.83** | 1.81 / 1.78 | 0.31 / 0.23 | 0.67 / 0.66 |
+| string open | 7.2 / 7.3 | **5.5 / 5.5** | **3.8 / 3.5**, done 5.7 / 5.5 | 0.33 / 0.45 | 1.06 / 0.89 |
+| string close | 6.6 / 6.4 | **5.8 / 5.4** | **4.0 / 4.1**, done 6.1 / 5.9 | 0.33 / 0.32 | 0.62 / 0.50 |
+
+- gap2 added two things:
+  - a row splice inline in `play-step!`, so a key makes two Soft calls;
+  - an O(1) tail memo for string open/close.
+- `PAD_DEFER=1` writes an early frame for string open/close: row l is
+  exact, and the rows below are as cached. The exact frame follows in
+  the same step and is byte for byte the plain stream
+  (`PAD_AURA_PERF_OK`). It is jit-lock-defer, not an Aura-only trick.
+- Measured negatives:
+  - `mutate:rebind` costs 12–18 ms per swap;
+  - workspace code runs at file-code speed;
+  - CLI fibers are threads that race `read-line` (aura#4356).
+
+  So rebind/relower and fibers give no per-key gain on this tip.
+- vim and Emacs are still 3–17× faster.
+
+## Before: end-to-end pty latency (gap round, see [`perf-emacs.md`](perf-emacs.md))
 
 `scripts/bench_editors.sh` covers keystroke → terminal output through a
 pty, with the same file and keys for each editor, two runs each, in ms
@@ -234,3 +261,10 @@ Soft 后（见 perf-emacs.md），12 行页面插入 **~33 → ~3.6 ms**，光�
 单元格（IL/DL），插入 **~8 → ~4.5 ms**，光标 **~7 → ~1.9 ms**，每键写到终端
 的字节从整屏重画 ~600–1200 B 降到 ~81 B。vim 0.3 ms、Emacs 0.7 ms，仍快
 3–21×。进程、管道、docker 和 C 只占 ~0.45 ms，其余是 Soft 调用开销（#4350）。
+
+Aura 原生一轮（perf-aura.md）：gap2 把字符串打开从 ~7.2 降到 ~5.5 ms，插入
+~4.5 → ~4.0 ms。`PAD_DEFER=1` 先发一帧（当前行准确、下面的行沿用缓存），同一步
+里再发准确帧，字符串打开的首字节 ~5.5 → ~3.5–3.8 ms，准确帧与不延迟时逐字节
+相同。实测的负面结论：`mutate:rebind` 每次 12–18 ms，workspace 代码与文件代码
+同速，CLI 的 fiber 是线程且与 `read-line` 竞争（aura#4356），所以对按键没有加速。
+vim/Emacs 仍快 3–17×。
