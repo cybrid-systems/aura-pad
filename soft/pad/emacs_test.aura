@@ -1,0 +1,216 @@
+;; Emacs-port tests (docs/perf-emacs.md). Every fast path must equal its
+;; reference, then the per-key latency must fit one 60 fps frame.
+;;   1. pad:play-cmd! (command_loop_1-style direct commands) == the
+;;      reference dispatch pad:play-cmd-ref! on seeded random streams:
+;;      same reason, state, keys, rejects and say after every step
+;;   2. pad:lc-scan on a whole page == pad:hl-tokens / pad:hl-color, and
+;;      per-line scans chained by the syntax-ppss start state (a line
+;;      starts inside a string) color exactly like the whole page
+;;   3. seeded random typing (quotes, comments, enter, backspace, moves):
+;;      every lc frame == the M6 whole-page oracle pad:snap-text
+;;   3b. closing a just-opened string reuses the pre-open rows (*lc-altv*)
+;;   4. PERF_EMACS: us/key on the twelve-row page; gate < 16000 us
+;; Ends PAD_PERF_EMACS_OK. No HTTP. Soft reserved: never bind quote.
+(load "/workspace/aura-pad/soft/pad/buffer.aura")
+(load "/workspace/aura-pad/soft/pad/lines.aura")
+(load "/workspace/aura-pad/soft/pad/edit.aura")
+(load "/workspace/aura-pad/soft/pad/hl.aura")
+(load "/workspace/aura-pad/soft/pad/jump.aura")
+(load "/workspace/aura-pad/soft/pad/view.aura")
+(load "/workspace/aura-pad/soft/pad/lc.aura")
+(load "/workspace/aura-pad/soft/pad/keys.aura")
+
+(define *et-fail* 0)
+(define *et-checks* 0)
+(define (et:check tag ok)
+  (set! *et-checks* (+ *et-checks* 1))
+  (if ok
+      ok
+      (begin
+        (set! *et-fail* (+ *et-fail* 1))
+        (display "ET_FAIL ") (display tag) (newline)
+        ok)))
+
+;; --- 1. direct commands == reference dispatch ---
+(define *et-cmds*
+  (list 97 98 122 32 40 41 34 59 49 200 9
+        "left" "right" "home" "end" "next-line" "prev-line" "back" "back"
+        "left" "right" "enter" "open-line" "kill-line" "yank" "undo"
+        "set-mark" "copy-region" "kill-region" "indent" "dedent" "bob" "eob"))
+(define *et-ncmds* (length *et-cmds*))
+
+(define *et-wide*
+  (string-append "(define (hello x) (+ x 1)) ; full row!!\n"
+                 "\n"
+                 "x"))
+
+(define (et:cmd-run! tag page steps seed)
+  (pad:play-reset! page)
+  (let loop ((i 0) (r seed) (bad 0))
+    (if (>= i steps)
+        (et:check (string-append "CMD_" tag) (= bad 0))
+        (let* ((c (list-ref *et-cmds* (modulo r *et-ncmds*)))
+               (st *pl-st*) (k *pl-keys*) (j *pl-rej*) (y *pl-say*)
+               (r1 (pad:play-cmd! c))
+               (s1 *pl-st*) (k1 *pl-keys*) (j1 *pl-rej*) (y1 *pl-say*))
+          (set! *pl-st* st) (set! *pl-keys* k) (set! *pl-rej* j) (set! *pl-say* y)
+          (let* ((r2 (pad:play-cmd-ref! c))
+                 (same (and (equal? r1 r2) (equal? s1 *pl-st*) (= k1 *pl-keys*)
+                            (= j1 *pl-rej*) (string=? y1 *pl-say*))))
+            (if (not same)
+                (begin (display "ET_CMD_DIFF ") (display tag) (display " step=")
+                       (display i) (display " cmd=") (display (pad:cmd-str c))
+                       (display " fast=") (display r1) (display " ref=") (display r2)
+                       (newline)))
+            (loop (+ i 1) (pad:seed-step r) (if same bad (+ bad 1))))))))
+
+(et:cmd-run! "START" *play-start* 160 11)
+(et:cmd-run! "BIG" *lc-big-page* 160 23)
+(et:cmd-run! "WIDE" *et-wide* 160 37)
+(et:cmd-run! "EMPTY" "" 80 41)
+
+;; --- 2. whole-page scan and chained line scans == M5 tokenizer ---
+(define *et-pages*
+  (list *lc-big-page*
+        "(display \"a\nb\") ; c\n\"x\\\ny\" 12\n(f \"open"
+        "\"one\n\ntwo\" (g 3) \"\n; not a comment\" ;real\n7 x\"y\"z"
+        "(query:find a) (mutate:rebind f g)\n\"\\\"q\\\"\"\n(display \"λ\") ; é"
+        ""
+        "\"\n\n\n"))
+
+(define (et:chain-tape src)
+  ;; per-line entries, each started in the state the previous one ended;
+  ;; the newline between two lines is T inside a string, else "."
+  (let loop ((xs (pad:v-split src)) (ins #f) (acc (list)))
+    (if (null? xs)
+        (apply string-append (reverse (cdr acc)))
+        (let ((e (pad:lc-scan (car xs) #f 0 (list) (list) (list) ins)))
+          (loop (cdr xs) (list-ref e 4)
+                (cons (if (list-ref e 4) "T" ".") (cons (list-ref e 3) acc)))))))
+
+(define (et:scan-tests!)
+  (let loop ((ps *et-pages*) (i 0))
+    (if (null? ps)
+        0
+        (let* ((src (car ps))
+               (e (pad:lc-scan src #f 0 (list) (list) (list) #f))
+               (n (number->string i)))
+          (et:check (string-append "PAGE_TOKS_" n) (equal? (list-ref e 2) (pad:hl-tokens src)))
+          (et:check (string-append "PAGE_TAPE_" n) (string=? (list-ref e 3) (pad:hl-color src)))
+          (et:check (string-append "CHAIN_TAPE_" n) (string=? (et:chain-tape src) (pad:hl-color src)))
+          (loop (cdr ps) (+ i 1)))))
+  ;; past *lc-run-max* (512): the per-char fallbacks
+  (let* ((long (string-append "(define (x) \"" (pad:lc-dbl "ab cd " 7) "\") ; z"))
+         (e (pad:lc-scan long #f 0 (list) (list) (list) #f)))
+    (et:check "LONG_TOKS" (equal? (list-ref e 2) (pad:hl-tokens long)))
+    (et:check "LONG_TAPE" (string=? (list-ref e 3) (pad:hl-color long)))
+    (et:check "LONG_LINE_TAPE" (string=? (pad:lc-tape long (list-ref e 2)) (pad:hl-color long))))
+  0)
+(et:scan-tests!)
+
+;; --- 3. random typing: every frame == whole-page oracle ---
+(define *et-type-keys*
+  (list 97 107 32 34 34 59 40 41 49 "back" "back" "enter" "left" "right"
+        "left" "end" "home" "next-line" "prev-line" "undo" 120 104))
+(define *et-nkeys* (length *et-type-keys*))
+
+(define (et:strip-dirty s)
+  (string-join
+    (let loop ((xs (pad:v-split s)) (acc (list)))
+      (cond
+        ((null? xs) (reverse acc))
+        ((string-prefix? (car xs) "DIRTY ") (loop (cdr xs) acc))
+        (#t (loop (cdr xs) (cons (car xs) acc)))))
+    "\n"))
+
+(define (et:oracle)
+  (pad:snap-text (pad:play-title) (pad:es-L *pl-st*) (pad:es-l *pl-st*)
+                 (pad:es-col *pl-st*) *pl-say*))
+
+(define (et:type-run! tag page steps seed)
+  (pad:play-reset! page)
+  (pad:play-snap)
+  (let loop ((i 0) (r seed) (bad 0))
+    (if (>= i steps)
+        (et:check (string-append "FRAMES_" tag) (= bad 0))
+        (let ((c (list-ref *et-type-keys* (modulo r *et-nkeys*))))
+          (pad:play-cmd! c)
+          (let ((same (string=? (et:strip-dirty (pad:play-snap)) (et:oracle))))
+            (if (not same)
+                (begin (display "ET_FRAME_DIFF ") (display tag) (display " step=")
+                       (display i) (display " cmd=") (display (pad:cmd-str c)) (newline)))
+            (loop (+ i 1) (pad:seed-step r) (if same bad (+ bad 1))))))))
+
+(define *et-nine*
+  (string-append "(define (hello x) (+ x 1))\n(define (bye y) (hello y))\n"
+                 "; kids write stories here\n(define pet \"cat\")\n(hello 3)\n"
+                 "(bye 4)\n(display pet)\n(query:find hello)\n(hello (bye 5))"))
+(et:type-run! "NINE" *et-nine* 70 5)
+(et:type-run! "START" *play-start* 50 17)
+
+;; --- 3b. closing a just-opened string reuses the pre-open rows ---
+(pad:play-reset! *lc-big-page*)
+(pad:play-snap)
+(let loop ((i 0)) (if (< i 4) (begin (pad:play-cmd! "next-line") (loop (+ i 1)))))
+(pad:play-cmd! "end")
+(pad:play-snap)
+(pad:play-cmd! 34)
+(et:check "ALT_OPEN" (string=? (et:strip-dirty (pad:play-snap)) (et:oracle)))
+(define et-r0 *lc-retok*)
+(pad:play-cmd! "back")
+(et:check "ALT_CLOSE" (string=? (et:strip-dirty (pad:play-snap)) (et:oracle)))
+(et:check "ALT_CLOSE_RETOK" (<= (- *lc-retok* et-r0) 1))
+
+;; --- 4. PERF_EMACS: us per key, twelve-row page (harness subtracted) ---
+(define (et:now) (current-time-ms))
+(define (et:rep n th) (if (> n 0) (begin (th) (et:rep (- n 1) th)) 0))
+(define (et:us n th) (let ((t0 (et:now))) (et:rep n th) (quotient (* 1000 (- (et:now) t0)) n)))
+(define et-base (et:us 200 (lambda () 0)))
+(define (et:net n th) (- (et:us n th) et-base))
+(define (et:goto! row col)
+  (pad:play-reset! *lc-big-page*)
+  (et:rep row (lambda () (pad:play-cmd! "next-line")))
+  (pad:play-cmd! "home")
+  (et:rep col (lambda () (pad:play-cmd! "right")))
+  (pad:play-snap))
+(define (et:key c) (pad:play-cmd! c) (pad:play-snap))
+(et:goto! 6 9)
+(define et-cmd (quotient (et:net 20 (lambda () (pad:play-cmd! 97) (pad:play-cmd! "back"))) 2))
+(et:goto! 6 9)
+(define et-ins (quotient (et:net 20 (lambda () (et:key 97) (et:key "back"))) 2))
+(et:goto! 6 9)
+(define et-cur (quotient (et:net 20 (lambda () (et:key "left") (et:key "right"))) 2))
+(et:goto! 11 0)
+(define et-marks (quotient (et:net 10 (lambda () (et:key "right") (et:key "left"))) 2))
+(et:goto! 4 18)
+(define et-str (quotient (et:net 4 (lambda () (et:key 34) (et:key "back"))) 2))
+(et:goto! 4 18)
+(et:key 34)
+(define et-in-str (quotient (et:net 10 (lambda () (et:key 97) (et:key "back"))) 2))
+(define (et:cold n acc-o acc-c)
+  (if (= n 0)
+      (list acc-o acc-c)
+      (begin
+        (et:goto! 4 18)
+        (let* ((t0 (et:now)) (a (et:key 34)) (t1 (et:now)) (b (et:key "back")) (t2 (et:now)))
+          (et:cold (- n 1) (+ acc-o (- t1 t0)) (+ acc-c (- t2 t1)))))))
+(define et-oc (et:cold 3 0 0))
+(define et-open1 (quotient (* 1000 (car et-oc)) 3))
+(define et-close1 (quotient (* 1000 (cadr et-oc)) 3))
+(define *et-frame-us* 16000)
+
+(display "PERF_EMACS rows=12 insert_us_key=") (display et-ins)
+(display " cursor_us_key=") (display et-cur)
+(display " cursor_marks_us_key=") (display et-marks)
+(display " cmd_only_us_key=") (display et-cmd)
+(display " open_string_us_key=") (display et-str)
+(display " open_first_us=") (display et-open1)
+(display " close_after_open_us=") (display et-close1)
+(display " type_in_open_string_us_key=") (display et-in-str)
+(display " frame_us=") (display *et-frame-us*)
+(newline)
+(display "EMACS_TEST checks=") (display *et-checks*)
+(display " fail=") (display *et-fail*) (newline)
+(if (and (= *et-fail* 0) (< et-ins *et-frame-us*) (< et-cur *et-frame-us*))
+    (begin (display "PAD_PERF_EMACS_OK") (newline))
+    (begin (display "PAD_PERF_EMACS_FAIL") (newline)))

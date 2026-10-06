@@ -65,6 +65,7 @@
     (- (now) t0)))
 
 (define (per ms n) (quotient ms n))
+(define (per-us ms n) (quotient (* 1000 ms) n))
 
 ;; --- small M6 start page (two rows), M7 path ---
 (setup! *play-start* 1 1)
@@ -83,11 +84,14 @@
 ;; --- twelve-line page, M7 line cache (after) ---
 (setup! *lc-big-page* 6 1)
 (define r0 *lc-retok*)
-(define big-ins (per (run-insert *n* 1) *n*))
+(define big-ins-ms (run-insert *n* 1))
+(define big-ins (per big-ins-ms *n*))
 (define big-retok (- *lc-retok* r0))
-(define big-cur (per (run-cursor *n* 1) *n*))
+(define big-cur-ms (run-cursor *n* 1))
+(define big-cur (per big-cur-ms *n*))
 (setup! *lc-big-page* 6 1)
-(define big-cmd (per (run-cmd *n*) *n*))
+(define big-cmd-ms (run-cmd *n*))
+(define big-cmd (per big-cmd-ms *n*))
 
 ;; --- Soft floor: one tiny pad call with the pad loaded (#4343) ---
 (define floor-n 2000)
@@ -102,6 +106,8 @@
 (display " insert_ms_key=") (display (number->string per-ins))
 (display " cursor_ms_key=") (display (number->string per-cur))
 (display " threshold_ms=") (display (number->string *pad-perf-ok-ms*))
+(display " insert_us_key=") (display (number->string (per-us ms-ins *n*)))
+(display " cursor_us_key=") (display (number->string (per-us ms-cur *n*)))
 (newline)
 (display "PERF_BIG rows=12 src_len=") (display (number->string big-len))
 (display " m6_insert_ms_key=") (display (number->string big-m6-ins))
@@ -110,6 +116,9 @@
 (display " m7_cursor_ms_key=") (display (number->string big-cur))
 (display " m7_cmd_only_ms_key=") (display (number->string big-cmd))
 (display " retok_lines_per_key=") (display (number->string (quotient big-retok *n*)))
+(display " m7_insert_us_key=") (display (number->string (per-us big-ins-ms *n*)))
+(display " m7_cursor_us_key=") (display (number->string (per-us big-cur-ms *n*)))
+(display " m7_cmd_only_us_key=") (display (number->string (per-us big-cmd-ms *n*)))
 (newline)
 (display "PERF_FLOOR soft_call_us=")
 (display (number->string (quotient (* floor-ms 1000) floor-n)))
