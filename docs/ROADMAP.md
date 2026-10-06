@@ -8,7 +8,7 @@ earlier M7–M12 sketch in [`NEXT.md`](NEXT.md) (kept for its detail) is
 renumbered here; where they disagree, this file wins:
 NEXT's "M7 workspace" is now **M9**, "M8 intent worldline" stays **M8**,
 "M9 dirty SNAP" + "M10 who" merge into **M10** (Soft DIRTY already landed
-in M7), M11/M12 unchanged.
+in M7). M11 and M12 are done (`m11.md`, `m12.md`).
 
 Why this order: the M6 key path was right at its 50 ms gate (49–54 ms on
 a two-row page) and O(page): a twelve-row kid page cost ~230 ms per
@@ -136,7 +136,27 @@ as `GAPS query:node-row unmapped=N`, never guessed). Stamps are
 row-level; `gen` is read from the engine metrics face (`pad:pen-gen`),
 not `mutate:summary`. Filed while building it: #4353.
 
-## Latency track (runs alongside M8–M10)
+
+## M11 — Aura-unique features (done)
+
+Shipped ([`m11.md`](m11.md)): robot undo, engine who, kid why, blast card,
+time machine + open-is-restore, sandbox worlds, kid live rules, intend
+self-repair. Markers `PAD_M11_UNDO_OK` … `PAD_M11_FIX_OK` live on tip.
+Soft tip `c69e644`. Issues filed while building: #4362–#4370.
+
+## M12 — the book closes (done)
+
+Shipped ([`m12.md`](m12.md)). Soft owns persist:
+
+- M12.1 `std/persist` unbound on tip → `GAPS persist`. Soft uses
+  `serialize-workspace` / `deserialize-workspace` + `.pad` sidecar
+  (`book.aura`). No invented Soft API.
+- M12.2 Close / open is restore (no `set-code` guess). Same code/page;
+  `who` still answers after open (#4365/#4367 workarounds).
+  → `PAD_M12_OK`. Play loop does not load `book.aura` (key latency
+  unchanged).
+
+## Latency track (runs alongside M8–M12)
 
 Goal: insert < 16 ms on kid pages (one 60 fps frame). **Met** with the
 Emacs ports: insert ~3.6 ms and cursor ~1.3 ms on the twelve-row page on
