@@ -2,7 +2,7 @@
 ;; Every section is a function; the entry file runs ONE top-level call
 ;; (forms after a set-code + eval-current are read back wrong, docs/m9.md).
 ;; Test globals carry an m11 prefix only (aura#4353). Prints T lines,
-;; M11A_ACC / M11B_ACC / M11C_ACC n OK per acceptance item, M11STATS, then PAD_M11_TEST_OK.
+;; M11A_ACC .. M11D_ACC n OK per acceptance item, M11STATS, then PAD_M11_TEST_OK.
 ;; Soft reserved: never bind quote.
 
 (define *m11-fail* 0)
@@ -442,6 +442,91 @@
   (m11:acc-end! "M11C" 3)
   #t)
 
+;; M11d: blast radius card before KEEP (blast.aura).
+(define (m11:card-out! r)
+  (pad:robot-line-out! r "helper")
+  (if (string=? (car r) "CARD")
+      (begin (newline) (display (pad:blast-line *blast-last*)) (newline))
+      #f)
+  r)
+
+(define (m11:sec-d1)
+  ;; 1. The card lists what the change would move, before anything is
+  ;;    kept: the page does not change, the engine has the change inside
+  ;;    a snapshot, and Soft's call-site count equals query:calls.
+  ;;    Enter keeps it like a robot KEEP; ctrl-z then undoes it.
+  (m11:acc-begin!)
+  (m11:fresh!)
+  (let* ((code0 (pad:q-code))
+         (L0 (pad:es-L *pl-st*))
+         (r (m11:card-out! (pad:robot-card! "helper" *m11-ops-good* "closer"))))
+    (m11:expect-str "D1_CARD" (car r) "CARD")
+    (m11:expect-str "D1_SAY" *pl-say* "changing hello and bye moves 3 places: (hello 3), (bye 4), (hello (bye 5)). enter keeps, ctrl-z says no")
+    (m11:expect-str "D1_USES" (pad:who-nums-str (cadr *blast-last*)) "6.7.11")
+    (m11:expect-str "D1_SITES" (pad:blast-counts-str (pad:nth *blast-last* 3)) "hello:3/4:+1.bye:2/2:+0")
+    (m11:expect-str "D1_GROWN" (pad:ws-names-str (pad:nth *blast-last* 4)) "hello.bye")
+    (m11:expect-str "D1_VERDICT" (pad:nth *blast-last* 6) "agree")
+    (m11:expect-true "D1_PAGE_WAITS" (eq? (pad:es-L *pl-st*) L0))
+    (m11:expect-true "D1_ENGINE_HAS_IT" (string-contains? (pad:q-code) "(* x 2)"))
+    (m11:expect "D1_NO_UNDO_YET" (length *robot-undo*) 0)
+    (m11:keys! (list "IN 13"))
+    (m11:expect-str "D1_KEEP_SAY" *pl-say* "the helper changed hello and bye, ctrl-z takes it all back")
+    (m11:expect-str "D1_ROW0" (m11:row-src 0) "(define hello (lambda (x) (* x 2)))")
+    (m11:expect "D1_UNDO_DEPTH" (length *robot-undo*) 1)
+    (m11:expect-true "D1_NOT_PENDING" (not *robot-pending*))
+    (m11:keys! (list "IN 26"))
+    (m11:expect-true "D1_UNDO_CODE" (string=? (pad:q-code) code0))
+    (m11:expect-true "D1_UNDO_PAGE" (eq? (pad:es-L *pl-st*) L0)))
+  (m11:acc-end! "M11D" 1)
+  #t)
+
+(define (m11:sec-d2)
+  ;; 2. ctrl-z on a waiting card says no: the snapshot is restored,
+  ;;    nothing moved, nothing to undo afterwards. Row names on the card:
+  ;;    a define row by its name, a short row by its text.
+  (m11:acc-begin!)
+  (m11:fresh!)
+  (let* ((code0 (pad:q-code))
+         (L0 (pad:es-L *pl-st*))
+         (h0 *ws-heals*)
+         (r (m11:card-out! (pad:robot-card! "helper" (list (list "add" "(lambda (a b) (- a b))")) "swap"))))
+    (m11:expect-str "D2_SAY" *pl-say* "changing add moves 3 places: greet, (greet (add 1 2)), (add 2 3). enter keeps, ctrl-z says no")
+    (m11:expect-str "D2_SITES" (pad:blast-counts-str (pad:nth *blast-last* 3)) "add:3/3:+0")
+    (m11:expect-str "D2_VERDICT" (pad:nth *blast-last* 6) "agree")
+    (m11:keys! (list "IN 26"))
+    (m11:expect-str "D2_NO_SAY" *pl-say* "ok, the helper's idea is gone, nothing changed")
+    (m11:expect-true "D2_CODE_BACK" (string=? (pad:q-code) code0))
+    (m11:expect-true "D2_PAGE_SAME" (eq? (pad:es-L *pl-st*) L0))
+    (m11:expect "D2_ONE_HEAL" (- *ws-heals* h0) 1)
+    (m11:expect "D2_NO_UNDO" (length *robot-undo*) 0)
+    (m11:expect-str "D2_WHO0" (car (pad:who-ask!)) "no-who")
+    (m11:keys! (list "IN 26"))
+    (m11:expect-str "D2_THEN_UNDO_SAY" *pl-say* "the helper has not changed anything to undo"))
+  (m11:acc-end! "M11D" 2)
+  #t)
+
+(define (m11:sec-d3)
+  ;; 3. A card the engine refuses never waits: DROP with the kid reason
+  ;;    (M11c). A card with more places than fit says "and N more"; one
+  ;;    with none says "moves nothing else". The checker flags a count
+  ;;    that disagrees with the engine.
+  (m11:acc-begin!)
+  (m11:fresh!)
+  (let ((r (m11:card-out! (pad:robot-card! "helper" *m11-ops-arity* "faster"))))
+    (m11:expect-str "D3_REFUSED" (car r) "DROP")
+    (m11:expect-str "D3_REFUSED_SAY" *pl-say* "the helper's bye gives hello 2 things, it wants 1")
+    (m11:expect-true "D3_NOT_PENDING" (not *robot-pending*)))
+  (m11:expect-str "D3_SAY_NONE" (pad:blast-say (list (list "pet") (list) (list) (list) (list) (list) "agree"))
+                  "changing pet moves nothing else. enter keeps, ctrl-z says no")
+  (m11:expect-str "D3_SAY_MORE" (pad:blast-say (list (list "f") (list 1 2 3 4 5) (list "a" "b" "c" "d" "e") (list) (list) (list) "agree"))
+                  "changing f moves 5 places: a, b, c and 2 more. enter keeps, ctrl-z says no")
+  (m11:expect-true "D3_COUNTS_BAD" (not (pad:blast-counts-ok? (list (list "hello" 3 2 2 1)))))
+  (m11:expect-true "D3_COUNTS_STALE_OK" (pad:blast-counts-ok? (list (list "hello" 3 4 3 1))))
+  (m11:expect-true "D3_COUNTS_NO_ENGINE" (not (pad:blast-counts-ok? (list (list "hello" 0 -1 -1 0)))))
+  (m11:expect "D3_NO_DISAGREE" *blast-disagree* 0)
+  (m11:acc-end! "M11D" 3)
+  #t)
+
 (define (m11:outro)
   (newline)
   (display "M11STATS ") (display (pad:robot-stats-str))
@@ -463,4 +548,7 @@
   (m11:sec-c1)
   (m11:sec-c2)
   (m11:sec-c3)
+  (m11:sec-d1)
+  (m11:sec-d2)
+  (m11:sec-d3)
   (m11:outro))
