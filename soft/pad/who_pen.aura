@@ -1,0 +1,240 @@
+;; aura-pad M10 -- pen stamps + engine dirty cross-check.
+;; Needs who.aura, ws.aura, pen.aura (and what they load).
+;;
+;; - pad:who-pen-step! = pad:pen-step! between two sync points: rows the
+;;   kid wrote before the step are the kid's; rows the KEEP projected are
+;;   (who why gen) with gen read after the KEEP.
+;; - pad:who-pen-undo! = pad:pen-undo! (ast:restore of the snapshot taken
+;;   before the KEEP + heal) then a re-project; Soft undo stack and the
+;;   restored engine must agree on page, code, generation and projection,
+;;   else "disagree" and an M10_UNDO_DISAGREE line (fails loud).
+;; - pad:who-xdirty: engine dirty nodes (query:dirty-nodes, every reason)
+;;   placed on page rows through the page's own defines (query:defines
+;;   name + query:dirty-subtree, both bound on c69e644), compared with the
+;;   Soft DIRTY line of the frame. c69e644 has no node -> row query, so a
+;;   dirty node outside every page define is counted as unmapped, never
+;;   guessed onto a row. Unbound query:dirty-nodes -> verdict "gap".
+;; Soft reserved: never bind quote.
+
+(define *who-keep-codes* (list))   ; query:code before each KEEP, newest first
+(define *who-xchecks* 0)
+(define *who-dirty-reasons*
+  (list "general" "constraint" "occurrence" "ownership" "coercion" "struct"
+        "defuse" "ppa-hint"))
+
+(define (pad:who-dirty-probe)
+  (try
+    (begin (query:dirty-nodes "general") #t)
+    (catch (e) (not (pad:unbound-msg? e)))))
+(define *who-dirty-bound* (pad:who-dirty-probe))
+
+(define (pad:who-pen-step! who name lam why)
+  (pad:who-sync! "kid" "typed" *who-gen*)
+  (let* ((code0 (pad:q-code))
+         (r (pad:pen-step! who name lam why)))
+    (if (string=? (car r) "KEEP")
+        (begin
+          (set! *who-keep-codes* (cons code0 *who-keep-codes*))
+          (set! *who-gen* (pad:pen-gen))
+          (list r (pad:who-sync! who why *who-gen*)))
+        (list r 0))))
+
+(define (pad:who-bool b) (if b "yes" "no"))
+
+(define (pad:who-pen-undo!)
+  (if (null? *pen-undo*)
+      "nothing-to-undo"
+      (let* ((u (car *pen-undo*))
+             (L0 (pad:nth u 1))
+             (g0 (pad:nth u 5))
+             (code0 (if (null? *who-keep-codes*) "" (car *who-keep-codes*)))
+             (r (pad:pen-undo!)))
+        (if (not (null? *who-keep-codes*))
+            (set! *who-keep-codes* (cdr *who-keep-codes*))
+            #f)
+        (set! *who-gen* (pad:pen-gen))
+        (pad:who-sync! "kid" "typed" *who-gen*)
+        (let* ((proj (pad:ws-project))
+               (page-ok (eq? (pad:es-L *pl-st*) L0))
+               (code-ok (string=? (pad:q-code) code0))
+               (gen-ok (= (pad:pen-gen) g0))
+               (proj-ok (equal? proj *ws-L*)))
+          (if (and (string=? r "ok") page-ok code-ok gen-ok proj-ok)
+              "agree"
+              (begin
+                (newline)
+                (display "M10_UNDO_DISAGREE page=") (display (pad:who-bool page-ok))
+                (display " code=") (display (pad:who-bool code-ok))
+                (display " gen=") (display (pad:who-bool gen-ok))
+                (display " proj=") (display (pad:who-bool proj-ok))
+                (newline)
+                "disagree"))))))
+
+;; --- engine dirty ---
+(define (pad:who-strs-union xs acc)
+  (cond
+    ((null? xs) acc)
+    ((member (car xs) acc) (pad:who-strs-union (cdr xs) acc))
+    (#t (pad:who-strs-union (cdr xs) (cons (car xs) acc)))))
+
+(define (pad:who-dirty-of reason)
+  (try
+    (let ((r (query:dirty-nodes reason)))
+      (if (and (pair? r) (not (pad:eng-err? r))) r (list)))
+    (catch (e) (list))))
+
+(define (pad:who-dirty-all rs acc)
+  (if (null? rs)
+      acc
+      (pad:who-dirty-all (cdr rs) (pad:who-strs-union (pad:who-dirty-of (car rs)) acc))))
+
+(define (pad:who-sub-count id)
+  (try
+    (let ((c (query:dirty-subtree id)))
+      (if (number? c) c 0))
+    (catch (e) 0)))
+
+(define (pad:who-sum-subs ids)
+  (if (null? ids) 0 (+ (pad:who-sub-count (car ids)) (pad:who-sum-subs (cdr ids)))))
+
+;; ((name row count) ...) for page defines whose engine subtree has
+;; dirty nodes.
+(define (pad:who-eng-rows wl toks names)
+  (if (null? names)
+      (list)
+      (let* ((ds (pad:find-defs-in toks (car names)))
+             (c (pad:who-sum-subs (pad:q-defines-of (car names))))
+             (rest (pad:who-eng-rows wl toks (cdr names))))
+        (if (or (null? ds) (<= c 0))
+            rest
+            (cons (list (car names) (car (pad:v-linecol wl (car ds))) c) rest)))))
+
+;; Engine dirty bits stay set until the next check reloads the workspace,
+;; while a Soft DIRTY line covers one frame. So each cross-check compares
+;; only what became dirty since the previous cross-check point (a check
+;; or the last xdirty): defines whose dirty count grew, node ids not seen.
+(define *who-x-ids* (list))
+(define *who-x-rows* (list))
+
+(define (pad:who-prev-count name xs)
+  (cond
+    ((null? xs) 0)
+    ((string=? (car (car xs)) name) (caddr (car xs)))
+    (#t (pad:who-prev-count name (cdr xs)))))
+
+;; ((row . growth) ...) for defines whose dirty count grew.
+(define (pad:who-grown rows prev)
+  (if (null? rows)
+      (list)
+      (let ((d (- (caddr (car rows)) (pad:who-prev-count (car (car rows)) prev)))
+            (rest (pad:who-grown (cdr rows) prev)))
+        (if (> d 0) (cons (cons (cadr (car rows)) d) rest) rest))))
+
+(define (pad:who-new-ids ids seen)
+  (cond
+    ((null? ids) 0)
+    ((member (car ids) seen) (pad:who-new-ids (cdr ids) seen))
+    (#t (+ 1 (pad:who-new-ids (cdr ids) seen)))))
+
+(define (pad:who-engine-now)
+  (if (not *who-dirty-bound*)
+      (list (list) (list))
+      (let* ((wl (pad:es-L *pl-st*))
+             (toks (pad:hl-tokens (pad:v-src wl))))
+        (list (pad:who-dirty-all *who-dirty-reasons* (list))
+              (pad:who-eng-rows wl toks (pad:ws-soft-defs toks))))))
+
+;; Baseline = engine dirty state now (call after a check).
+(define (pad:who-xbase!)
+  (let ((now (pad:who-engine-now)))
+    (set! *who-x-ids* (car now))
+    (set! *who-x-rows* (cadr now))
+    (length (car now))))
+
+;; Check + baseline: the check reloads the workspace (dirty bits clear).
+(define (pad:who-check!)
+  (let ((r (pad:nb-check!)))
+    (set! *who-gen* (pad:pen-gen))
+    (pad:who-xbase!)
+    r))
+
+;; DIRTY rows of a SNAP block; no DIRTY line = full blit = every row.
+(define (pad:who-iota i n)
+  (if (>= i n) (list) (cons i (pad:who-iota (+ i 1) n))))
+
+(define (pad:who-csv-nums s)
+  (map string->number (string-split s ",")))
+
+(define (pad:who-dirty-line xs)
+  (cond
+    ((null? xs) #f)
+    ((string-prefix? (car xs) "DIRTY lines=") (car xs))
+    (#t (pad:who-dirty-line (cdr xs)))))
+
+(define (pad:who-frame-dirty frame n)
+  (let ((d (pad:who-dirty-line (string-split frame "\n"))))
+    (if (not d)
+        (pad:who-iota 0 n)
+        (pad:who-csv-nums (substring d 12 (string-length d))))))
+
+(define (pad:who-misses rows soft l)
+  (cond
+    ((null? rows) (list))
+    ((or (= (car (car rows)) l) (member (car (car rows)) soft))
+     (pad:who-misses (cdr rows) soft l))
+    (#t (cons (car (car rows)) (pad:who-misses (cdr rows) soft l)))))
+
+(define (pad:who-sum-cdrs rows)
+  (if (null? rows) 0 (+ (cdr (car rows)) (pad:who-sum-cdrs (cdr rows)))))
+
+(define (pad:who-nums-str xs)
+  (if (null? xs) "none" (string-join (map number->string xs) ".")))
+
+;; Cross-check one frame against what became engine-dirty since the
+;; previous cross-check point. Returns
+;; (verdict new-rows soft-rows unmapped dirty-total rows-since-check new-ids)
+;; verdict: ok | miss | gap.
+(define (pad:who-xdirty frame)
+  (set! *who-xchecks* (+ *who-xchecks* 1))
+  (let* ((wl (pad:es-L *pl-st*))
+         (l (pad:es-l *pl-st*))
+         (soft (pad:who-frame-dirty frame (length wl))))
+    (if (not *who-dirty-bound*)
+        (list "gap" (list) soft 0 0 (list) 0)
+        (let* ((now (pad:who-engine-now))
+               (ids (car now))
+               (rows (cadr now))
+               (grown (pad:who-grown rows *who-x-rows*))
+               (nids (pad:who-new-ids ids *who-x-ids*))
+               (unmapped (max 0 (- nids (pad:who-sum-cdrs grown))))
+               (miss (pad:who-misses grown soft l)))
+          (set! *who-x-ids* ids)
+          (set! *who-x-rows* rows)
+          (list (if (null? miss) "ok" "miss")
+                (map car grown) soft unmapped (length ids)
+                (map cadr rows) nids)))))
+
+;; XDIRTY at=.. verdict=ok engine=<rows newly dirty> soft=<Soft DIRTY>
+;; cursor=.. since_check=<rows dirty since the check> dirty_nodes= new_nodes=
+;; unmapped=<new dirty nodes outside every page define>
+;; plus "GAPS query:dirty-nodes" (unbound) or "GAPS query:node-row" when
+;; some dirty node could not be placed on a row.
+(define (pad:who-xdirty-line! tag x)
+  (newline)
+  (display "XDIRTY at=") (display tag)
+  (display " verdict=") (display (car x))
+  (display " engine=") (display (pad:who-nums-str (cadr x)))
+  (display " soft=") (display (pad:who-nums-str (caddr x)))
+  (display " cursor=") (display (number->string (pad:es-l *pl-st*)))
+  (display " since_check=") (display (pad:who-nums-str (pad:nth x 5)))
+  (display " dirty_nodes=") (display (number->string (pad:nth x 4)))
+  (display " new_nodes=") (display (number->string (pad:nth x 6)))
+  (display " unmapped=") (display (number->string (pad:nth x 3)))
+  (cond
+    ((string=? (car x) "gap") (newline) (display "GAPS query:dirty-nodes"))
+    ((> (pad:nth x 3) 0)
+     (newline) (display "GAPS query:node-row unmapped=")
+     (display (number->string (pad:nth x 3))))
+    (#t #f))
+  (newline)
+  (car x))

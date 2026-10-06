@@ -15,26 +15,32 @@
 (load "/workspace/aura-pad/soft/pad/lc.aura")
 (load "/workspace/aura-pad/soft/pad/keys.aura")
 (load "/workspace/aura-pad/soft/pad/card.aura")
+(load "/workspace/aura-pad/soft/pad/who.aura")
 
 
 ;; M8: wrap KEY goal:... without touching keys.aura play-cmd! (Soft tip
 ;; type-check is fragile around new cond arms in that file).
+;; M10: IN 15 (ctrl-o, "who wrote this?") answers in SAY from who.aura;
+;; text unchanged, so the frame is a cursor-only frame.
 (define *pad-play-line-base* pad:play-line!)
 (define (pad:play-line! line)
-  (if (and (string? line) (string-prefix? line "KEY ")
-           (>= (string-length line) 9)
-           (string=? (substring line 4 9) "goal:"))
-      (let ((r (pad:card-goal! (substring line 4 (string-length line)))))
-        (if (car r)
-            (pad:play-ok! (car (cdr (cdr r))))
-            (begin
-              (set! *pl-rej* (+ *pl-rej* 1))
-              (set! *pl-say* (car (cdr (cdr r))))
-              (car (cdr r)))))
-      (*pad-play-line-base* line)))
+  (if (and (string? line) (string=? line "IN 15") (null? *pl-esc*))
+      (pad:who-key!)
+      (if (and (string? line) (string-prefix? line "KEY ")
+               (>= (string-length line) 9)
+               (string=? (substring line 4 9) "goal:"))
+          (let ((r (pad:card-goal! (substring line 4 (string-length line)))))
+            (if (car r)
+                (pad:play-ok! (car (cdr (cdr r))))
+                (begin
+                  (set! *pl-rej* (+ *pl-rej* 1))
+                  (set! *pl-say* (car (cdr (cdr r))))
+                  (car (cdr r)))))
+          (*pad-play-line-base* line))))
 
 ;; PAD_PAGE=big starts on the twelve-row page (scripts/bench_editors.sh)
 (pad:play-reset! (if (equal? (getenv "PAD_PAGE") "big") *lc-big-page* *play-start*))
+(pad:who-reset!)
 (pad:play-emit!)
 (let loop ()
   (let ((line (read-line)))

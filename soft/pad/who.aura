@@ -1,0 +1,152 @@
+;; aura-pad M10 -- "who wrote this?": one stamp per page row.
+;; A stamp is #f (nobody has changed the row since the page was opened)
+;; or (who why gen): who in kid / helper / macro / law, why the reason the
+;; writer gave, gen the workspace generation after the write (the engine
+;; metrics face, pad:pen-gen; kid stamps carry the last known one).
+;;
+;; Stamps follow the page by row identity (eq?), the way lc.aura follows
+;; rows: editor commands keep every untouched row object, so a row whose
+;; object changed was written by whoever wrote since the last sync point.
+;; Sync points are cheap and rare -- before / after a pen step, after a
+;; pen undo, and when the kid asks (ctrl-o) -- so the M7 key path pays
+;; nothing per key. Between sync points only the kid writes, so a row
+;; that changed there is the kid's. A row that comes back (editor undo,
+;; pen undo) gets the stamp it had in the snapshot it came back from:
+;; *who-hist* keeps (L . stamps) for recent page objects.
+;;
+;; Needs keys.aura (*pl-st*). Pen wrappers live in who_pen.aura.
+;; No named let captures an outer local here (see docs/m10.md: a captured
+;; outer local can resolve to a same-named global on c69e644); every loop
+;; is a top-level function with its data as parameters.
+;; Soft reserved: never bind quote.
+
+(define *who-L* (list))      ; page rows the stamps belong to
+(define *who-S* (list))      ; one stamp per row of *who-L*
+(define *who-hist* (list))   ; ((L . S) ...), newest first
+(define *who-hist-max* 32)
+(define *who-gen* 0)         ; last known workspace generation
+(define *who-syncs* 0)
+(define *who-asks* 0)
+
+(define (pad:who-falses n)
+  (if (<= n 0) (list) (cons #f (pad:who-falses (- n 1)))))
+
+;; Fresh page: nobody wrote anything yet.
+(define (pad:who-reset!)
+  (let ((wl (pad:es-L *pl-st*)))
+    (set! *who-L* wl)
+    (set! *who-S* (pad:who-falses (length wl)))
+    (set! *who-hist* (list))
+    #t))
+
+;; Stamp of row r of page wl (stamps ws) when wl has it at index i or j.
+;; Returns (list stamp) on a hit, #f on a miss.
+(define (pad:who-at wl ws r i)
+  (cond
+    ((or (< i 0) (null? wl)) #f)
+    ((= i 0) (if (eq? (car wl) r) (list (car ws)) #f))
+    (#t (pad:who-at (cdr wl) (cdr ws) r (- i 1)))))
+
+(define (pad:who-in1 wl ws r i n)
+  (let ((d (- n (length wl))))
+    (or (pad:who-at wl ws r i)
+        (pad:who-at wl ws r (- i d)))))
+
+;; Search the history snapshots for row r at new index i (page length n).
+(define (pad:who-in-hist hs r i n)
+  (if (null? hs)
+      #f
+      (or (pad:who-in1 (car (car hs)) (cdr (car hs)) r i n)
+          (pad:who-in-hist (cdr hs) r i n))))
+
+;; New stamps for page nl: kept from the current or a history snapshot
+;; when the row object is the same, else (who why gen).
+(define (pad:who-align nl i n st)
+  (if (null? nl)
+      (list)
+      (let ((hit (or (pad:who-in1 *who-L* *who-S* (car nl) i n)
+                     (pad:who-in-hist *who-hist* (car nl) i n))))
+        (cons (if hit (car hit) st)
+              (pad:who-align (cdr nl) (+ i 1) n st)))))
+
+(define (pad:who-find-L hs wl)
+  (cond
+    ((null? hs) #f)
+    ((eq? (car (car hs)) wl) (car hs))
+    (#t (pad:who-find-L (cdr hs) wl))))
+
+(define (pad:who-push-hist! wl ws)
+  (set! *who-hist* (cons (cons wl ws) *who-hist*))
+  (if (> (length *who-hist*) *who-hist-max*)
+      (set! *who-hist* (take *who-hist* *who-hist-max*))
+      #t))
+
+;; Sync the stamps with the page; rows written since the last sync get
+;; (who why gen). Returns the number of rows (re)stamped by this writer.
+(define (pad:who-sync! who why gen)
+  (let ((nl (pad:es-L *pl-st*)))
+    (if (eq? nl *who-L*)
+        0
+        (let* ((snap (pad:who-find-L *who-hist* nl))
+               (st (list who why gen))
+               (ns (if snap (cdr snap) (pad:who-align nl 0 (length nl) st))))
+          (set! *who-syncs* (+ *who-syncs* 1))
+          (pad:who-push-hist! *who-L* *who-S*)
+          (set! *who-L* nl)
+          (set! *who-S* ns)
+          (pad:who-count-eq ns st)))))
+
+(define (pad:who-count-eq ns st)
+  (cond
+    ((null? ns) 0)
+    ((eq? (car ns) st) (+ 1 (pad:who-count-eq (cdr ns) st)))
+    (#t (pad:who-count-eq (cdr ns) st))))
+
+(define (pad:who-stamp-of l)
+  (if (and (>= l 0) (< l (length *who-S*))) (list-ref *who-S* l) #f))
+
+;; Machine line for a stamp: WHO who=.. why=.. gen=.. | no-who
+(define (pad:who-tag st)
+  (if st
+      (string-append "WHO who=" (car st) " why=" (cadr st)
+                     " gen=" (number->string (caddr st)))
+      "no-who"))
+
+;; Kid words for a stamp.
+(define (pad:who-say st)
+  (cond
+    ((not st) "nobody has changed this yet")
+    ((string=? (car st) "kid") "you wrote this line")
+    ((string=? (car st) "helper")
+     (string-append "the AI helper wrote this line: " (cadr st)))
+    ((string=? (car st) "macro")
+     (string-append "a macro wrote this line: " (cadr st)))
+    ((string=? (car st) "law")
+     (string-append "a law wrote this line: " (cadr st)))
+    (#t (string-append (car st) " wrote this line"))))
+
+;; ctrl-o: sync (only the kid wrote since the last sync point), then
+;; answer for the cursor row. Returns (tag say).
+(define (pad:who-ask!)
+  (pad:who-sync! "kid" "typed" *who-gen*)
+  (set! *who-asks* (+ *who-asks* 1))
+  (let ((st (pad:who-stamp-of (pad:es-l *pl-st*))))
+    (list (pad:who-tag st) (pad:who-say st))))
+
+;; Play-stream face: IN 15 (ctrl-o) answers in SAY, text unchanged.
+(define (pad:who-key!)
+  (let ((r (pad:who-ask!)))
+    (pad:play-ok! (cadr r))))
+
+;; One line per row: WHOROWS 0=helper:closer:2.1=-.2=kid:typed:1 ...
+(define (pad:who-rows-str ns i)
+  (if (null? ns)
+      ""
+      (string-append
+        (if (= i 0) "" ".")
+        (number->string i) "="
+        (if (car ns)
+            (string-append (car (car ns)) ":" (cadr (car ns)) ":"
+                           (number->string (caddr (car ns))))
+            "-")
+        (pad:who-rows-str (cdr ns) (+ i 1)))))
