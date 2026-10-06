@@ -124,7 +124,8 @@
   (set! *pl-say* say)
   "ok")
 
-;; One gated editor step (char code or command word).
+;; One gated editor step (char code or command word): the reference
+;; path, gate (pad:play-gate) then apply (pad:eapply).
 (define (pad:play-edit! c)
   (let ((reason (pad:play-gate c *pl-st*)))
     (if (string=? reason "ok")
@@ -157,8 +158,9 @@
                                 (number->string (length (car (cdr (cdr (cdr r))))))
                                 " times"))))))))
 
-;; Run one command. Returns "ok", "quit", or a reject reason.
-(define (pad:play-cmd! c)
+;; Run one command, the reference dispatch (M6). Returns "ok", "quit",
+;; or a reject reason. pad:play-cmd! (below) takes the hot words itself.
+(define (pad:play-cmd-ref! c)
   (cond
     ((number? c) (pad:play-edit! c))
     ((string=? c "quit") "quit")
@@ -170,6 +172,143 @@
      (let ((r (pad:play-edit! "open-line")))
        (if (string=? r "ok") (pad:play-edit! "right") r)))
     (#t (pad:play-edit! c))))
+
+;; Emacs port: command_loop_1 (Emacs 22 keyboard.c) ran forward-char,
+;; backward-char and self-insert-command "directly" -- the primitive on
+;; the buffer, no call-interactively -- and everything else the generic
+;; way. Same here: a typed char and the cursor/backspace words are gated
+;; and applied in this one procedure with builtins (no Soft call per
+;; accessor, put-nth step or take/drop), giving the exact state and
+;; reason pad:play-cmd-ref! gives (checked by emacs_test.aura).
+;; Run one command. Returns "ok", "quit", or a reject reason.
+;; State is (L line col kill mark undo); a text edit pushes (L line col)
+;; onto undo (at most *undo-max*) and clears the mark; a move keeps both.
+(define (pad:play-cmd! c)
+  (let* ((st *pl-st*)
+         (L (car st))
+         (l (cadr st))
+         (col (caddr st))
+         (ln (list-ref L l))
+         (len (length ln))
+         (n (length L)))
+    (cond
+      ((number? c)
+       (cond
+         ((not (and (>= c 32) (<= c 126))) (pad:play-reject! "not-print"))
+         ((>= len *max-col*) (pad:play-reject! "need-space"))
+         (#t
+          (let* ((ln2 (append (if (<= col 0) (list) (reverse (drop (reverse ln) (- len col))))
+                              (cons c (if (<= col 0) ln (drop ln col)))))
+                 (L2 (append (reverse (drop (reverse L) (- n l)))
+                             (cons ln2 (drop L (+ l 1)))))
+                 (U (cons (list L l col) (list-ref st 5)))
+                 (un (length U)))
+            (set! *pl-st*
+                  (list L2 l (+ col 1) (list-ref st 3) (list)
+                        (cond
+                          ((<= *undo-max* 0) (list))
+                          ((> un *undo-max*) (reverse (drop (reverse U) (- un *undo-max*))))
+                          (#t U))))
+            (set! *pl-keys* (+ *pl-keys* 1))
+            "ok"))))
+      ((string=? c "left")
+       (if (and (= l 0) (= col 0))
+           (pad:play-reject! "too-far")
+           (begin
+             (set! *pl-st*
+                   (if (> col 0)
+                       (list L l (- col 1) (list-ref st 3) (list-ref st 4) (list-ref st 5))
+                       (list L (- l 1) (length (list-ref L (- l 1)))
+                             (list-ref st 3) (list-ref st 4) (list-ref st 5))))
+             (set! *pl-keys* (+ *pl-keys* 1))
+             "ok")))
+      ((string=? c "right")
+       (if (and (= l (- n 1)) (>= col len))
+           (pad:play-reject! "too-far")
+           (begin
+             (set! *pl-st*
+                   (if (< col len)
+                       (list L l (+ col 1) (list-ref st 3) (list-ref st 4) (list-ref st 5))
+                       (list L (+ l 1) 0 (list-ref st 3) (list-ref st 4) (list-ref st 5))))
+             (set! *pl-keys* (+ *pl-keys* 1))
+             "ok")))
+      ((or (string=? c "home") (string=? c "end"))
+       (set! *pl-st* (list L l (if (string=? c "home") 0 len)
+                           (list-ref st 3) (list-ref st 4) (list-ref st 5)))
+       (set! *pl-keys* (+ *pl-keys* 1))
+       "ok")
+      ((string=? c "next-line")
+       (if (>= l (- n 1))
+           (pad:play-reject! "no-line")
+           (let ((nl (length (list-ref L (+ l 1)))))
+             (set! *pl-st* (list L (+ l 1) (if (> col nl) nl col)
+                                 (list-ref st 3) (list-ref st 4) (list-ref st 5)))
+             (set! *pl-keys* (+ *pl-keys* 1))
+             "ok")))
+      ((string=? c "prev-line")
+       (if (= l 0)
+           (pad:play-reject! "no-line")
+           (let ((pl (length (list-ref L (- l 1)))))
+             (set! *pl-st* (list L (- l 1) (if (> col pl) pl col)
+                                 (list-ref st 3) (list-ref st 4) (list-ref st 5)))
+             (set! *pl-keys* (+ *pl-keys* 1))
+             "ok")))
+      ((or (string=? c "open-line") (string=? c "enter"))
+       ;; split the line at point (Emacs C-o); "enter" = open-line then
+       ;; right, two accepted steps (keys += 2) as in pad:play-cmd-ref!
+       (if (>= n *max-lines*)
+           (pad:play-reject! "need-space")
+           (let* ((pre (if (<= col 0) (list) (reverse (drop (reverse ln) (- len col)))))
+                  (post (if (<= col 0) ln (drop ln col)))
+                  (L2 (append (reverse (drop (reverse L) (- n l)))
+                              (cons pre (cons post (drop L (+ l 1))))))
+                  (U (cons (list L l col) (list-ref st 5)))
+                  (un (length U))
+                  (U2 (cond
+                        ((<= *undo-max* 0) (list))
+                        ((> un *undo-max*) (reverse (drop (reverse U) (- un *undo-max*))))
+                        (#t U))))
+             (if (string=? c "enter")
+                 (begin
+                   (set! *pl-st* (list L2 (+ l 1) 0 (list-ref st 3) (list) U2))
+                   (set! *pl-keys* (+ *pl-keys* 2)))
+                 (begin
+                   (set! *pl-st* (list L2 l col (list-ref st 3) (list) U2))
+                   (set! *pl-keys* (+ *pl-keys* 1))))
+             "ok")))
+      ((and (string=? c "back") (= col 0) (> l 0))
+       ;; backspace at line start joins onto the previous line
+       (let* ((pv (list-ref L (- l 1)))
+              (L2 (append (reverse (drop (reverse L) (- n (- l 1))))
+                          (cons (append pv ln) (drop L (+ l 1)))))
+              (U (cons (list L l col) (list-ref st 5)))
+              (un (length U)))
+         (set! *pl-st*
+               (list L2 (- l 1) (length pv) (list-ref st 3) (list)
+                     (cond
+                       ((<= *undo-max* 0) (list))
+                       ((> un *undo-max*) (reverse (drop (reverse U) (- un *undo-max*))))
+                       (#t U))))
+         (set! *pl-keys* (+ *pl-keys* 1))
+         "ok"))
+      ((and (string=? c "back") (> col 0))
+       ;; backspace inside a line (delete_and_extract_region of one char);
+       ;; col > 0 so neither empty-buf nor too-far can fire
+       (let* ((ln2 (append (if (<= (- col 1) 0) (list) (reverse (drop (reverse ln) (- len (- col 1)))))
+                           (drop ln col)))
+              (L2 (append (reverse (drop (reverse L) (- n l)))
+                          (cons ln2 (drop L (+ l 1)))))
+              (U (cons (list L l col) (list-ref st 5)))
+              (un (length U)))
+         (set! *pl-st*
+               (list L2 l (- col 1) (list-ref st 3) (list)
+                     (cond
+                       ((<= *undo-max* 0) (list))
+                       ((> un *undo-max*) (reverse (drop (reverse U) (- un *undo-max*))))
+                       (#t U))))
+         (set! *pl-keys* (+ *pl-keys* 1))
+         "ok"))
+      (#t (pad:play-cmd-ref! c)))))
 
 ;; One protocol line. Returns "pending", "quit", "ok" or a reason.
 (define (pad:play-line! line)
@@ -239,8 +378,58 @@
 ;; M7 key path: line-incremental Soft key path (lc.aura). Only the edited line is
 ;; re-tokenized; DIRTY lists exactly the rows whose T/H/M changed.
 (define (pad:play-snap)
-  (pad:lc-snap (pad:play-title) (pad:es-L *pl-st*) (pad:es-l *pl-st*)
-               (pad:es-col *pl-st*) *pl-say*))
+  (let* ((st *pl-st*)
+         (L (car st))
+         (l (cadr st))
+         (col (caddr st))
+         ;; try_cursor_movement, inlined: same lines object, cache live,
+         ;; and the name under the cursor unchanged -> rows and SNAP body
+         ;; stand, only the cursor row is dirty. Else the lc frame ladder.
+         (move (and (= *lc-framed* 1) (eq? L *lc-L*)))
+         (name (if move
+                   (let loop ((ts (list-ref (car (vector-ref *lc-recv* l)) 2)))
+                     (if (null? ts)
+                         ""
+                         (let* ((t (car ts)) (kd (car t)))
+                           (if (and (or (string=? kd "S") (string=? kd "K")
+                                        (string=? kd "Q") (string=? kd "M"))
+                                    (>= col (cadr t)) (< col (caddr t)))
+                               (list-ref t 3)
+                               (loop (cdr ts))))))
+                   ""))
+         (same (and move (string=? name *lc-name*)))
+         (dirty (cond
+                  (same
+                   (set! *lc-moves* (+ *lc-moves* 1))
+                   (set! *lc-cur* l)
+                   (set! *lc-frames* (+ *lc-frames* 1))
+                   (list l))
+                  ;; pad:lc-frame!'s ladder, inlined (one Soft call less)
+                  ((= *lc-framed* 0) (pad:lc-generic! L l col))
+                  (move (pad:lc-move-to! L l name))
+                  ((let ((n (length L)) (old *lc-L*))
+                     (and (= n (length old))
+                          (< l n)
+                          (equal? (drop L (+ l 1)) (drop old (+ l 1)))
+                          (equal? (drop (reverse L) (- n l))
+                                  (drop (reverse old) (- n l)))))
+                   (pad:lc-line! L l col))
+                  (#t (pad:lc-generic! L l col))))
+         (dcsv (cond
+                 ((null? dirty) "")
+                 ((null? (cdr dirty)) (number->string (car dirty)))
+                 (#t (pad:v-dirty-csv dirty)))))
+    (string-append
+      "SNAP v1 pad\n"
+      "TITLE aura pad (Soft) keys=" (number->string *pl-keys*)
+      " no=" (number->string *pl-rej*) "\n"
+      "CURSOR line=" (number->string l) " col=" (number->string col) "\n"
+      "SAY " *pl-say* "\n"
+      "LEGEND " *view-legend* "\n"
+      (if (string=? dcsv "") "" (string-append "DIRTY lines=" dcsv "\n"))
+      "ROWS n=" (number->string (vector-length *lc-rowv*)) "\n"
+      *lc-body*
+      "END\n")))
 
 ;; M6 key path (whole-page tokenize per text change), kept as the perf
 ;; "before" reference. Do not mix with pad:play-snap in one session.
