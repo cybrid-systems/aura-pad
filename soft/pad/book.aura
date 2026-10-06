@@ -1,0 +1,104 @@
+;; aura-pad M12 — the book closes (Soft owns persist).
+;; Prefer real Aura APIs: serialize-workspace / deserialize-workspace
+;; (already used in M11e time.aura). std/persist is unbound on Soft tip
+;; c69e644 → print GAPS persist and Soft-side snapshot (.aw + .pad).
+;; Open is deserialize-workspace + sidecar restore, never "read text and
+;; guess". Play loop does not load this file (key latency unchanged).
+;; Soft reserved: never bind quote.
+;; Soft tip binary via scripts/run_soft.sh; load std.aura first in tests.
+
+(define *book-persist* #f)
+(define *book-ser* #f)
+(define *book-deser* #f)
+(define *book-gaps* "")
+(define *book-used* "")
+(define *book-probed* #f)
+(define *book-last* (list))
+(define *book-closes* 0)
+(define *book-opens* 0)
+(define *book-fails* 0)
+
+(define (pad:book-bound? name)
+  (let ((d (try (primitive:describe name) (catch (e) #f))))
+    (and (pair? d) (car d))))
+
+;; Probe once. Sets *book-gaps* / *book-used*. Returns gaps string ("" if none).
+(define (pad:book-probe!)
+  (set! *book-probed* #t)
+  (set! *book-persist* (or (pad:book-bound? "persist:save")
+                           (pad:book-bound? "persist:load")
+                           (pad:book-bound? "persist")))
+  (set! *book-ser* (pad:book-bound? "serialize-workspace"))
+  (set! *book-deser* (pad:book-bound? "deserialize-workspace"))
+  (set! *book-gaps*
+        (if *book-persist* "" "persist"))
+  (set! *book-used*
+        (cond
+          ((and *book-ser* *book-deser*) "serialize-workspace.deserialize-workspace")
+          (*book-ser* "serialize-workspace")
+          (*book-deser* "deserialize-workspace")
+          (#t "none")))
+  (if (string=? *book-gaps* "") "" (string-append "GAPS " *book-gaps*)))
+
+(define (pad:book-gaps-line!)
+  (if (not *book-probed*) (pad:book-probe!) #f)
+  (if (string=? *book-gaps* "")
+      (begin (display "GAPS none") (newline))
+      (begin (display "GAPS ") (display *book-gaps*) (newline)))
+  (display "USED ") (display *book-used*) (newline)
+  *book-gaps*)
+
+;; Close = engine serialize-workspace (.aw) + Soft sidecar (.pad) via
+;; pad:time-save! (M11e). Kid say: the book is closed. Returns (tag say).
+(define (pad:book-close! base)
+  (if (not *book-probed*) (pad:book-probe!) #f)
+  (if (not (and *book-ser* *book-deser*))
+      (begin
+        (set! *book-fails* (+ *book-fails* 1))
+        (set! *book-last* (list "NOCLOSE" "aura cannot save a book yet"))
+        *book-last*)
+      (let ((r (pad:time-save! base)))
+        (if (string=? (car r) "SAVE")
+            (begin
+              (set! *book-closes* (+ *book-closes* 1))
+              (set! *pl-say* "the book is closed, with its story")
+              (set! *book-last* (list "CLOSE" *pl-say*))
+              *book-last*)
+            (begin
+              (set! *book-fails* (+ *book-fails* 1))
+              (set! *book-last* r)
+              r)))))
+
+;; Open = deserialize-workspace + sidecar (pad:time-open!). No set-code.
+;; Returns (tag say).
+(define (pad:book-open! base)
+  (if (not *book-probed*) (pad:book-probe!) #f)
+  (if (not (and *book-ser* *book-deser*))
+      (begin
+        (set! *book-fails* (+ *book-fails* 1))
+        (set! *book-last* (list "NOOPEN" "aura cannot open a book yet"))
+        *book-last*)
+      (let ((r (pad:time-open! base)))
+        (if (string=? (car r) "OPEN")
+            (begin
+              (set! *book-opens* (+ *book-opens* 1))
+              (set! *book-last* r)
+              r)
+            (begin
+              (set! *book-fails* (+ *book-fails* 1))
+              (set! *book-last* r)
+              r)))))
+
+(define (pad:book-line-out! r)
+  (newline)
+  (display (car r)) (display " book say=\"") (display (cadr r)) (display "\"")
+  (newline)
+  r)
+
+(define (pad:book-stats-line!)
+  (display "M12STATS closes=") (display (number->string *book-closes*))
+  (display " opens=") (display (number->string *book-opens*))
+  (display " fails=") (display (number->string *book-fails*))
+  (display " persist=") (display (if *book-persist* "yes" "no"))
+  (display " gaps=") (display (if (string=? *book-gaps* "") "none" *book-gaps*))
+  (newline))

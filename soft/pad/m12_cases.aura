@@ -1,0 +1,147 @@
+;; aura-pad M12 test cases (the book closes), loaded by m12_test.aura.
+;; One top-level call from the entry file. Soft reserved: never bind quote.
+
+(define *m12-fail* 0)
+(define *m12-checks* 0)
+(define *m12-acc0* 0)
+(define *m12-book* "/workspace/aura-pad/out/m12/book_close")
+
+(define (m12:mark! ok tag shown want)
+  (set! *m12-checks* (+ *m12-checks* 1))
+  (newline)
+  (display "T ") (display tag) (display "=") (display shown)
+  (if ok
+      (display " OK")
+      (begin (display " WANT=") (display want) (set! *m12-fail* (+ *m12-fail* 1))))
+  (newline)
+  ok)
+(define (m12:expect tag got want)
+  (m12:mark! (and (number? got) (= got want)) tag
+             (if (number? got) (number->string got) "?") (number->string want)))
+(define (m12:expect-str tag got want)
+  (m12:mark! (and (string? got) (string=? got want)) tag
+             (if (string? got) got "?") want))
+(define (m12:expect-true tag got)
+  (m12:expect-str tag (if got "yes" "no") "yes"))
+
+(define (m12:acc-begin!) (set! *m12-acc0* *m12-fail*))
+(define (m12:acc-end! n)
+  (newline)
+  (display "M12_ACC ") (display (number->string n))
+  (display (if (= *m12-fail* *m12-acc0*) " OK" " FAIL"))
+  (newline))
+
+(define *m12-page*
+  (string-append
+    "(define (hello x) (+ x 1))\n"
+    "(define (bye y) (hello y))\n"
+    "(define (add a b) (+ a b))\n"
+    "; kids write stories here\n"
+    "(define pet \"cat\")\n"
+    "(define (greet n) (add n 1))\n"
+    "(hello 3)\n"
+    "(bye 4)\n"
+    "(greet (add 1 2))\n"
+    "(display pet)\n"
+    "(add 2 3)\n"
+    "(hello (bye 5))"))
+
+(define *m12-ops-good*
+  (list (list "hello" "(lambda (x) (* x 2))") (list "bye" "(lambda (y) (- (hello y)))")))
+(define *m12-ops-flip* (list (list "add" "(lambda (a b) (+ b a))")))
+
+(define (m12:fresh!)
+  (pad:play-reset! *m12-page*)
+  (pad:who-reset!)
+  (set! *pen-undo* (list))
+  (set! *robot-undo* (list))
+  (set! *who-keep-codes* (list))
+  (pad:play-snap)
+  (m12:expect-str "CHECK" (car (pad:who-check!)) "ok")
+  #t)
+
+(define (m12:keys! ks)
+  (if (null? ks) 0 (begin (pad:robot-line! (car ks)) (m12:keys! (cdr ks)))))
+
+(define (m12:two-steps!)
+  (m12:fresh!)
+  (pad:time-start! "start")
+  (pad:robot-line-out! (pad:robot-step! "helper" *m12-ops-good* "closer") "helper")
+  (pad:robot-line-out! (pad:robot-step! "macro" *m12-ops-flip* "flip") "macro")
+  #t)
+
+;; M12.1 probe: std/persist unbound → GAPS persist; Soft uses serialize.
+(define (m12:sec-1)
+  (m12:acc-begin!)
+  (let ((g (pad:book-probe!)))
+    (pad:book-gaps-line!)
+    (m12:expect-str "GAPS" g "GAPS persist")
+    (m12:expect-str "GAPS_NAME" *book-gaps* "persist")
+    (m12:expect-true "SER" *book-ser*)
+    (m12:expect-true "DESER" *book-deser*)
+    (m12:expect-true "NO_PERSIST" (not *book-persist*))
+    (m12:expect-str "USED" *book-used* "serialize-workspace.deserialize-workspace"))
+  (m12:acc-end! 1)
+  #t)
+
+;; M12.2 close / open is restore: same code + page; who still answers
+;; from pad stamps + mutation-log reason (aura#4365/#4367 workarounds).
+(define (m12:sec-2)
+  (m12:acc-begin!)
+  (m12:two-steps!)
+  (let* ((d0 *ew-disagree*)
+         (code-s (pad:q-code))
+         (src-s (pad:v-src (pad:es-L *pl-st*)))
+         (cl (pad:book-line-out! (pad:book-close! *m12-book*))))
+    (m12:expect-str "CLOSE" (car cl) "CLOSE")
+    (m12:expect-str "CLOSE_SAY" *pl-say* "the book is closed, with its story")
+    (m12:expect-true "AW_FILE"
+                     (string? (try (read-file (string-append *m12-book* ".aw")) (catch (e) #f))))
+    (m12:expect-true "PAD_FILE"
+                     (string? (try (read-file (string-append *m12-book* ".pad")) (catch (e) #f))))
+    (m12:fresh!)
+    (m12:expect-true "CLOBBERED" (not (string=? (pad:q-code) code-s)))
+    (let ((op (pad:book-line-out! (pad:book-open! *m12-book*))))
+      (m12:expect-str "OPEN" (car op) "OPEN")
+      (m12:expect-true "OPEN_SAY" (string-prefix? *pl-say* "the book is open:")))
+    (m12:expect-true "CODE" (string=? (pad:q-code) code-s))
+    (m12:expect-true "PAGE" (string=? (pad:v-src (pad:es-L *pl-st*)) src-s))
+    (m12:expect-str "STRIP" (pad:time-strip) "helper: closer | macro: flip | [opened]")
+    (let ((w (pad:time-who-ask!)))
+      (newline) (display (car w)) (newline)
+      (m12:expect-str "WHO0_VERDICT" (caddr w) "agree")
+      (m12:expect-true "WHO0_HELPER" (string-contains? (car w) "who=helper why=closer"))
+      (m12:expect-true "WHO0_BOOK" (string-contains? (cadr w) ", from the saved book")))
+    (set! *pl-st* (pad:es-at (pad:es-L *pl-st*) 2 0))
+    (m12:keys! (list "IN 15"))
+    (m12:expect-true "WHO2_SAY" (string-prefix? *pl-say* "a macro wrote add: flip"))
+    (m12:expect "NO_WHO_DISAGREE" (- *ew-disagree* d0) 0)
+    (m12:expect-str "NO_BOOK" (car (pad:book-open! "/workspace/aura-pad/out/m12/no_such_book")) "NOOPEN")
+    (m12:expect "NO_TIME_DISAGREE" *time-disagree* 0))
+  (set! *time-reopened* #f)
+  (m12:acc-end! 2)
+  #t)
+
+(define (m12:intro)
+  (newline)
+  (display "M12 the book closes on Soft tip")
+  (newline)
+  #t)
+
+(define (m12:outro)
+  (pad:book-stats-line!)
+  (newline)
+  (display "TESTS checks=") (display (number->string *m12-checks*))
+  (display " fail=") (display (number->string *m12-fail*))
+  (newline)
+  (if (= *m12-fail* 0)
+      (begin (display "PAD_M12_TEST_OK") (newline))
+      (begin (display "PAD_M12_TEST_FAIL") (newline)))
+  #t)
+
+(define (m12:run-all)
+  (m12:intro)
+  (m12:sec-1)
+  (m12:sec-2)
+  (m12:outro)
+  #t)
