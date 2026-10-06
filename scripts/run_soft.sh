@@ -26,6 +26,7 @@ exec "${DOCKER[@]}" run --rm -i --entrypoint /usr/local/bin/gosu \
   -e AURA_SANDBOX=off \
   -e AURA_BIN=/workspace/aura-grok/build/aura \
   -e "PAD_HORIZON=${PAD_HORIZON:-}" \
+  -e "PAD_DEFER=${PAD_DEFER:-}" \
   -e "PAD_BURN_ROUNDS=${PAD_BURN_ROUNDS:-}" \
   -e "PAD_ROUND_DIR=${PAD_ROUND_DIR:-}" \
   -e "PAD_PROPOSE_FILE=${PAD_PROPOSE_FILE:-}" \

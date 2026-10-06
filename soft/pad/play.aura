@@ -27,6 +27,8 @@
 ;; PAD_PAGE=big starts on the twelve-row page (scripts/bench_editors.sh)
 (pad:play-reset! (if (equal? (getenv "PAD_PAGE") "big") *lc-big-page* *play-start*))
 (pad:who-reset!)
+;; PAD_DEFER=1: early frame before the rows below a string edit settle
+(set! *pi-defer* (equal? (getenv "PAD_DEFER") "1"))
 (pad:play-emit!)
 (let loop ()
   (let ((line (read-line)))

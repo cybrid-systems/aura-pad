@@ -1,0 +1,55 @@
+;; Aura surfaces the perf-aura round relies on or rejected (docs/perf-aura.md),
+;; checked against the tip so the doc's claims stay true. Separate file:
+;; set-code replaces the workspace, so no pad code is loaded here.
+;;  F_NO_WORKSPACE  file mode: define-lookup has no workspace to look in
+;;  F_FIBER         fiber:spawn + fiber:join hand back the body's value
+;;  F_REBIND        after set-code + eval-current, mutate:rebind swaps a
+;;                  define for its callers
+;;  F_RESTORE       ast:snapshot / ast:restore + eval-current rolls it back
+;;  F_RELOWER       engine:metrics "query:incremental-relower-stats" is a
+;;                  hash; compile:relower-strategy answers a keyword
+;; Prints T lines, APFACTS (measured ms), then PAD_AURA_FACTS_OK.
+(define af-fails 0)
+(define (af:expect name ok got)
+  (display "T ") (display name)
+  (if ok (display " OK") (begin (set! af-fails (+ af-fails 1)) (display " WANT=") (display got)))
+  (newline))
+(define (af:now) (current-time-ms))
+(define (af:work n) (let lp ((i 0) (acc 0)) (if (>= i n) acc (lp (+ i 1) (+ acc i)))))
+(define (af:run)
+  (display "AURA_FACTS on Soft tip") (newline)
+  (let* ((nw (define-lookup "af:work"))
+         (r0 (af:expect "F_NO_WORKSPACE" (and (pair? nw) (eq? (car nw) 'no-workspace)) nw))
+         (t0 (af:now))
+         (fid (fiber:spawn (lambda () (af:work 2000))))
+         (fv (fiber:join fid))
+         (t1 (af:now))
+         (r1 (af:expect "F_FIBER" (= fv 1999000) fv))
+         (sc (set-code "(define ws-hot (lambda (x) (+ x 1))) (define ws-use (lambda (y) (ws-hot y)))"))
+         (ec (eval-current))
+         (v0 (ws-use 1))
+         (t2 (af:now))
+         (rb (mutate:rebind "ws-hot" "(lambda (x) (+ x 2))" "aura-facts"))
+         (t3 (af:now))
+         (v1 (ws-use 1))
+         (r2 (af:expect "F_REBIND" (and (= v0 2) (= v1 3)) (list v0 v1 rb)))
+         (sid (ast:snapshot "aura-facts"))
+         (rb2 (mutate:rebind "ws-hot" "(lambda (x) (+ x 100))" "aura-facts-2"))
+         (v2 (ws-use 1))
+         (t4 (af:now))
+         (rs (ast:restore sid))
+         (ec2 (eval-current))
+         (t5 (af:now))
+         (v3 (ws-use 1))
+         (r3 (af:expect "F_RESTORE" (and (= v2 101) (= v3 3)) (list v2 v3 rs)))
+         (h (engine:metrics "query:incremental-relower-stats"))
+         (st (compile:relower-strategy "ws-hot"))
+         (r4 (af:expect "F_RELOWER" (and (hash? h) (keyword? st)) (list st))))
+    (display "APFACTS fiber_backend=") (display (fiber:spawn-backend))
+    (display " spawn_join_ms=") (display (- t1 t0))
+    (display " rebind_ms=") (display (- t3 t2))
+    (display " restore_eval_ms=") (display (- t5 t4))
+    (display " relower_keys=") (display (length (hash-keys h)))
+    (display " strategy=") (display st) (newline))
+  (if (= af-fails 0) (begin (display "PAD_AURA_FACTS_OK") (newline)) 0))
+(af:run)
