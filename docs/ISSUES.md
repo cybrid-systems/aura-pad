@@ -1,17 +1,30 @@
 # aura-pad issues
 
 Live plan: [`ROADMAP.md`](ROADMAP.md). Design: [`DESIGN.md`](DESIGN.md).
-M0–M7 stay green.
+M0–M9 stay green.
 
-Aura currently has three open issues. All three were filed from aura-pad.
-Pad work does not invent replacements for them.
+Soft tip: `c69e644`. Aura issues filed from aura-pad. Pad work never
+invents a replacement API for any of them.
 
-| Aura issue | What is missing | Pad rule until it lands |
-|------------|-----------------|-------------------------|
-| [aura#4345](https://github.com/cybrid-systems/aura/issues/4345) | Soft `query:code`, `query:ref-counts`, `query:node-types` unbound | Print `GAPS` those names. Project from the buffer string. Do not wrap. |
-| [aura#4344](https://github.com/cybrid-systems/aura/issues/4344) | Soft `define-lookup` unbound | Jump stays Soft HL `pad:goto-def`. `query:defines` / `(query :find)` only. |
-| [aura#4343](https://github.com/cybrid-systems/aura/issues/4343) | Per-call cost linear in top-level defines | Do not `set-code` per keystroke. One load per notebook. Smoke budget recorded. Builtin `list-ref` / `list-tail` / `reverse` instead of Soft loops. |
-| *(draft, to file)* Soft `vector-set!` / `set-car!` ~15 ms each with the pad loaded (slope ~6× steeper than calls; `out/m7/fill_{0,100,300,600}.aura`) | In-place mutate cost | Never `vector-set!` / `set-car!` on the key path. Rebuild with `list->vector` / `cons`. File from aura-pad after M7 lands. |
+### Open
+
+| Aura issue | What is wrong | Pad rule until it lands |
+|------------|---------------|-------------------------|
+| [aura#4352](https://github.com/cybrid-systems/aura/issues/4352) | A top-level named let that calls a user proc, in a loaded file, breaks later prelude calls (`reverse`: unbound `lst`). In the full stack this showed up as random type errors and calls to the wrong function | No top-level named let in loaded files; build tables with a named procedure (`pad:lc-cls-list`) |
+| [aura#4351](https://github.com/cybrid-systems/aura/issues/4351) | `null?` in a loaded file with `(require ... all:)` calls a pad global | Entry files load `std.aura` (the requires) before any pad file; `query.aura` has no requires |
+| [aura#4350](https://github.com/cybrid-systems/aura/issues/4350) | #4343 / #4346 repros still linear in define count on `c69e644`; calls ~1.5× slower than `73c012c` | One `set-code` per check, never per key. `list->vector`, no `vector-set!`. Numbers in `perf.md` |
+| [aura#4349](https://github.com/cybrid-systems/aura/issues/4349) | After `ast:restore` past a rebind, workspace closures throw "stale node id" | The pen heals with `ast:restore` + one `eval-current` (counted in `M9STATS heals=`) |
+| [aura#4348](https://github.com/cybrid-systems/aura/issues/4348) | Soft file string literals lose a backslash | Notebook rows travel as char codes, never as escaped strings |
+| [aura#4347](https://github.com/cybrid-systems/aura/issues/4347) | `define-lookup` line/col always 0 | Marks come from Soft tokens; engine records are used only when they land on the name; `M9LOOKUP hello=line0:col0` printed |
+
+### Closed (re-probed on `c69e644`)
+
+| Aura issue | Status on tip |
+|------------|---------------|
+| [aura#4346](https://github.com/cybrid-systems/aura/issues/4346) | `vector-set!` / `set-car!` cost. Closed, but the re-measure still scales (#4350) |
+| [aura#4345](https://github.com/cybrid-systems/aura/issues/4345) | `query:code` / `query:ref-counts` / `query:node-types` bound. `USED` line |
+| [aura#4344](https://github.com/cybrid-systems/aura/issues/4344) | `define-lookup` bound. Jump hook wired (see #4347) |
+| [aura#4343](https://github.com/cybrid-systems/aura/issues/4343) | Closed, but per-key ms did not drop on the file runner (#4350) |
 
 #192 and #165 are closed. Do not re-file them. Probe fail is still `ast:snapshot` / `ast:restore`.
 
@@ -34,15 +47,15 @@ No new Aura issue. Uses hot-strategy + fibers already on tip.
 - M8.3 Kind-word gate + capability probe. Unbound capability is a GAP, word-list stays.
 - M8.4 Undo KEEP re-scores. Mismatch fails loud. Fixtures: worse DROP, tie DROP, better KEEP.
 
-## M9 — workspace notebook
+## M9 — workspace notebook (done)
 
-Blocks on #4345 for a real span projection, on #4343 for load frequency.
-Soft DIRTY already landed in M7; engine `query:dirty-nodes` is M10.
+Shipped ([`m9.md`](m9.md)). Filed while building it: #4347, #4348, #4349,
+#4350, #4351, #4352.
 
-- M9.1 Re-probe tip. GAPS line must include the three #4345 names and #4344.
-- M9.2 `pad:ws-load!` once per notebook / check (`set-code` + `eval-current`). Project matches `"hi"` / `"  aura"` / `"pad"`.
+- M9.1 Re-probe tip: `USED define-lookup.query:code.query:ref-counts.query:node-types`, `GAPS none`.
+- M9.2 `pad:ws-load!` once per notebook / check (`set-code` + `eval-current`). Projection matches `"hi"` / `"  aura"` / `"pad"` and the 12-row page.
 - M9.3 Keystrokes between checks make zero `set-code` calls. REJECT does not bump generation.
-- M9.4 `PAD_M9_OK`. M0–M7 markers still print.
+- M9.4 `PAD_M9_OK`. M0–M8 markers still print.
 
 ## M10 — who wrote this + engine dirty
 

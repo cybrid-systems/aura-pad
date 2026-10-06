@@ -3,7 +3,7 @@
 Requirements: [`REQUIREMENTS.md`](REQUIREMENTS.md) · Design:
 [`DESIGN.md`](DESIGN.md) · Engine gaps: [`ISSUES.md`](ISSUES.md).
 
-M0–M6 shipped (see `m0.md` … `m6.md`). **M7 shipped** (`m7.md`). M8 shipped (`m8.md`). The
+M0–M6 shipped (see `m0.md` … `m6.md`). **M7 shipped** (`m7.md`). M8 shipped (`m8.md`). **M9 shipped** (`m9.md`). The
 earlier M7–M12 sketch in [`NEXT.md`](NEXT.md) (kept for its detail) is
 renumbered here; where they disagree, this file wins:
 NEXT's "M7 workspace" is now **M9**, "M8 intent worldline" stays **M8**,
@@ -69,7 +69,7 @@ Acceptance tests:
 7. Key path stays under the M7 gates with the card visible
    (`PAD_M7_PERF_OK`). → `PAD_M8_OK`.
 
-## M9 — workspace notebook (next)
+## M9 — workspace notebook (done)
 
 The Aura workspace becomes the source of truth for a notebook, but
 honestly within #4343: `set-code` + `eval-current` **once per notebook
@@ -82,21 +82,30 @@ marks. Edits made by a KEEP (helper/macro/law) go through
 New files: `soft/pad/ws.aura`, `soft/pad/pen.aura`, `m9_test.aura`,
 `scripts/smoke_m9.sh`.
 
-Acceptance tests:
+Acceptance tests (all in `scripts/smoke_m9.sh`, one `M9_ACC n OK` each,
+113 checks on Soft tip `c69e644`):
 
-1. `pad:ws-load!` calls only `set-code` + `eval-current`; a missing name
-   prints `GAPS` and the pad keeps working on the Soft buffer.
-2. Roundtrip: load → project → load again; projected lines byte-equal
-   the M3 line list for `"hi"` / `"  aura"` / `"pad"` and the 12-row page.
-3. ctrl-s on the 12-row page: engine `query:defines` names ⊇ Soft
-   `pad:find-defs` names (difference printed, not hidden); load cost
-   printed next to the #4343 numbers.
-4. A REJECTed pen step does not call `set-code`, does not bump
+- [x] 1. `pad:ws-load!` calls only `set-code` + `eval-current`; a missing
+   name prints `GAPS` and the pad keeps working on the Soft buffer.
+- [x] 2. Roundtrip: load → project → load again; projected lines
+   byte-equal the M3 line list for `"hi"` / `"  aura"` / `"pad"`, the
+   12-row page and a page with an empty row (rows come back from a
+   char-code data define, because `query:code` drops comments/layout).
+- [x] 3. ctrl-s on the 12-row page: engine names (`define-lookup` per
+   candidate) ⊇ Soft find-defs names (missing / extra printed); marks
+   `name@row:col`, `query:ref-counts`, `query:node-types` printed; load ms
+   printed next to the #4343 / #4350 numbers.
+- [x] 4. A REJECTed pen step does not call `set-code`, does not bump
    generation (`mutate:summary :total` unchanged), does not push undo.
-5. One KEEP rebind bumps generation exactly once; `ast:snapshot` /
+- [x] 5. One KEEP rebind bumps generation exactly once; `ast:snapshot` /
    `ast:restore` heals a failed probe (no "transaction" wording).
-6. Keystrokes between checks make **zero** `set-code` calls (counter in
+- [x] 6. Keystrokes between checks make **zero** `set-code` calls (counter in
    `M9STATS`). → `PAD_M9_OK`.
+
+Not shipped: ctrl-s inside `play.aura` (the C SNAP stream). The page's
+own `display` output goes straight to stdout and Soft tip has no output
+capture, so a check would corrupt the SNAP stream. The `pad:nb-line!`
+key handler is tested in Soft only.
 
 ## M10 — who wrote this + engine dirty (next)
 
@@ -120,12 +129,13 @@ Acceptance tests:
 
 ## Latency track (runs alongside M8–M10)
 
-Goal: insert < 16 ms on kid pages (one 60 fps frame). Today ~23–30 ms.
+Goal: insert < 16 ms on kid pages (one 60 fps frame). Today ~33–35 ms on
+Aura `c69e644` (~23–30 ms on `73c012c`; see `perf.md`).
 
 | lever | owner | expected |
 |-------|-------|----------|
-| Soft call cost independent of define count | Aura #4343 | ~3× on every pad path |
-| `vector-set!` / `set-car!` O(1) | Aura (draft issue, `ISSUES.md`) | lets the cache update in place |
+| Soft call cost independent of define count | Aura #4343 closed, still linear: #4350 | ~3× on every pad path |
+| `vector-set!` / `set-car!` O(1) | Aura #4346 closed, still scales: #4350 | lets the cache update in place |
 | Load only play-path files in `play.aura` | pad | fewer defines → cheaper calls (measure) |
 | Tokenize tape + syms in one pass | pad | ~2 ms/key |
 | Skip SNAP rows C already has (wire v2, still fail closed) | pad + C reader only | smaller frames, no C logic |
