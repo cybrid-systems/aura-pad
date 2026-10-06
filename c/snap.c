@@ -14,6 +14,15 @@
  * what differs (it never decides what a cell holds). Non-SNAP lines
  * between blocks are skipped (Soft logs may share stdout). A bad or
  * truncated block is dropped whole; the last complete one wins.
+ *
+ * Wire v2 (opt-in, soft/pad/wire2.aura): SNAP v2 pad / GEN g base=b|- /
+ * TITLE / CURSOR / SAY / LEGEND / ROWS n= body= / k x (R i, T, H, M) / END.
+ * base=- is a full frame (every row 0..n-1 sent once). Otherwise the rows
+ * Soft did not send are the rows of the frame with generation b, which
+ * must be the last accepted frame and must hold them; body= must equal
+ * the byte length of the v1 ROWS body of the rebuilt frame. Any miss
+ * drops the block and sets need_full (pad_play asks Soft once for a full
+ * frame). The rows sent are Soft's DIRTY set; C never picks rows.
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -89,13 +98,56 @@ typedef struct {
     int stage;
     int left; /* rows still expected */
     int sub;  /* 0 T, 1 H, 2 M within the current row */
+    /* wire v2 only */
+    int ver;  /* 1 or 2 */
+    int gen, base; /* base -1: full frame */
+    long body;     /* claimed v1 ROWS body length */
+    int row;       /* row index of the current R */
+    int nsent;
+    unsigned char seen[PAD_MAX_ROWS];
 } Block;
+
+/* "R 3" -> 3, or -1. */
+static int row_index(const char *line) {
+    if (line[0] != 'R' || line[1] != ' ' || line[2] < '0' || line[2] > '9')
+        return -1;
+    char *end = NULL;
+    long v = strtol(line + 2, &end, 10);
+    if (*end != '\0' || v < 0 || v >= PAD_MAX_ROWS)
+        return -1;
+    return (int)v;
+}
+
+/* One T/H/M line of row r (shared by v1 and v2). 1 ok, 0 bad. */
+static int row_line(PadSnap *s, int r, int sub, const char *line) {
+    static const char *tags[3] = {"T", "H", "M"};
+    const char *p = payload(line, tags[sub]);
+    if (!p)
+        return 0;
+    size_t n = strlen(p);
+    if (n > PAD_MAX_COLS)
+        return 0;
+    if (sub == 0)
+        return (s->t[r] = dup_n(p, n)) != NULL;
+    if (!s->t[r] || n != strlen(s->t[r]))
+        return 0;
+    for (size_t i = 0; i < n; i++)
+        if (sub == 1 ? hl_sgr(p[i]) == NULL : !mark_ok(p[i]))
+            return 0;
+    char *d = dup_n(p, n);
+    if (!d)
+        return 0;
+    if (sub == 1)
+        s->h[r] = d;
+    else
+        s->m[r] = d;
+    return 1;
+}
 
 /* 1 = consumed, 0 = block is bad, 2 = block complete. */
 static int block_line(Block *b, const char *line) {
     PadSnap *s = &b->s;
     const char *p;
-    size_t n;
     switch (b->stage) {
     case 0:
         if (!(p = payload(line, "TITLE")) || !copy_field(s->title, p))
@@ -118,6 +170,14 @@ static int block_line(Block *b, const char *line) {
         b->stage = 4;
         return 1;
     case 4:
+        if (b->ver == 2) { /* v2: no DIRTY line; the rows sent are the set */
+            if (sscanf(line, "ROWS n=%d body=%ld", &b->left, &b->body) != 2 ||
+                b->left < 1 || b->left > PAD_MAX_ROWS || b->body < 0)
+                return 0;
+            s->nrows = b->left; /* slots; unsent ones filled from the base */
+            b->stage = 11;
+            return 1;
+        }
         /* Optional Soft DIRTY lines=0,2,5 — stay in stage 4 until ROWS. */
         if (strncmp(line, "DIRTY lines=", 12) == 0) {
             const char *q = line + 12;
@@ -144,32 +204,9 @@ static int block_line(Block *b, const char *line) {
         b->sub = 0;
         b->stage = 5;
         return 1;
-    case 5: {
-        static const char *tags[3] = {"T", "H", "M"};
-        if (!(p = payload(line, tags[b->sub])))
+    case 5:
+        if (!row_line(s, s->nrows, b->sub, line))
             return 0;
-        n = strlen(p);
-        if (n > PAD_MAX_COLS)
-            return 0;
-        int r = s->nrows;
-        if (b->sub == 0) {
-            if (!(s->t[r] = dup_n(p, n)))
-                return 0;
-        } else {
-            if (n != strlen(s->t[r]))
-                return 0;
-            for (size_t i = 0; i < n; i++) {
-                if (b->sub == 1 ? hl_sgr(p[i]) == NULL : !mark_ok(p[i]))
-                    return 0;
-            }
-            char *d = dup_n(p, n);
-            if (!d)
-                return 0;
-            if (b->sub == 1)
-                s->h[r] = d;
-            else
-                s->m[r] = d;
-        }
         if (++b->sub == 3) {
             b->sub = 0;
             s->nrows++;
@@ -177,7 +214,6 @@ static int block_line(Block *b, const char *line) {
                 b->stage = 6;
         }
         return 1;
-    }
     case 6:
         if (strcmp(line, "END") != 0)
             return 0;
@@ -185,8 +221,83 @@ static int block_line(Block *b, const char *line) {
             (size_t)s->cur_col > strlen(s->t[s->cur_line]))
             return 0;
         return 2;
+    case 10: { /* GEN g base=b | base=- */
+        char tail[16];
+        if (sscanf(line, "GEN %d base=%15s", &b->gen, tail) != 2 || b->gen < 0)
+            return 0;
+        if (strcmp(tail, "-") == 0)
+            b->base = -1;
+        else {
+            char *end = NULL;
+            long v = strtol(tail, &end, 10);
+            if (end == tail || *end != '\0' || v < 0)
+                return 0;
+            b->base = (int)v;
+        }
+        b->stage = 0;
+        return 1;
+    }
+    case 11: { /* R i, or END */
+        int r = row_index(line);
+        if (r >= 0) {
+            if (r >= s->nrows || b->seen[r])
+                return 0;
+            b->seen[r] = 1;
+            b->row = r;
+            b->sub = 0;
+            s->dirty[b->nsent++] = r;
+            b->stage = 12;
+            return 1;
+        }
+        if (strcmp(line, "END") != 0)
+            return 0;
+        return 3; /* complete; rebuilt against the base by the reader */
+    }
+    case 12:
+        if (!row_line(s, b->row, b->sub, line))
+            return 0;
+        if (++b->sub == 3)
+            b->stage = 11;
+        return 1;
     }
     return 0;
+}
+
+/* v2 END: fill the rows Soft did not send from the base frame, then
+ * check what Soft claimed. 1 ok, 0 drop. Copies, never guesses. */
+static int v2_finish(Block *b, const PadReader *rd) {
+    PadSnap *s = &b->s;
+    if (b->base < 0) {
+        if (b->nsent != s->nrows)
+            return 0; /* a full frame carries every row */
+        s->dirty_n = -1;
+    } else {
+        if (rd->gen < 0 || rd->gen != b->base || rd->accepted == 0)
+            return 0; /* not built on the frame C holds */
+        const PadSnap *o = &rd->last;
+        for (int r = 0; r < s->nrows; r++) {
+            if (b->seen[r])
+                continue;
+            if (r >= o->nrows || !o->t[r] || !o->h[r] || !o->m[r])
+                return 0; /* Soft left a row C does not have */
+            if (!(s->t[r] = strdup(o->t[r])) || !(s->h[r] = strdup(o->h[r])) ||
+                !(s->m[r] = strdup(o->m[r])))
+                return 0;
+        }
+        s->dirty_n = b->nsent;
+    }
+    long body = 0;
+    for (int r = 0; r < s->nrows; r++) {
+        if (!s->t[r] || !s->h[r] || !s->m[r])
+            return 0;
+        body += 3 * (long)strlen(s->t[r]) + 9;
+    }
+    if (body != b->body)
+        return 0;
+    if (s->cur_line < 0 || s->cur_line >= s->nrows || s->cur_col < 0 ||
+        (size_t)s->cur_col > strlen(s->t[s->cur_line]))
+        return 0;
+    return 1;
 }
 
 /* Free a partially-built block (rows may be half filled). */
@@ -205,34 +316,60 @@ static void block_drop(Block *b) {
 /* Incremental reader: feed one line at a time (stream or file). */
 int pad_reader_init(PadReader *rd) {
     memset(rd, 0, sizeof(*rd));
+    rd->gen = -1;
     rd->block = calloc(1, sizeof(Block));
     return rd->block != NULL;
 }
 
+static void reject(PadReader *rd, Block *b) {
+    if (b->ver == 2) {
+        /* a dropped full frame does not answer the request: ask again,
+         * but at most 3 times in a row (a Soft bug must not loop) */
+        if (b->base < 0 && ++rd->full_bad < 3)
+            rd->asked = 0;
+        if (!rd->asked && rd->full_bad < 3)
+            rd->need_full = 1;
+    }
+    block_drop(b);
+    rd->rejected++;
+    rd->in = 0;
+}
+
 int pad_reader_line(PadReader *rd, const char *line) {
     Block *b = (Block *)rd->block;
-    if (strcmp(line, "SNAP v1 pad") == 0) {
-        if (rd->in) {
-            block_drop(b);
-            rd->rejected++;
-        }
+    int v1 = strcmp(line, "SNAP v1 pad") == 0;
+    if (v1 || strcmp(line, "SNAP v2 pad") == 0) {
+        if (rd->in)
+            reject(rd, b);
         memset(b, 0, sizeof(*b));
         b->s.dirty_n = -1;
+        b->ver = v1 ? 1 : 2;
+        b->stage = v1 ? 0 : 10;
         rd->in = 1;
         return 0;
     }
     if (!rd->in)
         return 0; /* Soft log line outside a block */
     int rc = block_line(b, line);
+    if (rc == 3 && !v2_finish(b, rd))
+        rc = 0;
     if (rc == 0) {
-        block_drop(b);
-        rd->rejected++;
-        rd->in = 0;
+        reject(rd, b);
         return 0;
     }
-    if (rc == 2) {
+    if (rc == 2 || rc == 3) {
         pad_snap_free(&rd->last);
         rd->last = b->s;
+        if (rc == 3) {
+            rd->gen = b->gen;
+            rd->v2++;
+            rd->v2_rows += b->nsent;
+            if (b->base < 0) { /* the full frame we asked for (or Soft's own) */
+                rd->asked = 0;
+                rd->full_bad = 0;
+            }
+        } else
+            rd->gen = -1;
         memset(b, 0, sizeof(*b));
         rd->accepted++;
         rd->in = 0;
@@ -242,11 +379,8 @@ int pad_reader_line(PadReader *rd, const char *line) {
 }
 
 void pad_reader_finish(PadReader *rd) {
-    if (rd->in) { /* truncated tail: keep the last accepted block */
-        block_drop((Block *)rd->block);
-        rd->rejected++;
-        rd->in = 0;
-    }
+    if (rd->in) /* truncated tail: keep the last accepted block */
+        reject(rd, (Block *)rd->block);
 }
 
 void pad_reader_free(PadReader *rd) {

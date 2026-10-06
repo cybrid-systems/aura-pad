@@ -5,7 +5,11 @@
  * Soft sends back. Soft owns the keymap, the gate, the buffer, the cursor
  * and the kid words; ctrl-q quits because Soft decides it means quit.
  * stdin EOF closes the child's stdin; child EOF ends the viewport.
- * Ctrl-C still works (ISIG stays on). */
+ * Ctrl-C still works (ISIG stays on).
+ * --wire2 offers Soft wire v2 ("WIRE 2" line; Soft decides to use it and
+ * then sends only the rows it marked DIRTY). When the reader drops a v2
+ * block (wrong base, unknown row, bad body length) C asks once for a full
+ * frame ("WIRE 2 FULL") and draws nothing it cannot rebuild exactly. */
 #define _POSIX_C_SOURCE 200809L
 
 #include "snap.h"
@@ -69,20 +73,23 @@ static pid_t spawn(const char *script, int *to_fd, int *from_fd) {
 
 static void usage(const char *a0) {
     fprintf(stderr,
-            "usage: %s [--ansi|--plain] [--final] [--stats] [soft_play.sh]\n"
+            "usage: %s [--ansi|--plain] [--final] [--stats] [--wire1|--wire2] [soft_play.sh]\n"
             "  forwards key bytes to Soft, blits Soft SNAP blocks.\n"
-            "  --final draws only the last frame (headless/CI).\n",
+            "  --final draws only the last frame (headless/CI).\n"
+            "  --wire2 offers SNAP v2 (changed rows only); --wire1 keeps v1.\n",
             a0);
 }
 
 int main(int argc, char **argv) {
     const char *script = "scripts/soft_play.sh";
-    int mode = -1, final_only = 0, stats = 0;
+    int mode = -1, final_only = 0, stats = 0, wire = 1, asks = 0;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--ansi") == 0) mode = 1;
         else if (strcmp(argv[i], "--plain") == 0) mode = 0;
         else if (strcmp(argv[i], "--final") == 0) final_only = 1;
         else if (strcmp(argv[i], "--stats") == 0) stats = 1;
+        else if (strcmp(argv[i], "--wire2") == 0) wire = 2;
+        else if (strcmp(argv[i], "--wire1") == 0) wire = 1;
         else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             usage(argv[0]);
             return 0;
@@ -111,6 +118,10 @@ int main(int argc, char **argv) {
         return 1;
     }
     term_raw();
+    if (wire == 2 && write(to, "WIRE 2\n", 7) != 7) {
+        close(to);
+        to = -1;
+    }
 
     char line[PAD_MAX_COLS + 64];
     size_t ln = 0;
@@ -177,6 +188,12 @@ int main(int argc, char **argv) {
                     have_prev = 1;
                     /* rd.last still owns its own copies; we duplicated. */
                 }
+                if (rd.need_full && to >= 0) { /* rebuild failed: ask, never guess */
+                    rd.need_full = 0;
+                    rd.asked = 1;
+                    asks++;
+                    if (write(to, "WIRE 2 FULL\n", 12) != 12) { close(to); to = -1; }
+                }
                 ln = 0;
                 overflow = 0;
             }
@@ -193,8 +210,9 @@ int main(int argc, char **argv) {
     if (ok && final_only)
         pad_blit(stdout, &rd.last, mode);
     if (stats && ok)
-        fprintf(stderr, "PAD_C_PLAY keys=%d snaps=%d rejected=%d cursor=%d:%d\n",
-                keys, rd.accepted, rd.rejected, rd.last.cur_line, rd.last.cur_col);
+        fprintf(stderr, "PAD_C_PLAY keys=%d snaps=%d rejected=%d cursor=%d:%d wire=%d v2=%d v2_rows=%d asks=%d\n",
+                keys, rd.accepted, rd.rejected, rd.last.cur_line, rd.last.cur_col, wire,
+                rd.v2, rd.v2_rows, asks);
     if (!ok)
         fprintf(stderr, "pad_play: Soft sent no accepted snapshot\n");
     pad_reader_free(&rd);

@@ -106,8 +106,8 @@ int main(int argc, char **argv) {
             fclose(fp);
         pad_reader_free(&rd);
         if (stats)
-            fprintf(stderr, "PAD_C_REPLAY frames=%d mode=%s\n", frames,
-                    replay == 2 ? "full" : "diff");
+            fprintf(stderr, "PAD_C_REPLAY frames=%d mode=%s rejected=%d v2=%d v2_rows=%d\n",
+                    frames, replay == 2 ? "full" : "diff", rd.rejected, rd.v2, rd.v2_rows);
         return frames > 0 ? 0 : 1;
     }
     int ok = pad_reader_file(&rd, fp);
