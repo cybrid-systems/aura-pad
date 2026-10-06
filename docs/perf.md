@@ -26,7 +26,7 @@ is this tree. Numbers are µs per key on the twelve-row page from
 | enter / join | 32 000–36 500 | **5 400–7 300** |
 | command only (gate + apply) | 9 300–9 600 | **620–650** |
 | type inside an open string | 217 000–223 000 | **3 400–3 750** |
-| open + close a string (avg per key) | 158 000–159 000 | **13 700–13 900** (first open ~24 000) |
+| open + close a string (avg per key) | 158 000–159 000 | **6 500** (first open 24 000 → **7 000–9 300**, close after it 14 000 → **5 600–7 000**; `perf-emacs.md` rows 7–8) |
 | one Soft call (floor) | 270–390 | 260 |
 
 `perf.aura` gates: small page insert / cursor 39 / 18 → **4–5 / 3 ms**;
@@ -41,12 +41,15 @@ What changed:
 - `try_window_id` row reuse with shifts;
 - jit-lock fontify of the changed line only, in one inline pass that resumes after the unchanged prefix;
 - a syntax-ppss start state per line (replaces the whole-page fallback);
-- old-row reuse across a string open/close.
+- old-row reuse across a string open/close (per-row alt memo, tail memo);
+- a region walk below a one-row edit that stops at the first row whose
+  start state and carry match (jit-lock-context).
 
 Where an insert's ~3.6 ms goes now: ~4 Soft calls (~1.1 ms), re-lexing
 the row tail (~0.5 ms), and ~5 µs primitives for the rest. Gate:
 `PAD_PERF_EMACS_OK` needs every fast path equal to its reference or
-oracle (30 checks), and insert and cursor < 16 ms.
+oracle (43 checks), and insert, cursor, the first string open and the
+close after it all < 16 ms.
 
 The sections below are the M6/M7 history, kept for the record.
 
@@ -89,12 +92,15 @@ Gates: small page insert/cursor < 50 → `PAD_PERF_OK`; twelve-row insert
 wall-clock retry is allowed and reported (`attempt=2`); two misses fail.
 Ideal interactive feel is ≪ 16 ms (60 fps). With the Emacs ports, both
 insert and cursor are there (`PAD_PERF_EMACS_OK`). Opening a string above
-many rows is the one key still over a frame (~24 ms).
+many rows is under a frame too since the region walk (~7–9 ms, was ~24 ms;
+the close after it ~6–7 ms, was ~14 ms), and `emacs_test` gates both.
 
 Versus vi / Emacs: we do **not** claim to be faster. Those editors spend
 well under a millisecond of editor time on pages like these. Aura Pad's
-Soft key path is now ~1.3–4 ms. We have not measured vi/Emacs with the
-same harness. "Feels faster than vi/Emacs" stays the north star; the
+Soft key path is now ~1.3–4 ms. Measured with one pty harness on this
+box (`scripts/bench_editors.sh`, `perf-emacs.md`): vim 0.2–0.5 ms and
+Emacs 0.5–1 ms per key versus aura-pad 7–12 ms end to end, so they are
+10–30× faster. "Feels faster than vi/Emacs" stays the north star; the
 measured Soft floor is below.
 
 ## Aura `c69e644`: #4343 closed, but the per-key time did not drop
@@ -186,6 +192,7 @@ insert toward the 16 ms ideal without changing pad edit logic.
 try_window_id、jit-lock 只重染改动的行、syntax-ppss 行首状态）移植到
 Soft 后（见 perf-emacs.md），12 行页面插入 **~33 → ~3.6 ms**，光标
 **~13 → ~1.3 ms**，只跑命令 **~9.5 → ~0.6 ms**，在未闭合字符串里打字
-**~220 → ~3.5 ms**。插入和光标都在一帧（16 ms）以内；唯一还超过一帧的
-是在多行上方打开字符串（~24 ms）。剩下的地板是 Soft 每次调用约
+**~220 → ~3.5 ms**。插入和光标都在一帧（16 ms）以内；在多行上方打开字符串
+也从 ~24 ms 降到 ~7–9 ms，随后闭合 ~14 → ~6–7 ms（逐行区域遍历，遇到
+状态一致的行即停）。剩下的地板是 Soft 每次调用约
 0.26 ms（#4350）。我们**不声称比 vi/Emacs 快**。
