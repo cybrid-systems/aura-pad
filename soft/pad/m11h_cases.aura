@@ -1,0 +1,103 @@
+;; aura-pad M11h test cases (the helper repairs its own idea with
+;; intend), loaded by m11_test.aura after m11g_cases.aura (m11:run-all
+;; calls these sections). Uses *m11-goal* from m11f_cases.aura. Prints T
+;; lines and M11H_ACC n OK. Soft reserved: never bind quote.
+
+(define *m11-fx-first* (list (list "hello" "(lambda (x) (+ x 3))")))
+(define *m11-fx-arity* (list (list "bye" "(lambda (y) (hello y y))")))
+(define *m11-fx-good* (list (list "hello" "(lambda (x) (* x 2))")))
+(define *m11-fx-far* (list (list "greet" "(lambda (n) (add n 5))")))
+(define *m11-fx-locked* (list (list "hello" "(lambda (x) (display x))")))
+(define *m11-fx-errs* (list))
+
+;; The helper's fixer reads aura's / the checks' sentence.
+(define (m11:fx-fixer ops err)
+  (set! *m11-fx-errs* (cons err *m11-fx-errs*))
+  (cond
+    ((string-prefix? err "passes 2") *m11-fx-arity*)
+    ((string-contains? err "things") *m11-fx-good*)
+    ((string-prefix? err "passes 0") *m11-fx-locked*)
+    (#t (list))))
+
+(define (m11:fx-out! r)
+  (newline) (display (car r)) (display " fix say=\"") (display (cadr r)) (display "\"") (newline)
+  (display (pad:fx-line *fx-last*)) (newline)
+  r)
+
+(define (m11:sec-h1)
+  ;; 1. Try 1 passes 2 of 3 checks, try 2 is refused by aura (kid
+  ;;    reason), try 3 passes all: aura's intend timeline == the Soft
+  ;;    log, the page and root code do not move during the tries, the
+  ;;    fix comes back as one robot KEEP; ctrl-z takes it back.
+  (m11:acc-begin!)
+  (m11:fresh!)
+  (set! *m11-fx-errs* (list))
+  (let* ((code0 (pad:q-code))
+         (L0 (pad:es-L *pl-st*))
+         (u0 (length *robot-undo*))
+         (r (m11:fx-out! (pad:fx-run! "helper" "pass my 3 checks" *m11-goal* *m11-fx-first*
+                                      m11:fx-fixer "closer"))))
+    (m11:expect-str "H1_TAG" (car r) "FIXED")
+    (m11:expect-str "H1_VERDICT" (caddr r) "agree")
+    (m11:expect-str "H1_STATUS" (caddr *fx-last*) "ok")
+    (m11:expect-str "H1_STRIP" (cadr *fx-last*)
+                    "try 1: passes 2 of 3 checks | try 2: the helper's bye gives hello 2 things, it wants 1 | try 3: ok")
+    (m11:expect-str "H1_SAY" *pl-say*
+                    "the helper fixed it on try 3 (try 1: passes 2 of 3 checks | try 2: the helper's bye gives hello 2 things, it wants 1 | try 3: ok), kept it. ctrl-z takes it back")
+    (m11:expect "H1_FIXER_SAW" (length *m11-fx-errs*) 2)
+    (m11:expect-str "H1_FIXER_ERR1" (list-ref *m11-fx-errs* 1) "passes 2 of 3 checks")
+    (m11:expect-true "H1_HIST_RAW" (string-contains? (intend-history) "attempt_3:success"))
+    (m11:expect "H1_ROOT_CURRENT" (workspace :current) 0)
+    (m11:expect "H1_HELLO_ROOT" (hello 3) 6)
+    (m11:expect "H1_BYE_ROOT" (bye 2) 4)
+    (m11:expect-str "H1_ROW0" (m11:row-src 0) "(define hello (lambda (x) (* x 2)))")
+    (m11:expect "H1_ONE_UNDO" (- (length *robot-undo*) u0) 1)
+    (m11:expect-str "H1_WHO0" (car (pad:who-ask!))
+                    (string-append "WHO who=helper why=closer (try 3) gen="
+                                   (number->string (caddr (pad:who-stamp-of 0)))))
+    (m11:keys! (list "IN 26"))
+    (m11:expect-true "H1_UNDO_CODE" (string=? (pad:q-code) code0))
+    (m11:expect-true "H1_UNDO_PAGE" (eq? (pad:es-L *pl-st*) L0))
+    (m11:expect "H1_UNDO_HELLO" (hello 3) 4)
+    (m11:expect "H1_NO_DISAGREE" *fx-disagree* 0))
+  (m11:acc-end! "M11H" 1)
+  #t)
+
+(define (m11:sec-h2)
+  ;; 2. The helper never gets there: a far idea, then a locked word (the
+  ;;    gate, no world), then no new idea. intend says failed, nothing
+  ;;    changed, no undo entry; root bindings are root's (aura#4368 heal).
+  (m11:acc-begin!)
+  (m11:fresh!)
+  (set! *m11-fx-errs* (list))
+  (let* ((code0 (pad:q-code))
+         (L0 (pad:es-L *pl-st*))
+         (u0 (length *robot-undo*))
+         (r (m11:fx-out! (pad:fx-run! "helper" "pass my 3 checks" *m11-goal* *m11-fx-far*
+                                      m11:fx-fixer "bigger"))))
+    (m11:expect-str "H2_TAG" (car r) "GAVEUP")
+    (m11:expect-str "H2_VERDICT" (caddr r) "agree")
+    (m11:expect-str "H2_STATUS" (caddr *fx-last*) "failed")
+    (m11:expect-str "H2_STRIP" (cadr *fx-last*)
+                    "try 1: passes 0 of 3 checks | try 2: that change uses a word the pad keeps locked | try 3: the helper had no new idea")
+    (m11:expect-str "H2_SAY" *pl-say*
+                    "the helper tried 3 times and never passed all 3 checks (best 0 of 3), nothing changed")
+    (m11:expect-true "H2_CODE_SAME" (string=? (pad:q-code) code0))
+    (m11:expect-true "H2_PAGE_SAME" (eq? (pad:es-L *pl-st*) L0))
+    (m11:expect "H2_NO_UNDO" (- (length *robot-undo*) u0) 0)
+    (m11:expect "H2_GREET_ROOT" (greet 1) 2)
+    (m11:expect "H2_HELLO_ROOT" (hello 3) 4)
+    (m11:expect "H2_ROOT_CURRENT" (workspace :current) 0)
+    (m11:expect "H2_NO_DISAGREE" *fx-disagree* 0))
+  ;; a page that already passes: intend is not called
+  (let* ((runs0 *fx-runs*)
+         (h0 (intend-history))
+         (r (pad:fx-run! "helper" "two checks"
+                         (list (list "greet 1 is 2" (lambda () (greet 1)) 2)
+                               (list "hello 3 is 4" (lambda () (hello 3)) 4))
+                         *m11-fx-first* m11:fx-fixer "closer")))
+    (m11:expect-str "H2_ALREADY" (car r) "ALREADY")
+    (m11:expect-str "H2_ALREADY_SAY" *pl-say* "your page already passes all 2 checks")
+    (m11:expect-true "H2_ALREADY_NO_INTEND" (string=? (intend-history) h0)))
+  (m11:acc-end! "M11H" 2)
+  #t)

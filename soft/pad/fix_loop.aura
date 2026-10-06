@@ -1,0 +1,216 @@
+;; aura-pad M11h -- the helper repairs its own idea with intend.
+;; The kid has a goal (checks like "hello 3 is 6", M11f). The helper
+;; brings one idea and a fixer. Aura's own loop manager runs it:
+;;   (intend goal gen verify fix max)
+;; gen    -> the helper's first idea, as a string (one "name=(lambda ...)"
+;;           per line)
+;; verify -> "#t" when the idea passes every check, else a kid sentence
+;;           ("passes 1 of 3 checks", or aura's / the gate's reason).
+;;           The verifier never evals generated code (aura#4359): the
+;;           idea goes into a child world by one typed-mutate-atomic
+;;           (pad:world-run1, world.aura), the checks run there, root is
+;;           healed after (aura#4368). A refused idea gets why.aura's
+;;           sentence (replayed in root, then healed).
+;; fix    -> the helper's next idea, given the last idea and that sentence.
+;; intend passes its strings in reused slots (aura#4370), so the pad
+;; copies them before anything keeps them.
+;; intend-history is aura's own timeline ("attempt_1:passes 1 of 3
+;; checks", "attempt_2:success"); the pad shows it as "try 1: passes 1 of
+;; 3 checks | try 2: ok" and checks it against Soft's own log of the
+;; verifier calls (M11_FIX_DISAGREE on a mismatch). A passing idea comes
+;; back as one robot KEEP (robot.aura: ctrl-z, who stamps, time step).
+;; Notebook face only, at human speed; nothing on play.aura's key path.
+;; Loaded after world.aura. Soft reserved: never bind quote.
+
+(define *fx-max* 3)
+(define *fx-runs* 0)
+(define *fx-kept* 0)
+(define *fx-disagree* 0)
+(define *fx-log* (list))    ; Soft log of verifier calls, newest first: (ops text score)
+(define *fx-last* #f)       ; (tag tries-strip intend-status verdict base best)
+(define *fx-ctx* #f)        ; (who goal code0 snap why) while a run is going
+
+;; --- proposal <-> string (intend passes strings) ---
+(define (pad:fx-enc ops)
+  (cond
+    ((null? ops) "")
+    ((null? (cdr ops)) (string-append (car (car ops)) "=" (cadr (car ops))))
+    (#t (string-append (car (car ops)) "=" (cadr (car ops)) "\n" (pad:fx-enc (cdr ops))))))
+(define (pad:fx-dec-line s)
+  (let ((k (pad:why-find s "=" 0)))
+    (if (<= k 0) #f (list (substring s 0 k) (substring s (+ k 1) (string-length s))))))
+(define (pad:fx-dec-all xs)
+  (cond
+    ((null? xs) (list))
+    ((string=? (car xs) "") (pad:fx-dec-all (cdr xs)))
+    (#t (let ((op (pad:fx-dec-line (car xs))))
+          (if op (cons op (pad:fx-dec-all (cdr xs))) (pad:fx-dec-all (cdr xs)))))))
+(define (pad:fx-dec s)
+  (if (string? s) (pad:fx-dec-all (string-split s "\n")) (list)))
+
+;; --- the verifier: child world, checks, kid sentence ---
+(define (pad:fx-verify code)
+  (let* ((who (car *fx-ctx*))
+         (goal (cadr *fx-ctx*))
+         (code0 (caddr *fx-ctx*))
+         (snap (pad:nth *fx-ctx* 3))
+         (why (pad:nth *fx-ctx* 4))
+         (ops (pad:fx-dec (string-append code "")))
+         (n (length goal))
+         (t (if (null? ops)
+                (list 0 "gate" -1 (list) (list) "" why ops)
+                (pad:world-run1 (+ (length *fx-log*) 1) who why ops goal code0 snap)))
+         (st (pad:nth t 1))
+         (score (pad:nth t 2))
+         (text (cond
+                 ((null? ops) "the helper gave no change")
+                 ((string=? st "gate") (pad:robot-say (pad:robot-gate who ops)))
+                 ((string=? st "refused") (pad:fx-refused-why who ops why snap))
+                 ((string=? st "no-world") "aura had no room for a try")
+                 ((= score n) "#t")
+                 (#t (string-append "passes " (pad:world-n-of score n) " checks")))))
+    (set! *fx-log* (cons (list ops text score) *fx-log*))
+    text))
+;; The fixer's next idea as a string. No idea -> "" (intend logs
+;; "empty from fixer" and does not call the verifier; Soft logs it too).
+;; intend hands code / err in reused string slots (aura#4370): copy first.
+(define (pad:fx-fix fixer code err)
+  (let ((ops (fixer (pad:fx-dec (string-append code "")) (string-append err ""))))
+    (if (and (pair? ops) (pair? (pad:fx-dec (pad:fx-enc ops))))
+        (pad:fx-enc ops)
+        (begin
+          (set! *fx-log* (cons (list (list) "empty from fixer" -1) *fx-log*))
+          ""))))
+;; why.aura's sentence for an idea aura refused (replayed in root, healed).
+(define (pad:fx-refused-why who ops why snap)
+  (let ((w (pad:why-probe! who ops why)))
+    (pad:robot-heal! snap)
+    (if (and (pair? w) (string? (pad:nth w 3))) (pad:nth w 3) "aura said no")))
+
+;; --- intend-history -> ((i text) ...) for the attempt lines ---
+(define (pad:fx-hist-lines s)
+  (if (string? s) (pad:fx-hist-parse (string-split s "\n")) (list)))
+(define (pad:fx-hist-parse xs)
+  (if (null? xs)
+      (list)
+      (let* ((x (car xs))
+             (k (pad:why-find x ":attempt_" 0)))
+        (if (< k 0)
+            (pad:fx-hist-parse (cdr xs))
+            (let* ((rest (substring x (+ k 9) (string-length x)))
+                   (c (pad:why-find rest ":" 0)))
+              (if (< c 0)
+                  (pad:fx-hist-parse (cdr xs))
+                  (cons (list (string->number (substring rest 0 c))
+                              (substring rest (+ c 1) (string-length rest)))
+                        (pad:fx-hist-parse (cdr xs)))))))))
+;; aura's "success" is the verifier's "#t"
+(define (pad:fx-same-log? hs ls)
+  (cond
+    ((and (null? hs) (null? ls)) #t)
+    ((or (null? hs) (null? ls)) #f)
+    ((string=? (cadr (car hs)) (if (string=? (cadr (car ls)) "#t") "success" (cadr (car ls))))
+     (pad:fx-same-log? (cdr hs) (cdr ls)))
+    (#t #f)))
+(define (pad:fx-try-word h)
+  (string-append "try " (number->string (car h)) ": "
+                 (cond
+                   ((string=? (cadr h) "success") "ok")
+                   ((string-prefix? (cadr h) "empty from ") "the helper had no new idea")
+                   (#t (cadr h)))))
+(define (pad:fx-strip hs)
+  (cond
+    ((null? hs) "")
+    ((null? (cdr hs)) (pad:fx-try-word (car hs)))
+    (#t (string-append (pad:fx-try-word (car hs)) " | " (pad:fx-strip (cdr hs))))))
+
+;; "#(status:\"ok\" ...)" -> "ok" | "failed" | "?"
+(define (pad:fx-status r)
+  (cond
+    ((not (string? r)) "?")
+    ((string-contains? r "status:\"ok\"") "ok")
+    ((string-contains? r "status:\"failed\"") "failed")
+    (#t "?")))
+
+(define (pad:fx-best ls best)
+  (cond
+    ((null? ls) best)
+    ((> (caddr (car ls)) best) (pad:fx-best (cdr ls) (caddr (car ls))))
+    (#t (pad:fx-best (cdr ls) best))))
+
+;; One repair run. gen-ops: the helper's first idea (ops); fixer:
+;; (lambda (ops kid-sentence) -> next ops, or (list) for none).
+;; Returns (tag say verdict) and shows say in the say line.
+;; tag: FIXED | GAVEUP | ALREADY.
+(define (pad:fx-run! who goal-name goal gen-ops fixer why)
+  (if *robot-pending* (pad:robot-drop!) #f)
+  (pad:who-sync! "kid" "typed" *who-gen*)
+  (set! *fx-runs* (+ *fx-runs* 1))
+  (let* ((n (length goal))
+         (base (pad:world-score goal)))
+    (if (= base n)
+        (let ((say (string-append "your page already passes all " (number->string n) " checks")))
+          (set! *fx-last* (list "ALREADY" "" "none" "agree" base base))
+          (set! *pl-say* say)
+          (list "ALREADY" say "agree"))
+        (let* ((L0 (pad:es-L *pl-st*))
+               (code0 (pad:q-code))
+               (snap (ast:snapshot "fix")))
+          (set! *fx-ctx* (list who goal code0 snap why))
+          (set! *fx-log* (list))
+          (let* ((r (try (intend goal-name
+                                 (lambda (g) (pad:fx-enc gen-ops))
+                                 (lambda (code) (pad:fx-verify code))
+                                 (lambda (code err g) (pad:fx-fix fixer code err))
+                                 *fx-max*)
+                         (catch (e) #f)))
+                 (status (pad:fx-status r))
+                 (hs (pad:fx-hist-lines (try (intend-history) (catch (e) ""))))
+                 (log (reverse *fx-log*))
+                 (same (and (eq? (pad:es-L *pl-st*) L0) (string=? (pad:q-code) code0)))
+                 (log-ok (pad:fx-same-log? hs log))
+                 (win (if (and (pair? *fx-log*) (string=? (cadr (car *fx-log*)) "#t")) (car *fx-log*) #f))
+                 (status-ok (string=? status (if win "ok" "failed")))
+                 (k (if win (pad:robot-step! who (car win) (string-append why " (try "
+                                                                         (number->string (length log)) ")"))
+                        (list "NONE" "" "")))
+                 (keep-ok (or (not win)
+                              (and (string=? (car k) "KEEP") (= (pad:world-score goal) n))))
+                 (v (if (and same log-ok status-ok keep-ok) "agree" "disagree"))
+                 (best (pad:fx-best log 0))
+                 (strip (pad:fx-strip hs))
+                 (say (cond
+                        ((and win (not (string=? (car k) "KEEP"))) (pad:nth k 2))
+                        (win (string-append "the " who " fixed it on try " (number->string (length log))
+                                            " (" strip "), kept it. ctrl-z takes it back"))
+                        (#t (string-append "the " who " tried " (number->string (length log))
+                                           " times and never passed all " (number->string n)
+                                           " checks (best " (pad:world-n-of best n)
+                                           "), nothing changed")))))
+            (set! *fx-ctx* #f)
+            (if (and win (string=? (car k) "KEEP")) (set! *fx-kept* (+ *fx-kept* 1)) #f)
+            (set! *fx-last* (list (if win "FIXED" "GAVEUP") strip status v base best))
+            (if (string=? v "disagree")
+                (begin
+                  (set! *fx-disagree* (+ *fx-disagree* 1))
+                  (newline) (display "M11_FIX_DISAGREE ") (display (pad:fx-line *fx-last*))
+                  (display " same=") (display (pad:who-bool same))
+                  (display " log=") (display (pad:who-bool log-ok))
+                  (display " status=") (display (pad:who-bool status-ok))
+                  (display " keep=") (display (pad:who-bool keep-ok)) (newline))
+                #f)
+            (set! *pl-say* say)
+            (list (car *fx-last*) say v))))))
+
+;; FIX tag=FIXED status=ok base=1 best=3 verdict=agree tries=try 1: ... | try 2: ok
+(define (pad:fx-line x)
+  (if (not x)
+      "FIX none"
+      (string-append "FIX tag=" (car x) " status=" (caddr x)
+                     " base=" (number->string (pad:nth x 4)) " best=" (number->string (pad:nth x 5))
+                     " verdict=" (pad:nth x 3) " tries=" (cadr x))))
+
+(define (pad:fx-stats-str)
+  (string-append "fix_runs=" (number->string *fx-runs*)
+                 " fix_kept=" (number->string *fx-kept*)
+                 " fix_disagree=" (number->string *fx-disagree*)))
