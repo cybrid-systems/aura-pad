@@ -79,9 +79,12 @@
     ((null? (cdr L)) (pad:ws-row-src (car L)))
     (#t (string-append (pad:ws-row-src (car L)) " " (pad:ws-rows-src (cdr L))))))
 
+;; The trailing #t keeps the program's value off a pair: deserialize-workspace
+;; reads a pair-valued eval-current as failure and skips the change log
+;; (aura#4366), and the rows define would be the last value (M11e open).
 (define (pad:ws-source L)
   (string-append (pad:v-src L) "\n(define " *ws-row-tag* " (list "
-                 (pad:ws-rows-src L) "))\n"))
+                 (pad:ws-rows-src L) "))\n#t\n"))
 
 ;; set-code + eval-current only. Returns "ok", "gap" or "fail".
 (define (pad:ws-load! L)
