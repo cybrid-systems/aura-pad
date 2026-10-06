@@ -10,6 +10,7 @@ invents a replacement API for any of them.
 
 | Aura issue | What is wrong | Pad rule until it lands |
 |------------|---------------|-------------------------|
+| [aura#4369](https://github.com/cybrid-systems/aura/issues/4369) | A child workspace's `mutate:rebind` leaks into root's procedure bindings even without a child `eval-current`; after `workspace:delete` of that child, calling the binding in root segfaults (`workspace:discard`: hangs), and in a create / mutate / heal / delete loop the next `:switch` hits a vector assert | M11f keeps its children (never `workspace:delete` / `workspace:discard`, which only resets a child) and heals root after every idea (#4368) |
 | [aura#4368](https://github.com/cybrid-systems/aura/issues/4368) | Child workspaces share the top-level Soft bindings: after a child `workspace :create` + `:switch` + `eval-current` + rebind, `workspace :switch 0` + root `eval-current` keeps the child's bindings (root `(hello 3)` runs the child's body) although root `query:code` is unchanged | M11f heals root after every idea with `ast:restore` of a root snapshot + one `eval-current` (`pad:world-home!`, `world.aura`); the winner comes back by rebind, never `workspace :merge` |
 | [aura#4367](https://github.com/cybrid-systems/aura/issues/4367) | After `deserialize-workspace` the tree is renumbered (a rebind changed a body's size), but the restored log's `target=` and `query:node-provenance` keep the old node ids: moved defines read "nobody", kept ids keep old provenance by coincidence. The mutation id counter is not restored either | M11e never joins the reopened log to a define by node id: who comes from the row's pad stamp, confirmed by a reopened rebind record whose `sum=` is the stamp's why; old vs new is decided by author fingerprint, not by id (`pad:time-eng-of`, `time.aura`) |
 | [aura#4366](https://github.com/cybrid-systems/aura/issues/4366) | `deserialize-workspace` returns `#f` and skips the mutation-log restore when the reloaded program's value is a pair (it reads a list result of `eval-current` as a `set-code` parse error). The code is already swapped in, so the workspace is half restored | The notebook source ends with a trailing `#t` form (`pad:ws-source`, `ws.aura`), so the program's value is never a pair and an M11e open gets its log back |
@@ -96,7 +97,7 @@ Capability round: filed #4357 (relower/rebind) and #4358 (stdin poll),
 and commented on #4356 (fiber-safe hand-back channel). The pad switches
 the poll path on by itself when `char-ready?` appears.
 
-## M11a–f — Aura-unique features (done)
+## M11a–g — Aura-unique features (done)
 
 [`m11.md`](m11.md), from the ranked list in [`aura-vs-rust.md`](aura-vs-rust.md).
 M11a "undo the robot" is done (`PAD_M11_UNDO_OK`): one AI proposal is one
@@ -115,7 +116,15 @@ book saves with `serialize-workspace` and reopens with its story and who
 M11f sandbox worlds is done (`PAD_M11_WORLD_OK`): each AI idea is tried in
 its own child world (`workspace :create` / `:switch`), scored on the kid's
 goal there, and only an idea that beats the page comes back, by rebind
-(filed #4368: root bindings stay the child's until `ast:restore`).
+(filed #4368: root bindings stay the child's until `ast:restore`). The
+children stay listed: `workspace:discard` only resets a child (documented),
+and `workspace:delete` after a leaked rebind crashes (filed #4369).
+M11g the kid changes editor rules live is done (`PAD_M11_RULES_OK`): rules
+are page defines (`(tab-size)`, `(say-max)`); "tab 4" passes a Soft rule
+gate with kid words, is one `typed-mutate-atomic` under fingerprint kid=1,
+lands as a robot KEEP (ctrl-z, who stamps, time-machine step) and is
+verified by calling the live rule (a helper's out-of-range body is undone
+at once).
 
 ## M11 — aura notebook
 
