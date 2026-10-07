@@ -58,6 +58,8 @@
   0)
 
 ;; --- keymap: byte -> command word, char code, "pending" or "unknown" ---
+;; Modeless map (PAD_VI unset or 0). aura-pad sets PAD_VI=1 and vi.aura
+;; then owns the bytes: ctrl-b/f/p/n move, normal / insert like evil.
 (define *keymap*
   (list (list 1 "home") (list 5 "end") (list 11 "kill-line")
         (list 25 "yank") (list 31 "undo") (list 21 "undo")
@@ -97,6 +99,7 @@
 (define (pad:play-say reason)
   (cond
     ((string=? reason "unknown") "that key does nothing yet")
+    ((string=? reason "normal-key") "press i to type")
     ((string=? reason "not-print") "that letter is not on the pad yet")
     ((string=? reason "need-space") "this line is full")
     (#t (let ((j (pad:kid-say-jump reason)))

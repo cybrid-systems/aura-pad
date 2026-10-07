@@ -132,6 +132,12 @@
                                             (pad:pf-lines (length (car *pl-st*))) ")"))
               "saved")
             (begin
+              ;; stdout, outside the SNAP block, so the C viewport can
+              ;; copy it into the rotating error log. Not "error:" —
+              ;; the smokes treat that word as a Soft crash.
+              (display "ERR could not save ")
+              (display *pf-name*)
+              (newline)
               (set! *pl-say* (string-append "could not save " *pf-name* " - is the folder there?"))
               "fail")))))
 

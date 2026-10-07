@@ -87,6 +87,14 @@ else
 fi
 view() { "${CRUN[@]}" "$VIEW" "$@"; }
 
+echo "smoke_c: error log rotation"
+if [[ "$HOSTPLAY" == 1 ]]; then
+  "$ROOT/out/c/errlog_test"
+else
+  "${CRUN[@]}" /workspace/aura-pad/out/c/errlog_test
+fi
+echo "smoke_c: ERRLOG_OK"
+
 # Thin guard: the viewport must not know editor commands, HL words, kid
 # words, or key meanings. Those live in Soft (edit/hl/jump/keys.aura).
 if grep -nE '"(define|lambda|query:|mutate:|left|right|home|end|back|undo|yank|enter|quit|goto-def|jump-back|find-refs|kill-line|open-line|prev-line|next-line)"' \

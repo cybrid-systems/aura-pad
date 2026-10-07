@@ -32,9 +32,11 @@ fi
 build() { # $1 = root, then compiler prefix words...
   local root="$1"; shift
   "$@" cc "${FLAGS[@]}" "$root/c/snap.c" "$root/c/pad_view.c" -o "$root/out/c/pad_view"
-  "$@" cc "${FLAGS[@]}" "$root/c/snap.c" "$root/c/play_loop.c" "$root/c/pad_play.c" -o "$root/out/c/pad_play"
-  "$@" cc "${FLAGS[@]}" "${SHARE_DEF[@]}" "$root/c/snap.c" "$root/c/play_loop.c" "$root/c/aura_pad.c" \
-    -o "$root/out/c/aura-pad"
+  "$@" cc "${FLAGS[@]}" "$root/c/snap.c" "$root/c/errlog.c" "$root/c/play_loop.c" "$root/c/pad_play.c" \
+    -o "$root/out/c/pad_play"
+  "$@" cc "${FLAGS[@]}" "${SHARE_DEF[@]}" "$root/c/snap.c" "$root/c/errlog.c" "$root/c/play_loop.c" \
+    "$root/c/aura_pad.c" -o "$root/out/c/aura-pad"
+  "$@" cc "${FLAGS[@]}" "$root/c/errlog.c" "$root/c/errlog_test.c" -o "$root/out/c/errlog_test"
 }
 if [[ "${PAD_C_DOCKER:-0}" != "1" ]] && command -v cc >/dev/null 2>&1; then
   build "$ROOT" env

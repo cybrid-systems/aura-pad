@@ -9,6 +9,32 @@
 ;; mark helper. Optional DIRTY line=<csv> when the caller knows which
 ;; rows changed (C may redraw only those; full rows still sent).
 ;; Soft reserved: never bind quote.
+;;
+;; std/string builds string-join and string-contains? with while + set!
+;; inside a define. On this Aura the predicate keeps seeing the old
+;; binding, so two or more pieces never return (cybrid-systems/aura#4372).
+;; Same answers here, by recursion (every argument is a parameter; no
+;; captured local). string-split / string-trim / string-replace still
+;; hang if something calls them.
+
+(define (string-join xs sep)
+  (if (null? xs)
+      ""
+      (let loop ((xs (cdr xs)) (acc (car xs)) (sep sep))
+        (if (null? xs)
+            acc
+            (loop (cdr xs) (string-append acc sep (car xs)) sep)))))
+
+(define (pad:str-has hay needle hlen nlen i)
+  (if (> i (- hlen nlen))
+      #f
+      (if (string=? (substring hay i (+ i nlen)) needle)
+          #t
+          (pad:str-has hay needle hlen nlen (+ i 1)))))
+
+(define (string-contains? hay needle)
+  (let ((hlen (string-length hay)) (nlen (string-length needle)))
+    (if (> nlen hlen) #f (pad:str-has hay needle hlen nlen 0))))
 
 (define *view-legend*
   "K=magic-word S=name T=quote C=note N=number P=paren Q=ask M=change d=born-here r=used-here")

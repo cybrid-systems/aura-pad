@@ -61,6 +61,9 @@
 (define *pi-out* (list))
 (define *pi-fast* 0)    ; lines taken by the table fast path
 (define *pi-slow* 0)    ; lines taken byte by byte
+;; vi.aura (PAD_VI=1, aura-pad's default) turns this on and replaces the
+;; three stubs below. Off: this file's keymap path is unchanged.
+(define *vi-on* #f)
 
 ;; M8: KEY goal:... and M10: IN 15 (ctrl-o) on top of keys.aura's
 ;; pad:play-line!. Same contract as keys.aura (returns "ok", "pending",
@@ -124,6 +127,12 @@
                   (#t
                    (if *pi-collect* (set! *pi-out* (cons (pad:play-snap) *pi-out*)) (display (pad:play-snap)))
                    (pi-each (cdr xs))))))))))
+
+;; Stubs. vi.aura redefines these when the editor is modal. Uncalled
+;; while *vi-on* is false, which is every smoke that does not set PAD_VI.
+(define (pad:vi-cmd b) "unknown")
+(define (pad:vi-meta! c) "snap")
+(define (pad:vi-bytes! line) (pad:pi-bytes! line))
 
 ;; A typed char or backspace changed row l only (L2 = new lines, ln2 = new
 ;; row codes, col2 = new column). This is pad:lc-line!'s common case
@@ -194,8 +203,10 @@
          (c (cond
               ((not (and in idle)) #f)
               ((number? b) (if (and (>= b 0) (< b 256) (not (= b 15)))
-                               (let ((t (member b *pi-kb*)))
-                                 (if t (list-ref *pi-kc* (- *pi-kn* (length t))) (pad:pi-key-miss! b)))
+                               (if *vi-on*
+                                   (pad:vi-cmd b)
+                                   (let ((t (member b *pi-kb*)))
+                                     (if t (list-ref *pi-kc* (- *pi-kn* (length t))) (pad:pi-key-miss! b))))
                                #f))
               (#t (let ((t (member line *pi-seq-lines*)))
                     (if t (list-ref *pi-seq-cmds* (- *pi-seq-n* (length t))) #f)))))
@@ -483,8 +494,14 @@
                                    (let ((dm (pad:lc-remark! name l)))
                                      (set! *lc-name* name)
                                      dm)))))))))
+              ;; mode changes are not editor commands. Movement and inserts
+              ;; fall through and use the same paths as the modeless map.
+              ((and *vi-on* (string? c)
+                    (or (string=? c "to-insert") (string=? c "to-normal")
+                        (string=? c "append") (string=? c "normal-key")))
+               (pad:vi-meta! c))
               (fast (if (equal? (pad:play-cmd! c) "quit") "quit" "snap"))
-              (in (pad:pi-bytes! line))
+              (in (if *vi-on* (pad:vi-bytes! line) (pad:pi-bytes! line)))
               (#t
                (let ((r1 (pad:pi-line! line)))
                  (cond

@@ -14,9 +14,11 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "play_loop.h"
+#include "errlog.h"
 #include "snap.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
@@ -33,6 +35,53 @@ static volatile sig_atomic_t g_alt = 0;
 
 static const char ALT_ON[] = "\033[?1049h";
 static const char ALT_OFF[] = "\033[?1049l";
+
+/* Soft's stderr, split into lines. A partial line is flushed when the
+ * pipe closes. Each line is shown and copied into the error log. */
+static char g_ebuf[1024];
+static size_t g_eln = 0;
+
+static void err_flush(const char *name) {
+    if (g_eln == 0)
+        return;
+    g_ebuf[g_eln] = '\0';
+    fprintf(stderr, "%s: %s\n", name, g_ebuf);
+    pad_errlog_msg("soft", g_ebuf);
+    g_eln = 0;
+}
+
+/* 1: read some bytes (call again). 0: nothing more ready, or the pipe
+ * closed (and *errfd is then -1). */
+static int err_read(const PadPlayOpt *o, int *errfd) {
+    char buf[512];
+    ssize_t k, i;
+    if (*errfd < 0)
+        return 0;
+    k = read(*errfd, buf, sizeof buf);
+    if (k < 0) {
+        if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+            return 0;
+        err_flush(o->name);
+        close(*errfd);
+        *errfd = -1;
+        return 0;
+    }
+    if (k == 0) {
+        err_flush(o->name);
+        close(*errfd);
+        *errfd = -1;
+        return 0;
+    }
+    for (i = 0; i < k; i++) {
+        if (buf[i] == '\n' || buf[i] == '\r') {
+            err_flush(o->name);
+            continue;
+        }
+        if (g_eln + 1 < sizeof g_ebuf)
+            g_ebuf[g_eln++] = buf[i];
+    }
+    return 1;
+}
 
 static void term_restore(void) {
     if (g_raw) {
@@ -71,7 +120,7 @@ static void term_raw(int editor_tty) {
         g_raw = 1;
 }
 
-int pad_play_loop(pid_t pid, int to, int from, const PadPlayOpt *o) {
+int pad_play_loop(pid_t pid, int to, int from, int errfd, const PadPlayOpt *o) {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = on_signal;
@@ -89,6 +138,7 @@ int pad_play_loop(pid_t pid, int to, int from, const PadPlayOpt *o) {
     PadReader rd;
     if (!pad_reader_init(&rd)) {
         fprintf(stderr, "%s: out of memory\n", o->name);
+        pad_errlog_msg(o->name, "out of memory");
         return 1;
     }
     if (o->altscreen && o->mode && !o->final_only && isatty(STDOUT_FILENO)) {
@@ -98,7 +148,17 @@ int pad_play_loop(pid_t pid, int to, int from, const PadPlayOpt *o) {
     }
     term_raw(o->editor_tty);
     atexit(term_restore);
+    {
+        const char *lp = getenv("AURA_PAD_LOG");
+        pad_errlog_open(lp && *lp ? lp : NULL, 0, 0);
+    }
+    if (errfd >= 0) {
+        int fl = fcntl(errfd, F_GETFL, 0);
+        if (fl >= 0)
+            fcntl(errfd, F_SETFL, fl | O_NONBLOCK);
+    }
     if (o->wire == 2 && write(to, "WIRE 2\n", 7) != 7) {
+        pad_errlog_msg(o->name, "could not offer the wire version");
         close(to);
         to = -1;
     }
@@ -111,12 +171,32 @@ int pad_play_loop(pid_t pid, int to, int from, const PadPlayOpt *o) {
     prev.dirty_n = -1;
     int have_prev = 0;
     for (;;) {
-        struct pollfd fds[2] = {{from, POLLIN, 0}, {to >= 0 ? STDIN_FILENO : -1, POLLIN, 0}};
-        if (poll(fds, 2, -1) < 0) {
+        struct pollfd fds[3];
+        int nf = 0, ix_from, ix_in = -1, ix_err = -1;
+        fds[nf].fd = from;
+        fds[nf].events = POLLIN;
+        fds[nf].revents = 0;
+        ix_from = nf++;
+        if (to >= 0) {
+            fds[nf].fd = STDIN_FILENO;
+            fds[nf].events = POLLIN;
+            fds[nf].revents = 0;
+            ix_in = nf++;
+        }
+        if (errfd >= 0) {
+            fds[nf].fd = errfd;
+            fds[nf].events = POLLIN;
+            fds[nf].revents = 0;
+            ix_err = nf++;
+        }
+        if (poll(fds, (nfds_t)nf, -1) < 0) {
             if (errno == EINTR) continue;
+            pad_errlog_msg(o->name, "poll failed");
             break;
         }
-        if (fds[1].revents & (POLLIN | POLLHUP)) {
+        if (ix_err >= 0 && (fds[ix_err].revents & (POLLIN | POLLHUP | POLLERR)))
+            err_read(o, &errfd);
+        if (ix_in >= 0 && (fds[ix_in].revents & (POLLIN | POLLHUP))) {
             unsigned char kb[64];
             ssize_t k = read(STDIN_FILENO, kb, sizeof(kb));
             if (k <= 0) {
@@ -133,11 +213,15 @@ int pad_play_loop(pid_t pid, int to, int from, const PadPlayOpt *o) {
                 for (ssize_t i = 0; i < k; i++)
                     m += snprintf(msg + m, sizeof(msg) - (size_t)m, " %u", kb[i]);
                 msg[m++] = '\n';
-                if (write(to, msg, (size_t)m) != m) { close(to); to = -1; }
+                if (write(to, msg, (size_t)m) != m) {
+                    pad_errlog_msg(o->name, "could not send keys to Soft");
+                    close(to);
+                    to = -1;
+                }
                 keys += (int)k;
             }
         }
-        if (fds[0].revents & (POLLIN | POLLHUP)) {
+        if (fds[ix_from].revents & (POLLIN | POLLHUP | POLLERR)) {
             char buf[4096];
             ssize_t k = read(from, buf, sizeof(buf));
             if (k <= 0)
@@ -151,25 +235,41 @@ int pad_play_loop(pid_t pid, int to, int from, const PadPlayOpt *o) {
                 line[ln] = '\0';
                 if (ln > 0 && line[ln - 1] == '\r') line[ln - 1] = '\0';
                 /* an over-long line poisons its block: feed a non-wire line */
-                if (pad_reader_line(&rd, overflow ? "#overflow" : line) && !o->final_only) {
-                    pad_blit_dirty(stdout, have_prev ? &prev : NULL, &rd.last, o->mode);
-                    pad_snap_free(&prev);
-                    /* rd.last owns its row strings and the reader frees
-                     * them on the next block; keep our own copies of the
-                     * rows for the next diff. */
-                    prev = rd.last;
-                    for (int r = 0; r < prev.nrows; r++) {
-                        prev.t[r] = prev.t[r] ? strdup(prev.t[r]) : NULL;
-                        prev.h[r] = prev.h[r] ? strdup(prev.h[r]) : NULL;
-                        prev.m[r] = prev.m[r] ? strdup(prev.m[r]) : NULL;
+                {
+                    int rej0 = rd.rejected;
+                    int drew = pad_reader_line(&rd, overflow ? "#overflow" : line);
+                    if (overflow)
+                        pad_errlog_msg(o->name, "snapshot line too long");
+                    else if (rd.rejected != rej0) {
+                        char note[160];
+                        snprintf(note, sizeof note, "dropped a bad snapshot near: %.80s", line);
+                        pad_errlog_msg(o->name, note);
+                    } else if (!drew && strncmp(line, "ERR ", 4) == 0)
+                        pad_errlog_msg("soft", line);
+                    if (drew && !o->final_only) {
+                        pad_blit_dirty(stdout, have_prev ? &prev : NULL, &rd.last, o->mode);
+                        pad_snap_free(&prev);
+                        /* rd.last owns its row strings and the reader frees
+                         * them on the next block; keep our own copies of the
+                         * rows for the next diff. */
+                        prev = rd.last;
+                        for (int r = 0; r < prev.nrows; r++) {
+                            prev.t[r] = prev.t[r] ? strdup(prev.t[r]) : NULL;
+                            prev.h[r] = prev.h[r] ? strdup(prev.h[r]) : NULL;
+                            prev.m[r] = prev.m[r] ? strdup(prev.m[r]) : NULL;
+                        }
+                        have_prev = 1;
                     }
-                    have_prev = 1;
                 }
                 if (rd.need_full && to >= 0) { /* rebuild failed: ask, never guess */
                     rd.need_full = 0;
                     rd.asked = 1;
                     asks++;
-                    if (write(to, "WIRE 2 FULL\n", 12) != 12) { close(to); to = -1; }
+                    if (write(to, "WIRE 2 FULL\n", 12) != 12) {
+                        pad_errlog_msg(o->name, "could not ask for a full frame");
+                        close(to);
+                        to = -1;
+                    }
                 }
                 ln = 0;
                 overflow = 0;
@@ -179,7 +279,13 @@ int pad_play_loop(pid_t pid, int to, int from, const PadPlayOpt *o) {
     if (to >= 0) close(to);
     close(from);
     int status = 0;
-    waitpid(pid, &status, 0);
+    if (waitpid(pid, &status, 0) < 0)
+        pad_errlog_msg(o->name, "could not wait for Soft");
+    while (errfd >= 0 && err_read(o, &errfd))
+        ;
+    if (errfd >= 0)
+        close(errfd);
+    err_flush(o->name);
     term_restore();
     pad_reader_finish(&rd);
     pad_snap_free(&prev);
@@ -191,8 +297,20 @@ int pad_play_loop(pid_t pid, int to, int from, const PadPlayOpt *o) {
         fprintf(stderr, "PAD_C_PLAY keys=%d snaps=%d rejected=%d cursor=%d:%d wire=%d v2=%d v2_rows=%d asks=%d\n",
                 keys, rd.accepted, rd.rejected, rd.last.cur_line, rd.last.cur_col, o->wire,
                 rd.v2, rd.v2_rows, asks);
-    if (!ok)
+    if (!ok) {
         fprintf(stderr, "%s: Soft sent no accepted snapshot\n", o->name);
+        pad_errlog_msg(o->name, "Soft sent no accepted snapshot");
+    }
+    if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+        char note[64];
+        snprintf(note, sizeof note, "Soft exited %d", WEXITSTATUS(status));
+        pad_errlog_msg(o->name, note);
+    } else if (WIFSIGNALED(status)) {
+        char note[64];
+        snprintf(note, sizeof note, "Soft killed by signal %d", WTERMSIG(status));
+        pad_errlog_msg(o->name, note);
+    }
+    pad_errlog_close();
     pad_reader_free(&rd);
     return ok ? 0 : 1;
 }

@@ -16,6 +16,12 @@ checks what lands in FILE and on the terminal. Scenarios:
            FILE still "pad\\n"
   emergency FILE holds "pad\\n": type "x", ctrl-\\ (SIGQUIT from the tty)
            -> exits 131 at once, FILE still "pad\\n"
+  vi       FILE holds "ab\\ncd\\n": ctrl-f, ctrl-n, i, Z, Esc, x (must not
+           insert), ctrl-x ctrl-s, ctrl-q -> FILE is "ab\\ncZd\\n" and the
+           screen showed normal then insert then normal
+
+Typing in open / new / unsaved / emergency presses i first, because the
+editor starts in vi normal mode.
 
 The pty is the child's controlling terminal, so ctrl-c / ctrl-\\ act as
 they would in a real terminal (aura-pad hands ctrl-c to Soft as a byte).
@@ -43,6 +49,8 @@ def main():
         if os.path.exists(path): os.unlink(path)
     elif scen in ("unsaved", "emergency"):
         open(path, "w").write("pad\n")
+    elif scen == "vi":
+        open(path, "w").write("ab\ncd\n")
     else:
         fail("unknown scenario " + scen)
     m, s = os.openpty()
@@ -90,12 +98,38 @@ def main():
         for ch in s:
             key([ord(ch)])
 
+    def mode_is(want, t=10.0):
+        # The screen log keeps old frames, so the latest badge wins.
+        end = time.time() + t
+        while time.time() < end:
+            n = out.rfind(b"[normal]")
+            i = out.rfind(b"[insert]")
+            got = "normal" if n > i else ("insert" if i >= 0 else "")
+            if got == want:
+                return True
+            if p.poll() is not None:
+                pump(0.3)
+                n = out.rfind(b"[normal]")
+                i = out.rfind(b"[insert]")
+                got = "normal" if n > i else ("insert" if i >= 0 else "")
+                return got == want
+            pump(0.1)
+        return False
+
+    def enter_insert():
+        key([105], 0.4)  # i — aura-pad starts in vi normal mode
+        if not mode_is("insert"):
+            fail("did not enter insert mode", out)
+
     if not wait_for("== aura pad: " + name):
         fail("no first frame with the file name in the title", out)
     pump(0.5)
     if scen == "open":
         if not wait_for("opened " + name):
             fail("no 'opened' say", out)
+        if not mode_is("normal"):
+            fail("did not start in normal mode", out)
+        enter_insert()
         typed("hi")
         key([24]); key([19])
         if not wait_for("saved " + name, 10):
@@ -105,6 +139,7 @@ def main():
     elif scen == "new":
         if not wait_for("new page " + name):
             fail("no 'new page' say", out)
+        enter_insert()
         typed("abc"); key([13]); typed("d")
         key([24]); key([19])
         if not wait_for("saved " + name, 10):
@@ -112,10 +147,27 @@ def main():
         key([24]); key([3], 0.1)
         want = "abc\nd\n"
     elif scen == "emergency":
+        enter_insert()
         typed("x")
         key([28], 0.1)
         want = "pad\n"
+    elif scen == "vi":
+        if not mode_is("normal"):
+            fail("did not start in normal mode", out)
+        key([6]); key([14])          # ctrl-f, ctrl-n
+        enter_insert()
+        key([90])                    # Z
+        key([27], 0.4)               # Esc
+        if not mode_is("normal"):
+            fail("Esc did not return to normal mode", out)
+        key([120])                   # x must not insert in normal mode
+        key([24]); key([19])
+        if not wait_for("saved " + name, 10):
+            fail("no 'saved' say", out)
+        key([17], 0.1)
+        want = "ab\ncZd\n"
     else:
+        enter_insert()
         typed("x")
         key([17])
         if not wait_for("not saved yet", 10):

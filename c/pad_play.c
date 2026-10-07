@@ -8,6 +8,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "play_loop.h"
+#include "errlog.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,24 +16,36 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-static pid_t spawn(const char *script, int *to_fd, int *from_fd) {
-    int in[2], out[2];
-    if (pipe(in) != 0 || pipe(out) != 0)
+static void close2(int p[2]) {
+    if (p[0] >= 0) close(p[0]);
+    if (p[1] >= 0) close(p[1]);
+}
+
+static pid_t spawn(const char *script, int *to_fd, int *from_fd, int *err_fd) {
+    int in[2] = {-1, -1}, out[2] = {-1, -1}, err[2] = {-1, -1};
+    if (pipe(in) != 0 || pipe(out) != 0 || pipe(err) != 0) {
+        close2(in); close2(out); close2(err);
         return -1;
+    }
     pid_t pid = fork();
-    if (pid < 0)
+    if (pid < 0) {
+        close2(in); close2(out); close2(err);
         return -1;
+    }
     if (pid == 0) {
         dup2(in[0], STDIN_FILENO);
         dup2(out[1], STDOUT_FILENO);
-        close(in[0]); close(in[1]); close(out[0]); close(out[1]);
+        dup2(err[1], STDERR_FILENO);
+        close2(in); close2(out); close2(err);
         execlp("bash", "bash", script, (char *)NULL);
         _exit(127);
     }
     close(in[0]);
     close(out[1]);
+    close(err[1]);
     *to_fd = in[1];
     *from_fd = out[0];
+    *err_fd = err[0];
     return pid;
 }
 
@@ -65,11 +78,12 @@ int main(int argc, char **argv) {
     }
     if (o.mode < 0)
         o.mode = isatty(STDOUT_FILENO) && getenv("NO_COLOR") == NULL;
-    int to = -1, from = -1;
-    pid_t pid = spawn(script, &to, &from);
+    int to = -1, from = -1, errfd = -1;
+    pid_t pid = spawn(script, &to, &from, &errfd);
     if (pid < 0) {
         fprintf(stderr, "pad_play: cannot start %s\n", script);
+        pad_errlog_msg("pad_play", "cannot start Soft");
         return 1;
     }
-    return pad_play_loop(pid, to, from, &o);
+    return pad_play_loop(pid, to, from, errfd, &o);
 }

@@ -18,10 +18,12 @@ typedef struct {
 } PadPlayOpt;
 
 /* Runs until the Soft child closes its stdout. to/from are the child's
- * stdin (write end) and stdout (read end); both are closed here, and the
- * child is reaped. Returns the process exit code (0 if Soft sent at
- * least one accepted snapshot). The terminal is restored on return and
- * on SIGINT / SIGQUIT / SIGTERM / SIGHUP. */
-int pad_play_loop(pid_t pid, int to, int from, const PadPlayOpt *o);
+ * stdin (write end) and stdout (read end); errfd is the child's stderr
+ * (-1 if it was not captured). All three are closed here, and the child
+ * is reaped. Returns the process exit code (0 if Soft sent at least one
+ * accepted snapshot). Failures are appended to the rotating error log.
+ * The terminal is restored on return and on SIGINT / SIGQUIT / SIGTERM /
+ * SIGHUP. */
+int pad_play_loop(pid_t pid, int to, int from, int errfd, const PadPlayOpt *o);
 
 #endif

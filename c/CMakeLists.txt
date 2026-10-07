@@ -14,10 +14,10 @@ endif()
 add_executable(pad_view snap.c pad_view.c)
 target_compile_options(pad_view PRIVATE -O2 -Wall -Wextra -pedantic)
 
-add_executable(pad_play snap.c play_loop.c pad_play.c)
+add_executable(pad_play snap.c errlog.c play_loop.c pad_play.c)
 target_compile_options(pad_play PRIVATE -O2 -Wall -Wextra -pedantic)
 
-add_executable(aura-pad snap.c play_loop.c aura_pad.c)
+add_executable(aura-pad snap.c errlog.c play_loop.c aura_pad.c)
 target_compile_options(aura-pad PRIVATE -O2 -Wall -Wextra -pedantic)
 target_compile_definitions(aura-pad PRIVATE
   AURA_PAD_SHARE="${CMAKE_INSTALL_PREFIX}/share/aura-pad")

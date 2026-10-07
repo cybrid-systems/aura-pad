@@ -24,6 +24,7 @@
 #define _XOPEN_SOURCE 700
 
 #include "play_loop.h"
+#include "errlog.h"
 
 #include <errno.h>
 #include <stdarg.h>
@@ -188,6 +189,7 @@ static int find_home(Launch *L) {
     if (e && *e) {
         if (has_play(e) && realpath(e, L->home)) return 1;
         fprintf(stderr, "aura-pad: AURA_PAD_HOME=%s has no soft/pad/play.aura\n", e);
+        pad_errlog_msg("aura-pad", "AURA_PAD_HOME has no soft/pad/play.aura");
         return 0;
     }
     if (AURA_PAD_SHARE[0] && has_play(AURA_PAD_SHARE) && realpath(AURA_PAD_SHARE, L->home))
@@ -252,12 +254,22 @@ static int find_docker(Launch *L, char cand[][PATH_MAX], int nc) {
     return 1;
 }
 
+/* aura-pad is modal unless the caller already picked (PAD_VI=0 is the
+ * old modeless map). */
+static const char *vi_flag(void) {
+    const char *v = getenv("PAD_VI");
+    if (v && *v)
+        return v;
+    return "1";
+}
+
 static void child_env(const Launch *L) {
     if (L->aura_path[0]) setenv("AURA_PATH", L->aura_path, 1);
     setenv("AURA_PIPELINE_STRICT", "0", 1);
     setenv("AURA_SANDBOX", "off", 1);
     setenv("AURA_BIN", L->soft, 1);
     setenv("AURA_PAD_HOME", L->home, 1);
+    setenv("PAD_VI", vi_flag(), 1);
     if (L->file[0]) setenv("PAD_FILE", L->file, 1);
     else unsetenv("PAD_FILE");
 }
@@ -293,6 +305,7 @@ static int build_argv(const Launch *L, char *argv[], int max, char st[][2 * PATH
     argv[a++] = "-e"; argv[a++] = "AURA_SANDBOX=off";
     argv[a++] = "-e"; argv[a++] = "AURA_BIN=" BOX_AURA_SRC "/build/aura";
     argv[a++] = "-e"; fmt(st[s], sizeof(st[s]), "AURA_PAD_HOME=%s", L->home); argv[a++] = st[s++];
+    argv[a++] = "-e"; fmt(st[s], sizeof(st[s]), "PAD_VI=%s", vi_flag()); argv[a++] = st[s++];
     const char *img = getenv("AURA_PAD_IMAGE");
     argv[a++] = (char *)(img && *img ? img : DOCKER_IMAGE);
     argv[a++] = "dev";
@@ -303,17 +316,27 @@ static int build_argv(const Launch *L, char *argv[], int max, char st[][2 * PATH
     return a;
 }
 
-static pid_t spawn(const Launch *L, char *argv[], int *to_fd, int *from_fd) {
-    int in[2], out[2];
-    if (pipe(in) != 0 || pipe(out) != 0)
+static void close2(int p[2]) {
+    if (p[0] >= 0) close(p[0]);
+    if (p[1] >= 0) close(p[1]);
+}
+
+static pid_t spawn(const Launch *L, char *argv[], int *to_fd, int *from_fd, int *err_fd) {
+    int in[2] = {-1, -1}, out[2] = {-1, -1}, err[2] = {-1, -1};
+    if (pipe(in) != 0 || pipe(out) != 0 || pipe(err) != 0) {
+        close2(in); close2(out); close2(err);
         return -1;
+    }
     pid_t pid = fork();
-    if (pid < 0)
+    if (pid < 0) {
+        close2(in); close2(out); close2(err);
         return -1;
+    }
     if (pid == 0) {
         dup2(in[0], STDIN_FILENO);
         dup2(out[1], STDOUT_FILENO);
-        close(in[0]); close(in[1]); close(out[0]); close(out[1]);
+        dup2(err[1], STDERR_FILENO);
+        close2(in); close2(out); close2(err);
         if (!L->docker_mode) child_env(L);
         execvp(argv[0], argv);
         fprintf(stderr, "aura-pad: cannot run %s: %s\n", argv[0], strerror(errno));
@@ -321,8 +344,10 @@ static pid_t spawn(const Launch *L, char *argv[], int *to_fd, int *from_fd) {
     }
     close(in[0]);
     close(out[1]);
+    close(err[1]);
     *to_fd = in[1];
     *from_fd = out[0];
+    *err_fd = err[0];
     return pid;
 }
 
@@ -330,12 +355,16 @@ static void usage(void) {
     fprintf(stderr,
             "usage: aura-pad [FILE]\n"
             "  Opens FILE in the aura pad (a new page if it does not exist yet).\n"
+            "  Starts in vi normal mode: i types, a appends, Esc returns.\n"
+            "  Arrows, hjkl, and ctrl-b/f/p/n move in either mode.\n"
             "  ctrl-x ctrl-s saves, ctrl-q (or ctrl-x ctrl-c) quits.\n"
             "  ctrl-\\ is the emergency exit (nothing is saved).\n"
+            "  PAD_VI=0 keeps the old modeless keys.\n"
             "options: --plain|--ansi  --wire1|--wire2  --where (show what would run)\n"
             "         --version  -h|--help\n"
             "env: AURA_BIN, AURA_PATH, AURA_HOME, AURA_PAD_HOME, AURA_PAD_NO_DOCKER=1,\n"
-            "     AURA_SRC, AURA_PAD_IMAGE (docker fallback)\n");
+            "     AURA_SRC, AURA_PAD_IMAGE (docker fallback), PAD_VI,\n"
+            "     AURA_PAD_LOG, AURA_PAD_LOG_MAX (rotating error log)\n");
 }
 
 int main(int argc, char **argv) {
@@ -360,6 +389,7 @@ int main(int argc, char **argv) {
             file = a;
         } else {
             fprintf(stderr, "aura-pad: one file at a time\n");
+            pad_errlog_msg("aura-pad", "one file at a time");
             return 2;
         }
     }
@@ -372,6 +402,7 @@ int main(int argc, char **argv) {
         fprintf(stderr,
                 "aura-pad: cannot find the pad's Soft files (soft/pad/play.aura).\n"
                 "  Reinstall (scripts/build_c.sh --install) or set AURA_PAD_HOME=<dir with soft/pad>.\n");
+        pad_errlog_msg("aura-pad", "cannot find the pad Soft files");
         return 127;
     }
     if (file) resolve_file(file, L.file, sizeof(L.file));
@@ -399,6 +430,7 @@ int main(int argc, char **argv) {
                 "aura-pad: cannot find Aura, the Soft runtime that runs the pad.\n"
                 "  Build or install aura and put it on your PATH, or set AURA_BIN=/path/to/aura.\n"
                 "  (With docker installed, aura-pad can also run an aura build inside docker.)\n");
+        pad_errlog_msg("aura-pad", "cannot find Aura");
         return 127;
     }
 
@@ -413,11 +445,12 @@ int main(int argc, char **argv) {
         printf("\n");
         return 0;
     }
-    int to = -1, from = -1;
-    pid_t pid = spawn(&L, cargv, &to, &from);
+    int to = -1, from = -1, errfd = -1;
+    pid_t pid = spawn(&L, cargv, &to, &from, &errfd);
     if (pid < 0) {
         fprintf(stderr, "aura-pad: cannot start Soft (%s)\n", strerror(errno));
+        pad_errlog_msg("aura-pad", "cannot start Soft");
         return 1;
     }
-    return pad_play_loop(pid, to, from, &o);
+    return pad_play_loop(pid, to, from, errfd, &o);
 }

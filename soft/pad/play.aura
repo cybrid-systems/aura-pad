@@ -35,6 +35,7 @@
 (load (string-append *pad-home* "/soft/pad/play_in.aura"))
 (load (string-append *pad-home* "/soft/pad/wire2.aura"))
 (load (string-append *pad-home* "/soft/pad/file.aura"))
+(load (string-append *pad-home* "/soft/pad/vi.aura"))
 
 ;; PAD_PAGE=big starts on the twelve-row page (scripts/bench_editors.sh)
 (pad:play-reset! (if (equal? (getenv "PAD_PAGE") "big") *lc-big-page* *play-start*))
@@ -44,6 +45,8 @@
 (if (and (string? *play-file*) (> (string-length *play-file*) 0))
     (pad:pf-open! *play-file*)
     0)
+;; aura-pad sets PAD_VI=1 (evil normal / insert). Smokes leave it unset.
+(pad:vi-boot!)
 ;; PAD_DEFER=1: early frame before the rows below a string edit settle.
 ;; With the stdin poll (char-ready?, aura#4358 fixed in b8f008d) the
 ;; early frame is on by default (PAD_DEFER=0 turns it off) and a waiting

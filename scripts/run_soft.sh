@@ -32,6 +32,7 @@ exec "${DOCKER[@]}" run --rm -i --entrypoint /usr/local/bin/gosu \
   -e "PAD_DEFER=${PAD_DEFER:-}" \
   -e "PAD_PAGE=${PAD_PAGE:-}" \
   -e "PAD_FILE=${PAD_FILE:-}" \
+  -e "PAD_VI=${PAD_VI:-}" \
   -e "PAD_TEST_PENDING=${PAD_TEST_PENDING:-}" \
   -e "PAD_POLL=${PAD_POLL:-}" \
   -e "PAD_BURN_ROUNDS=${PAD_BURN_ROUNDS:-}" \

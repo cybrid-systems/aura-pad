@@ -1,0 +1,151 @@
+;; aura-pad -- vi normal / insert, evil-style, plus emacs movement.
+;; Loaded by play.aura. Off unless PAD_VI=1 (aura-pad sets that; the
+;; smokes do not, so the modeless keymap in keys.aura stays put).
+;;
+;; Normal (the start): h j k l move, i types, a appends, Esc stays.
+;; Insert: letters type, Esc returns to normal.
+;; Both modes: ctrl-b left, ctrl-f right, ctrl-p up, ctrl-n down,
+;; and the arrow keys. ctrl-] jumps back (ctrl-b used to). ctrl-v
+;; copies the region (ctrl-p used to). Other ctrl keys are unchanged
+;; (ctrl-a / ctrl-e, ctrl-q, ctrl-x, ctrl-o, ...).
+;;
+;; Esc is byte 27, which is also the start of an arrow. C sends one
+;; read() as one "IN b1 b2 ..." line, and a real Esc is a one-byte
+;; read, so a lone 27 leaves insert. 27 91 / 27 79 in the SAME line
+;; is still an arrow. A split "IN 27" then "IN 91" is Esc, then "[".
+;; Soft reserved: never bind quote.
+
+(define *vi-mode* "normal")
+(define *vi-base* "")
+
+(define (pad:vi-title!)
+  (set! *pl-title*
+        (string-append *vi-base*
+                       (if (string=? *vi-mode* "insert") " [insert]" " [normal]"))))
+
+;; Call after the file title is set (play.aura). Returns #t when modal.
+(define (pad:vi-boot!)
+  (let ((v (getenv "PAD_VI")))
+    (if (and (string? v) (string=? v "1"))
+        (begin
+          (set! *vi-on* #t)
+          (set! *vi-mode* "normal")
+          (set! *vi-base* *pl-title*)
+          (pad:vi-title!))
+        (set! *vi-on* #f))
+    *vi-on*))
+
+;; Controls that are not the emacs movement keys, looked up in the
+;; modeless map. 2 and 16 are movement here, so they never reach this.
+(define (pad:vi-ctrl b)
+  (let ((w (pad:kv-get *keymap* b)))
+    (if w w "unknown")))
+
+;; One idle byte -> a command word, a char code, or a mode word
+;; (to-insert / to-normal / append / normal-key).
+(define (pad:vi-cmd b)
+  (cond
+    ((= b 27) "to-normal")
+    ((= b 2) "left")
+    ((= b 6) "right")
+    ((= b 14) "next-line")
+    ((= b 16) "prev-line")
+    ((= b 29) "jump-back")
+    ((= b 22) "copy-region")
+    ((string=? *vi-mode* "insert")
+     (if (and (>= b 32) (<= b 126)) b (pad:vi-ctrl b)))
+    ((= b 104) "left")
+    ((= b 106) "next-line")
+    ((= b 107) "prev-line")
+    ((= b 108) "right")
+    ((= b 105) "to-insert")
+    ((= b 97) "append")
+    ((and (>= b 32) (<= b 126)) "normal-key")
+    (#t (pad:vi-ctrl b))))
+
+(define (pad:vi-can-right?)
+  (let* ((st *pl-st*)
+         (L (car st))
+         (l (cadr st))
+         (col (caddr st))
+         (n (length L))
+         (len (length (list-ref L l))))
+    (not (and (= l (- n 1)) (>= col len)))))
+
+;; Apply a mode word. Returns "snap" (the caller writes one frame).
+(define (pad:vi-meta! c)
+  (cond
+    ((string=? c "to-insert")
+     (set! *vi-mode* "insert")
+     (pad:vi-title!)
+     (pad:play-ok! "insert - type, esc goes back")
+     "snap")
+    ((string=? c "to-normal")
+     (set! *vi-mode* "normal")
+     (pad:vi-title!)
+     (pad:play-ok! "normal - press i to type")
+     "snap")
+    ((string=? c "append")
+     (let ((moved (pad:vi-can-right?)))
+       (if moved (pad:play-cmd! "right") 0)
+       (set! *vi-mode* "insert")
+       (pad:vi-title!)
+       (set! *pl-say* "insert - type, esc goes back")
+       (if moved 0 (set! *pl-keys* (+ *pl-keys* 1)))
+       "snap"))
+    (#t
+     (pad:play-reject! "normal-key")
+     "snap")))
+
+(define (pad:vi-emit! r)
+  (cond
+    ((string=? r "quit") "quit")
+    ((string=? r "pending") "pending")
+    (#t
+     (if *pi-collect*
+         (set! *pi-out* (cons (pad:play-snap) *pi-out*))
+         (display (pad:play-snap)))
+     "go")))
+
+;; Rest of a multi-byte line. esc is the escape-sequence state, passed
+;; in so the loop does not capture an outer local. A trailing lone 27
+;; leaves insert; 27 followed by 91 or 79 in this same line is an arrow.
+(define (pad:vi-each xs esc)
+  (if (null? xs)
+      (begin (set! *pl-esc* esc) "go")
+      (let ((b (car xs)) (rest (cdr xs)))
+        (cond
+          ((pair? esc)
+           (let* ((step (pad:key-step esc b))
+                  (cmd (car step))
+                  (esc2 (car (cdr step))))
+             (if (and (string? cmd) (string=? cmd "pending"))
+                 (pad:vi-each rest esc2)
+                 (let ((e (pad:vi-emit! (pad:play-cmd! cmd))))
+                   (if (string=? e "quit") "quit" (pad:vi-each rest (list)))))))
+          ((and (= b 27) (pair? rest) (or (= (car rest) 91) (= (car rest) 79)))
+           (pad:vi-each rest (list 27)))
+          ((and (= b 15) (null? esc))
+           (let ((e (pad:vi-emit! (pad:who-key!))))
+             (if (string=? e "quit") "quit" (pad:vi-each rest (list)))))
+          (#t
+           (let* ((cmd (pad:vi-cmd b))
+                  (r (if (and (string? cmd)
+                              (or (string=? cmd "to-insert") (string=? cmd "to-normal")
+                                  (string=? cmd "append") (string=? cmd "normal-key")))
+                         (pad:vi-meta! cmd)
+                         (pad:play-cmd! cmd)))
+                  (e (pad:vi-emit! r)))
+             (if (string=? e "quit") "quit" (pad:vi-each rest (list)))))))))
+
+(define (pad:vi-bytes! line)
+  (set! *pi-slow* (+ *pi-slow* 1))
+  (let ((bs (pad:pi-parse line)))
+    (if (not bs)
+        (begin
+          (pad:play-reject! "unknown")
+          (if *pi-collect*
+              (set! *pi-out* (cons (pad:play-snap) *pi-out*))
+              (display (pad:play-snap)))
+          "go")
+        (pad:vi-each bs *pl-esc*))))
