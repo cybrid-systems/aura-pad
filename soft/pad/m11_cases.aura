@@ -363,9 +363,10 @@
   (m11:expect-str "C1_OTHER" (pad:why-kid "refused" "helper" "bye") "aura said no to the whole change, nothing moved")
   (m11:expect-str "C1_KINDS" (pad:ws-names-str (map pad:why-kind (list *m11-tx-type* *m11-tx-arity* *m11-tx-unbound* *m11-tx-parse* "x")))
                   "type.arity.unbound.brackets.other")
-  ;; typecheck-incremental: pet is a notebook define, so its "unbound" is
-  ;; dropped (aura#4363); frob is not, so it stays; a warning line maps too
-  (m11:expect "C1_TC_PET_DROPPED" (length (pad:why-diags *m11-tc-pet*)) 0)
+  ;; typecheck-incremental: every diagnostic line is kept now (aura#4363
+  ;; fixed, the engine no longer says a notebook define is unbound); a
+  ;; warning line maps too
+  (m11:expect "C1_TC_PET_KEPT" (length (pad:why-diags *m11-tc-pet*)) 1)
   ;; (shown as kinds: a raw "unbound variable" text would trip smoke's Soft-error grep)
   (m11:expect-str "C1_TC_MIXED" (pad:ws-names-str (map pad:why-kind (pad:why-diags *m11-tc-mixed*))) "unbound.type")
   (m11:expect-true "C1_TC_MIXED_FROB" (pad:why-has? (car (pad:why-diags *m11-tc-mixed*)) "variable: frob"))
@@ -422,15 +423,15 @@
   #t)
 
 (define (m11:sec-c3)
-  ;; 3. A KEEP whose typecheck-incremental only reports the false
-  ;;    "unbound" of a notebook define (aura#4363) is not turned into a
-  ;;    warning: the say line stays the normal KEEP sentence. A refusal
-  ;;    blamed on a caller line names that line.
+  ;; 3. A KEEP that reads a notebook value define (pet) gets no
+  ;;    warning: typecheck-incremental no longer calls pet unbound
+  ;;    (aura#4363 fixed), so the say line stays the normal KEEP
+  ;;    sentence. A refusal blamed on a caller line names that line.
   (m11:acc-begin!)
   (m11:fresh!)
   (let ((r (pad:robot-line-out! (pad:robot-step! "helper" (list (list "bye" "(lambda (y) (+ y (string-length pet)))")) "pet") "helper")))
     (m11:expect-str "C3_KEEP" (car r) "KEEP")
-    (m11:expect-true "C3_TC_SAID_PET" (pad:why-has? *robot-tc-raw* "variable: pet"))
+    (m11:expect-true "C3_TC_NO_FALSE_PET" (not (pad:why-has? *robot-tc-raw* "variable: pet")))
     (m11:expect "C3_NO_FALSE_WARN" (length *robot-diags*) 0)
     (m11:expect-str "C3_SAY" *pl-say* "the helper changed bye, ctrl-z takes it all back"))
   ;; a type refusal blamed on a caller line: bye now wants words, (bye 4)
@@ -464,7 +465,7 @@
     (m11:expect-str "D1_CARD" (car r) "CARD")
     (m11:expect-str "D1_SAY" *pl-say* "changing hello and bye moves 3 places: (hello 3), (bye 4), (hello (bye 5)). enter keeps, ctrl-z says no")
     (m11:expect-str "D1_USES" (pad:who-nums-str (cadr *blast-last*)) "6.7.11")
-    (m11:expect-str "D1_SITES" (pad:blast-counts-str (pad:nth *blast-last* 3)) "hello:3/4:+1.bye:2/2:+0")
+    (m11:expect-str "D1_SITES" (pad:blast-counts-str (pad:nth *blast-last* 3)) "hello:3/3.bye:2/2")
     (m11:expect-str "D1_GROWN" (pad:ws-names-str (pad:nth *blast-last* 4)) "hello.bye")
     (m11:expect-str "D1_VERDICT" (pad:nth *blast-last* 6) "agree")
     (m11:expect-true "D1_PAGE_WAITS" (eq? (pad:es-L *pl-st*) L0))
@@ -492,7 +493,7 @@
          (h0 *ws-heals*)
          (r (m11:card-out! (pad:robot-card! "helper" (list (list "add" "(lambda (a b) (- a b))")) "swap"))))
     (m11:expect-str "D2_SAY" *pl-say* "changing add moves 3 places: greet, (greet (add 1 2)), (add 2 3). enter keeps, ctrl-z says no")
-    (m11:expect-str "D2_SITES" (pad:blast-counts-str (pad:nth *blast-last* 3)) "add:3/3:+0")
+    (m11:expect-str "D2_SITES" (pad:blast-counts-str (pad:nth *blast-last* 3)) "add:3/3")
     (m11:expect-str "D2_VERDICT" (pad:nth *blast-last* 6) "agree")
     (m11:keys! (list "IN 26"))
     (m11:expect-str "D2_NO_SAY" *pl-say* "ok, the helper's idea is gone, nothing changed")
@@ -521,9 +522,9 @@
                   "changing pet moves nothing else. enter keeps, ctrl-z says no")
   (m11:expect-str "D3_SAY_MORE" (pad:blast-say (list (list "f") (list 1 2 3 4 5) (list "a" "b" "c" "d" "e") (list) (list) (list) "agree"))
                   "changing f moves 5 places: a, b, c and 2 more. enter keeps, ctrl-z says no")
-  (m11:expect-true "D3_COUNTS_BAD" (not (pad:blast-counts-ok? (list (list "hello" 3 2 2 1)))))
-  (m11:expect-true "D3_COUNTS_STALE_OK" (pad:blast-counts-ok? (list (list "hello" 3 4 3 1))))
-  (m11:expect-true "D3_COUNTS_NO_ENGINE" (not (pad:blast-counts-ok? (list (list "hello" 0 -1 -1 0)))))
+  (m11:expect-true "D3_COUNTS_BAD" (not (pad:blast-counts-ok? (list (list "hello" 3 2)))))
+  (m11:expect-true "D3_COUNTS_MORE_BAD" (not (pad:blast-counts-ok? (list (list "hello" 3 4)))))
+  (m11:expect-true "D3_COUNTS_NO_ENGINE" (not (pad:blast-counts-ok? (list (list "hello" 0 -1)))))
   (m11:expect "D3_NO_DISAGREE" *blast-disagree* 0)
   (m11:acc-end! "M11D" 3)
   #t)
