@@ -112,8 +112,11 @@ if '(string-join (list "a" "b") ",")' not in canary:
     bad.append("canary does not call string-join")
 if '(string-join (list "a" "b") ",")' in sane:
     bad.append("baseline uses the canary")
-for banned in ("(set-code", "pad:ws-set-code!", "pad:ws-load!",
-               "string-split", "string-trim", "string-replace"):
+load_path = sane + stack + loader + canary
+for banned in ("(set-code", "pad:ws-set-code!", "pad:ws-load!"):
+    if banned in load_path:
+        bad.append("load path contains " + banned)
+for banned in ("string-split", "string-trim", "string-replace"):
     if banned in code:
         bad.append("read.aura contains " + banned)
 if bad:

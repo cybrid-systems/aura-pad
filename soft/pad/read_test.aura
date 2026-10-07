@@ -1,0 +1,47 @@
+;; Step 7. One set-code of a page, inside a child workspace.
+;; Prints CHECK lines. Does not draw a SAY result.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+(define *pl-say* "")
+(define *read-ready* #f)
+(define *read-frame* #f)
+(define *pad-def-lookup* #f)
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/read.aura"))
+(pad:read-load!)
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(say (if (pad:read-id? 0) "CHECK id0=true" "CHECK id0=false"))
+
+(define L
+  (pad:v-lines "(define (hello x) (+ x 1))\n(define (main) (hello 3))"))
+(define code-before (pad:q-code))
+(define say0 *pl-say*)
+(define n0 *ws-set-code-n*)
+(define e0 *ws-eval-n*)
+(pad:read-check! L)
+(say (string-append "CHECK set_delta=" (number->string (- *ws-set-code-n* n0))))
+(say (string-append "CHECK eval_delta=" (number->string (- *ws-eval-n* e0))))
+(say (string-append "CHECK status=" *read-status*))
+(say (if (string=? (pad:q-code) code-before) "CHECK root=same" "READ_DISAGREE"))
+(say (string-append "CHECK canary=" (string-join (list "a" "b") ",")))
+(say (if (pad:q-sane?) "CHECK q-sane=true" "CHECK q-sane=false"))
+
+(set! *ws-set-code-fn* (lambda (s) 1))
+(define n1 *ws-set-code-n*)
+(define e1 *ws-eval-n*)
+(pad:read-check! L)
+(say (string-append "CHECK stub_set_delta=" (number->string (- *ws-set-code-n* n1))))
+(say (string-append "CHECK stub_eval_delta=" (number->string (- *ws-eval-n* e1))))
+(say (if (string=? *pl-say* say0) "CHECK say_same=true" "CHECK say_same=false"))
+(let ((rows (try (workspace :list) (catch (e) #f))))
+  (say (if (and (or (null? rows) (pair? rows))
+                (not (pad:read-has-name? rows "read")))
+           "CHECK child_gone=true"
+           "CHECK child_gone=false")))

@@ -83,7 +83,9 @@
   (if (not *read-ready*)
       (load (string-append *pad-home* "/soft/pad/read.aura")))
   (if *read-ready*
-      (pad:read-load!)
+      (begin
+        (set! *read-frame* #t)
+        (pad:read-load!))
       0)
   "go")
 (pad:vw-boot!)

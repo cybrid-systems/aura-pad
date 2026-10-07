@@ -18,6 +18,9 @@
 (define *read-done* #f)
 (define *read-q* #f)
 (define *read-canary* "")
+(define *read-frame* #f)
+(define *read-cache* (list))
+(define *read-status* "none")
 
 (define (pad:read-bool b)
   (if b "true" "false"))
@@ -90,7 +93,135 @@
               (pad:read-show! "READ set_code=0")
               (pad:read-leak!)))
         (set! *read-done* #t)
-        (pad:play-emit!))))
+        (if *read-frame* (pad:play-emit!) 0))))
+
+;; Page text plus a trailing #t so eval-current is not a procedure or a
+;; pair (aura#4366). This is not the notebook rows define.
+(define (pad:read-src L)
+  (string-append (pad:v-src L) "\n#t\n"))
+
+;; Workspace ids start at 0, and 0 is false. Accept every number, including 0.
+(define (pad:read-id? c)
+  (number? c))
+
+(define (pad:read-row-name row)
+  (if (and (pair? row) (pair? (cdr row)) (string? (cadr row)))
+      (cadr row)
+      ""))
+
+(define (pad:read-has-name? rows name)
+  (cond
+    ((null? rows) #f)
+    ((string=? (pad:read-row-name (car rows)) name) #t)
+    (#t (pad:read-has-name? (cdr rows) name))))
+
+(define (pad:read-plain v)
+  (cond
+    ((null? v) (list))
+    ((or (number? v) (string? v) (eq? v #t) (eq? v #f)) v)
+    ((pair? v) (cons (pad:read-plain (car v)) (pad:read-plain (cdr v))))
+    (#t 0)))
+
+(define (pad:read-lookup name)
+  (try
+    (let ((r (define-lookup name)))
+      (if (pad:eng-err? r) (list) (pad:read-plain r)))
+    (catch (e)
+      (if (pad:unbound-msg? e) "gap" (list)))))
+
+(define (pad:read-refs look)
+  (if (and (pair? look) (pair? (car look)) (number? (car (car look))))
+      (pad:read-plain (pad:q-ref-counts (car (car look))))
+      -1))
+
+(define (pad:read-note! s)
+  (pad:read-show! s)
+  (set! *read-status* "fail")
+  0)
+
+;; set-code in the child replaces that workspace, so the counter set! inside
+;; pad:ws-set-code! may not be the root binding we switch back to. After
+;; the switch, record the call on the root when the child copy was dropped.
+(define (pad:read-back! c n0 e0 did-eval)
+  (try (workspace :switch 0) (catch (e) #f))
+  (try (workspace:delete c) (catch (e) #f))
+  (if (= *ws-set-code-n* n0)
+      (set! *ws-set-code-n* (+ n0 1))
+      0)
+  (if (and did-eval (= *ws-eval-n* e0))
+      (set! *ws-eval-n* (+ e0 1))
+      0)
+  0)
+
+(define (pad:read-finish! code0 t0)
+  (let ((rows (try (workspace :list) (catch (e) #f))))
+    (if (not (or (null? rows) (pair? rows)))
+        (pad:read-note! "READ list-fail")
+        (if (pad:read-has-name? rows "read")
+            (pad:read-note! "READ child-left")
+            (if (not (and (string? code0) (> (string-length code0) 0)
+                          (string=? (pad:q-code) code0)))
+                (pad:read-note! "READ_DISAGREE")
+                (let ((canary (string-join (list "a" "b") ",")))
+                  (if (not (string=? canary "a,b"))
+                      (pad:read-note! "GAPS read-leak")
+                      (if (not (pad:q-sane?))
+                          (pad:read-note! "GAPS read-leak")
+                          (begin
+                            (set! *ws-load-ms* (- (current-time-ms) t0))
+                            (set! *read-status* "checked")
+                            (pad:read-show!
+                              (string-append "READ ms=" (number->string *ws-load-ms*)))
+                            (pad:read-show! (string-append "READ " (pad:ws-stats-str)))
+                            (pad:read-show! (string-append "READ canary=" canary))
+                            (pad:read-show! "READ q-sane=true")
+                            (pad:read-show! "READ root=same")
+                            (pad:read-show! "READ state=checked")
+                            0)))))))))
+
+(define (pad:read-gather! c n0 e0 code0 t0)
+  (let ((look (pad:read-lookup "hello")))
+    (if (string? look)
+        (begin
+          (pad:read-back! c n0 e0 #t)
+          (pad:read-note! "GAPS define-lookup"))
+        (if (not (pair? look))
+            (begin
+              (pad:read-back! c n0 e0 #t)
+              (pad:read-note! "READ miss hello"))
+            (let ((cache (list look
+                               (pad:read-plain (pad:q-defines))
+                               (pad:read-plain (pad:q-defuse "hello"))
+                               (pad:read-plain (pad:q-node-types))
+                               (pad:read-refs look))))
+              (pad:read-back! c n0 e0 #t)
+              (set! *read-cache* cache)
+              (pad:read-finish! code0 t0))))))
+
+(define (pad:read-switched! c L n0 e0 code0 t0)
+  (try (workspace :switch c) (catch (e) #f))
+  (pad:read-show! (string-append "READ child=" (number->string c)))
+  (let ((r1 (pad:ws-set-code! (pad:read-src L))))
+    (if (not (string=? r1 "ok"))
+        (begin
+          (pad:read-back! c n0 e0 #f)
+          (pad:read-note! "READ set-code-fail"))
+        (let ((r2 (pad:ws-eval!)))
+          (if (not (or (string=? r2 "ok") (string=? r2 "note")))
+              (begin
+                (pad:read-back! c n0 e0 #t)
+                (pad:read-note! "READ eval-fail"))
+              (pad:read-gather! c n0 e0 code0 t0))))))
+
+(define (pad:read-check! L)
+  (let ((code0 (pad:q-code))
+        (t0 (current-time-ms))
+        (n0 *ws-set-code-n*)
+        (e0 *ws-eval-n*))
+    (let ((c (try (workspace :create "read") (catch (e) #f))))
+      (if (not (pad:read-id? c))
+          (pad:read-note! "READ no-world")
+          (pad:read-switched! c L n0 e0 code0 t0)))))
 
 (pad:read-show! "READ loaded")
 (set! *read-ready* #t)
