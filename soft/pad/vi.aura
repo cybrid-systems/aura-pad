@@ -389,7 +389,7 @@
   (set! *vi-prompt* (if mx "M-x " ": "))
   (set! *pl-say*
         (if mx
-            "M-x - help opens the map, enter runs this page, find-file opens, search finds text"
+            "M-x - help opens the map, enter runs this page, find-file opens, search finds text, layout races pages"
             ": - eval runs this page, w saves, q quits, M-x help opens the map"))
   "vi-do")
 

@@ -363,7 +363,13 @@
     "delete-other-windows keeps only this page.\n"
     "ctrl-x 2 splits under. ctrl-x 3 splits beside.\n"
     "ctrl-x o moves. ctrl-x 0 closes. ctrl-x 1 keeps one.\n"
-    "Two pages can show one writing, each with its own cursor.\n"))
+    "Two pages can show one writing, each with its own cursor.\n"
+    "layout races pictures of your pages. The best one stays.\n"
+    "The line says this layout wins.\n"
+    "layout:story fills the screen with the story.\n"
+    "layout:beside opens a helper page beside the story.\n"
+    "layout:book stacks the pages like a book.\n"
+    "layout:undo puts the old picture back.\n"))
 
 (define (pad:wn-help! rest)
   (pad:wn-ensure!)
@@ -382,6 +388,19 @@
 (define (pad:wn-sw? w)
   (and (>= (string-length w) 7) (string=? (substring w 0 7) "switch:")))
 
+;; Layout worldlines stay off the key path. The first layout: command
+;; loads layout.aura. A normal key never does.
+(define *ly-ready* #f)
+
+(define (pad:ly-word? w)
+  (and (string? w) (>= (string-length w) 6)
+       (string=? (substring w 0 6) "layout")))
+
+(define (pad:wn-layout! w rest)
+  (if (not *ly-ready*)
+      (load (string-append *pad-home* "/soft/pad/layout.aura")))
+  (if *ly-ready* (pad:ly-run! w rest) #f))
+
 (define (pad:wn-command w rest)
   (cond
     ((or (string=? w "split") (string=? w "split-vert")) (pad:wn-split! "V"))
@@ -392,6 +411,7 @@
     ((or (string=? w "help") (string=? w "map")) (pad:wn-help! rest))
     ((string=? w "switch-window") (pad:wn-switch! rest))
     ((pad:wn-sw? w) (pad:wn-switch! (substring w 7 (string-length w))))
+    ((pad:ly-word? w) (pad:wn-layout! w rest))
     (#t #f)))
 
 (define (pad:wn-on-cx! b)

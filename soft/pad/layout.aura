@@ -1,0 +1,432 @@
+;; M15 layout worldlines. Three pictures of the same pages race on the
+;; hot slot pd:layout. Soft gates a bad tree. Only a strictly higher
+;; score is KEEP, and KEEP installs that window configuration.
+;; A tie or a worse score is DROP. A swapped trial that loses is heal'd.
+;; fiber_live only when every join returns a score (joins==spawned and
+;; backend>0). Otherwise host-sequential, same scores. Never a fake
+;; fiber_live.
+;;
+;; Not on the key path. play.aura does not load this file. The first
+;; M-x layout command does. Key latency stays the published M7 number:
+;; insert about 3.6 ms and cursor about 1.3 ms on the twelve-row page
+;; (docs/ROADMAP.md). A key that is not layout: does not enter here.
+;;
+;; Score = 40 - 2*rejects - 3*dist + (30 - 10*|windows - need|).
+;; That is the plan formula plus a layout term. Fewer windows score
+;; higher unless the goal needs a second page (need 2) or a book (need 3).
+;; dist is how far the story window's point and window-start are from
+;; the goal point. A missing story is dist 99.
+;; Soft reserved: never bind quote.
+
+(load (string-append *pad-home* "/soft/pad/rules.aura"))
+(load (string-append *pad-home* "/soft/pad/hot.aura"))
+
+(define *ly-seeded* 0)
+(define *ly-need* 1)
+(define *ly-goal* (list 0 0 0 0))
+(define *ly-rej* 0)
+(define *ly-score* 0)
+(define *ly-hist* (list))
+(define *ly-body* "")
+(define *ly-name* "none")
+(define *ly-legend0* "")
+
+(define *ly-focus-body*
+  "(lambda () (list \"focus-story\" (list \"story\" 0 0 0 0)))")
+(define *ly-side-body*
+  "(lambda () (list \"side-helper\" (list \"H\" (list \"story\" 1 2 0 0) (list \"scratch\" 0 0 0 0))))")
+(define *ly-book-body*
+  "(lambda () (list \"storybook\" (list \"V\" (list \"story\" 0 0 0 0) (list \"V\" (list \"page2\" 0 0 0 0) (list \"page3\" 0 0 0 0)))))")
+
+(define (pd:layout) (pad:ly-focus))
+
+(define (pad:ly-focus)
+  (list "focus-story" (list "story" 0 0 0 0)))
+
+(define (pad:ly-side)
+  (list "side-helper"
+        (list "H" (list "story" 1 2 0 0) (list "scratch" 0 0 0 0))))
+
+(define (pad:ly-book)
+  (list "storybook"
+        (list "V"
+              (list "story" 0 0 0 0)
+              (list "V" (list "page2" 0 0 0 0) (list "page3" 0 0 0 0)))))
+
+(define (pad:ly-fat)
+  (list "fat"
+        (list "V"
+              (list "story" 0 0 0 0)
+              (list "V"
+                    (list "scratch" 0 0 0 0)
+                    (list "V"
+                          (list "page2" 0 0 0 0)
+                          (list "V"
+                                (list "page3" 0 0 0 0)
+                                (list "story" 0 0 0 0)))))))
+
+(define (pad:ly-goal!)
+  (if (= *ly-need* 2)
+      (set! *ly-goal* (list 1 2 0 0))
+      (set! *ly-goal* (list 0 0 0 0))))
+
+(define (pad:ly-pages!)
+  (pad:wn-buf! "story" "hi\naura")
+  (pad:wn-buf! "scratch" "a helper note")
+  (pad:wn-buf! "page2" "the cat")
+  (pad:wn-buf! "page3" "the end")
+  0)
+
+(define (pad:ly-seed!)
+  (if (= *ly-seeded* 1)
+      #t
+      (begin
+        (pad:hs-register! "pd:layout" *ly-focus-body*)
+        (set! *ly-body* *ly-focus-body*)
+        (set! *ly-legend0* *view-legend*)
+        (set! *ly-seeded* 1)
+        #t)))
+
+(define (pad:ly-split? node)
+  (and (pair? node)
+       (or (string=? (car node) "H") (string=? (car node) "V"))))
+
+(define (pad:ly-count node)
+  (if (pad:ly-split? node)
+      (+ (pad:ly-count (cadr node)) (pad:ly-count (caddr node)))
+      1))
+
+(define (pad:ly-missing? node)
+  (if (pad:ly-split? node)
+      (or (pad:ly-missing? (cadr node)) (pad:ly-missing? (caddr node)))
+      (not (pad:wn-lookup (car node)))))
+
+(define (pad:ly-story node)
+  (if (pad:ly-split? node)
+      (let ((a (pad:ly-story (cadr node))))
+        (if a a (pad:ly-story (caddr node))))
+      (if (string=? (car node) "story") node #f)))
+
+(define (pad:ly-mk node n)
+  (if (pad:ly-split? node)
+      (let* ((a (pad:ly-mk (cadr node) n))
+             (b (pad:ly-mk (caddr node) (cadr a))))
+        (list (list (car node) (car a) (car b) 50) (cadr b)))
+      (list (pad:wn-leaf n (car node)
+                         (list-ref node 1) (list-ref node 2)
+                         (list-ref node 3) (list-ref node 4))
+            (+ n 1))))
+
+(define (pad:ly-say why)
+  (cond
+    ((string=? why "empty-layout") "there is no page to show")
+    ((string=? why "too-small") "that page would be too tiny")
+    ((string=? why "too-many") "too many pages on the screen")
+    ((string=? why "no-buffer") "there is no pad with that name")
+    ((string=? why "overlapping") "those pages would sit on top of each other")
+    (#t "there is no page to show")))
+
+(define (pad:ly-why cfg)
+  (if (not (and (pair? cfg) (pair? (cdr cfg)) (pair? (cadr cfg))))
+      "empty-layout"
+      (let ((node (cadr cfg)))
+        (let ((n (pad:ly-count node)))
+          (cond
+            ((< n 1) "empty-layout")
+            ((> n 4) "too-many")
+            ((pad:ly-missing? node) "no-buffer")
+            (#t (let ((rects (pad:wn-place (car (pad:ly-mk node 1))
+                                           0 0 (pad:wn-rows) (pad:wn-cols))))
+                  (cond
+                    ((pad:wn-tiny? rects) "too-small")
+                    ((pad:wn-overlap? rects) "overlapping")
+                    (#t #f)))))))))
+
+(define (pad:ly-reject-out! why)
+  (set! *pl-say* (pad:ly-say why))
+  (display "REJECT kind=layout reason=")
+  (display why)
+  (display " say=\"")
+  (display *pl-say*)
+  (display "\"")
+  (newline)
+  "reject")
+
+(define (pad:ly-score cfg)
+  (if (not (and (pair? cfg) (pair? (cdr cfg)) (pair? (cadr cfg))))
+      -100
+      (let* ((node (cadr cfg))
+             (gap (pad:abs (- (pad:ly-count node) *ly-need*)))
+             (st (pad:ly-story node))
+             (dist (if st
+                       (+ (pad:abs (- (list-ref st 1) (list-ref *ly-goal* 0)))
+                          (pad:abs (- (list-ref st 2) (list-ref *ly-goal* 1)))
+                          (pad:abs (- (list-ref st 3) (list-ref *ly-goal* 2)))
+                          (pad:abs (- (list-ref st 4) (list-ref *ly-goal* 3))))
+                       99)))
+        (- (+ 40 (- 30 (* 10 gap))) (+ (* 3 dist) (* 2 *ly-rej*))))))
+
+(define (pad:ly-export node)
+  (if (number? (car node))
+      (list (cadr node) (list-ref node 2) (list-ref node 3)
+            (list-ref node 4) (list-ref node 5))
+      (list (car node) (pad:ly-export (cadr node)) (pad:ly-export (caddr node)))))
+
+(define (pad:ly-now)
+  (if (and *wn-tree* (pair? *wn-tree*))
+      (list "current" (pad:ly-export *wn-tree*))
+      (list "current"
+            (list *wn-live* (cadr *pl-st*) (caddr *pl-st*) *vw-top* *vw-left*))))
+
+(define (pad:ly-install! cfg)
+  (let* ((built (pad:ly-mk (cadr cfg) 1))
+         (tree (car built)))
+    (set! *wn-seq* (- (cadr built) 1))
+    (pad:wn-install! tree)
+    (set! *ly-name* (car cfg))
+    0))
+
+(define (pad:ly-legend! name)
+  (set! *view-legend* (string-append "winner=" name " " *ly-legend0*))
+  0)
+
+(define (pad:ly-snap score)
+  (list *ly-body* score *wn-tree* *wn-sel* *wn-live* *pl-st*
+        *vw-top* *vw-left* *wn-store* *view-legend* *ly-need* *ly-goal*))
+
+(define (pad:ly-restore! top)
+  (set! *ly-body* (list-ref top 0))
+  (set! *wn-tree* (list-ref top 2))
+  (set! *wn-sel* (list-ref top 3))
+  (set! *wn-live* (list-ref top 4))
+  (set! *pl-st* (list-ref top 5))
+  (set! *vw-top* (list-ref top 6))
+  (set! *vw-left* (list-ref top 7))
+  (set! *wn-store* (list-ref top 8))
+  (set! *view-legend* (list-ref top 9))
+  (set! *ly-need* (list-ref top 10))
+  (set! *ly-goal* (list-ref top 11))
+  (hot-strategy:swap! "pd:layout" *ly-body* "layout-undo")
+  0)
+
+(define (pad:ly-world!)
+  (pad:finish-world!)
+  (display "WORLD line=")
+  (display *world-line*)
+  (display " backend=")
+  (display (number->string *race-backend*))
+  (display " joins=")
+  (display (number->string *race-joined*))
+  (display "/")
+  (display (number->string *race-spawned*))
+  (newline)
+  *world-line*)
+
+(define (pad:ly-two a b)
+  (set! *race-backend* 0)
+  (set! *race-spawned* 0)
+  (set! *race-joined* 0)
+  (set! *world-line* "host-sequential")
+  (let ((pair (pad:race-thunks! a b)))
+    (pad:ly-world!)
+    pair))
+
+(define (pad:ly-scores3 a b c)
+  (set! *race-backend* 0)
+  (set! *race-spawned* 3)
+  (set! *race-joined* 0)
+  (set! *world-line* "host-sequential")
+  (let ((bk (try (fiber:spawn-backend) (catch (e) 0))))
+    (if (and (number? bk) (> bk 0))
+        (set! *race-backend* bk))
+    (let* ((f1 (try (fiber:spawn a) (catch (e) #f)))
+           (f2 (try (fiber:spawn b) (catch (e) #f)))
+           (f3 (try (fiber:spawn c) (catch (e) #f)))
+           (r1 (if (and (number? f1) (> f1 0))
+                   (try (fiber:join f1) (catch (e) #f)) #f))
+           (r2 (if (and (number? f2) (> f2 0))
+                   (try (fiber:join f2) (catch (e) #f)) #f))
+           (r3 (if (and (number? f3) (> f3 0))
+                   (try (fiber:join f3) (catch (e) #f)) #f)))
+      (if (and (number? f1) (number? f2) (number? f3)
+               (> f1 0) (> f2 0) (> f3 0)
+               (not (= f1 f2)) (not (= f1 f3)) (not (= f2 f3))
+               (number? r1) (number? r2) (number? r3))
+          (set! *race-joined* 3))
+      (pad:ly-world!)
+      (if (= *race-joined* 3)
+          (list r1 r2 r3)
+          (list (a) (b) (c))))))
+
+(define (pad:ly-keep! body cfg score)
+  (set! *ly-hist* (cons (pad:ly-snap *ly-score*) *ly-hist*))
+  (hot-strategy:swap! "pd:layout" body "layout-keep")
+  (set! *ly-body* body)
+  (set! *ly-score* score)
+  (pad:ly-install! cfg)
+  (pad:ly-legend! (car cfg))
+  (set! *pl-say* "this layout wins!")
+  (display "KEEP kind=layout reason=higher-score-stamp score=")
+  (display (pad:nstr score))
+  (display " name=")
+  (display (car cfg))
+  (newline)
+  "keep")
+
+(define (pad:ly-drop! reason score heal)
+  (if heal (hot-strategy:heal!) 0)
+  (if heal (display "HEAL name=pd:layout reason=score\n") 0)
+  (display "DROP kind=layout reason=")
+  (display reason)
+  (display " score=")
+  (display (pad:nstr score))
+  (newline)
+  (set! *pl-say* "the picture stays as it was")
+  "drop")
+
+(define (pad:ly-trial! body)
+  (pad:ly-seed!)
+  (pad:ly-pages!)
+  (let ((base-cfg (pad:ly-now)))
+    (set! *ly-score* (pad:ly-score base-cfg))
+    (let ((sw (hot-strategy:swap! "pd:layout" body "layout-trial")))
+      (if (not (and (pair? sw) (equal? (car sw) #t)))
+          (pad:ly-reject-out! "empty-layout")
+          (let ((cfg (try (pd:layout) (catch (e) #f))))
+            (let ((why (pad:ly-why cfg)))
+              (if why
+                  (begin
+                    (hot-strategy:heal!)
+                    (pad:ly-reject-out! why))
+                  (let ((pair (pad:ly-two
+                               (lambda () (pad:ly-score base-cfg))
+                               (lambda () (pad:ly-score cfg)))))
+                    (let ((base (car pair)) (trial (cadr pair)))
+                      (display "RACE layout base=")
+                      (display (pad:nstr base))
+                      (display " trial=")
+                      (display (pad:nstr trial))
+                      (newline)
+                      (if (> trial base)
+                          (pad:ly-keep! body cfg trial)
+                          (pad:ly-drop!
+                           (if (= trial base)
+                               "tie-is-not-better-rollback"
+                               "lower-score-rollback")
+                           trial #t)))))))))))
+
+(define (pad:ly-race!)
+  (pad:ly-seed!)
+  (pad:ly-pages!)
+  (let* ((cur (pad:ly-now))
+         (base (pad:ly-score cur))
+         (fa (pad:ly-focus))
+         (sa (pad:ly-side))
+         (bk (pad:ly-book))
+         (ga (pad:ly-why fa))
+         (gs (pad:ly-why sa))
+         (gb (pad:ly-why bk)))
+    (set! *ly-score* base)
+    (if ga (pad:ly-reject-out! ga) 0)
+    (if gs (pad:ly-reject-out! gs) 0)
+    (if gb (pad:ly-reject-out! gb) 0)
+    (let ((scores (pad:ly-scores3
+                   (lambda () (if ga -100 (pad:ly-score fa)))
+                   (lambda () (if gs -100 (pad:ly-score sa)))
+                   (lambda () (if gb -100 (pad:ly-score bk))))))
+      (let ((na (car scores)) (ns (cadr scores)) (nb (caddr scores)))
+        (display "RACE layout focus=")
+        (display (pad:nstr na))
+        (display " side=")
+        (display (pad:nstr ns))
+        (display " book=")
+        (display (pad:nstr nb))
+        (display " base=")
+        (display (pad:nstr base))
+        (newline)
+        (cond
+          ((and (> ns na) (> ns nb) (> ns base))
+           (pad:ly-keep! *ly-side-body* sa ns))
+          ((and (> na ns) (> na nb) (> na base))
+           (pad:ly-keep! *ly-focus-body* fa na))
+          ((and (> nb na) (> nb ns) (> nb base))
+           (pad:ly-keep! *ly-book-body* bk nb))
+          (#t
+           (pad:ly-drop!
+            (if (or (= na base) (= ns base) (= nb base))
+                "tie-is-not-better-rollback"
+                "lower-score-rollback")
+            base #f)))))))
+
+(define (pad:ly-undo!)
+  (if (null? *ly-hist*)
+      (begin
+        (display "REJECT kind=layout reason=nothing-to-undo say=\"")
+        (display "nothing to take back yet")
+        (display "\"")
+        (newline)
+        (set! *pl-say* "nothing to take back yet")
+        "reject")
+      (let* ((top (car *ly-hist*))
+             (want (cadr top)))
+        (set! *ly-hist* (cdr *ly-hist*))
+        (pad:ly-restore! top)
+        (let ((got (pad:ly-score (pad:ly-now))))
+          (set! *ly-score* got)
+          (display "UNDO kind=layout to=")
+          (display (pad:nstr got))
+          (display " want=")
+          (display (pad:nstr want))
+          (newline)
+          (if (= got want)
+              (begin
+                (set! *pl-say* "took back the last keep")
+                "undo")
+              (begin
+                (display "PAD_M15_UNDO_FAIL rescore\n")
+                (set! *pl-say* "the picture and the score do not match")
+                "fail"))))))
+
+(define (pad:ly-bump top)
+  (cons (car top) (cons (+ (cadr top) 1) (cddr top))))
+
+(define (pad:ly-undo-mismatch!)
+  (if (null? *ly-hist*)
+      "reject"
+      (begin
+        (set! *ly-hist* (cons (pad:ly-bump (car *ly-hist*)) (cdr *ly-hist*)))
+        (pad:ly-undo!))))
+
+(define (pad:ly-arm!)
+  (pad:wn-reset!)
+  (pad:play-reset! "hi\naura")
+  (set! *vi-on* #t)
+  (set! *vw-rows* 16)
+  (set! *vw-cols* 40)
+  (set! *ly-need* 1)
+  (pad:ly-goal!)
+  (set! *ly-rej* 0)
+  (set! *ly-hist* (list))
+  (pad:ly-pages!)
+  (pad:ly-seed!)
+  (pad:ly-install! (pad:ly-focus))
+  (set! *ly-body* *ly-focus-body*)
+  (set! *ly-score* (pad:ly-score (pad:ly-focus)))
+  (hot-strategy:swap! "pd:layout" *ly-focus-body* "layout-arm")
+  0)
+
+(define (pad:ly-run! w rest)
+  (cond
+    ((or (string=? w "layout") (string=? w "layout:") (string=? w "layout:race"))
+     (pad:ly-race!) rest "vi-do")
+    ((string=? w "layout:story")
+     (set! *ly-need* 1) (pad:ly-goal!) (pad:ly-race!) rest "vi-do")
+    ((string=? w "layout:beside")
+     (set! *ly-need* 2) (pad:ly-goal!) (pad:ly-race!) rest "vi-do")
+    ((string=? w "layout:book")
+     (set! *ly-need* 3) (pad:ly-goal!) (pad:ly-race!) rest "vi-do")
+    ((string=? w "layout:undo")
+     (pad:ly-undo!) rest "vi-do")
+    (#t #f)))
+
+(set! *ly-ready* #t)
