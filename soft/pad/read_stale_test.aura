@@ -1,0 +1,52 @@
+;; Step 15. The first edit after a check marks the cache stale.
+;; That insert does not set-code. Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+(define *pl-say* "")
+(define *read-ready* #f)
+(define *read-frame* #f)
+(define *pad-def-lookup* #f)
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+(load (string-append *pad-home* "/soft/pad/read.aura"))
+(pad:read-load!)
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(set! *pad-def-lookup* pad:define-lookup)
+(if (not (eq? string-join *read-join*))
+    (set! string-join *read-join*)
+    0)
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(set! *ux-line* "")
+(set! *ux-lines*
+      (pad:v-lines "(define (hello x) (+ x 1))\n(define (main) (hello 3))"))
+(set! *ux-point* 8)
+
+(if (not (pad:ux-on?))
+    (begin
+      (let ((n0 *ws-set-code-n*))
+        (pad:ux-insert! 97)
+        (say (string-append "CHECK off_set="
+                            (number->string (- *ws-set-code-n* n0))))
+        (say (if (string=? *read-status* "none")
+                 "CHECK off_status=none"
+                 "CHECK off_status=touched"))))
+    (begin
+      (say "CHECK flag=on")
+      (pad:say-run!)
+      (let ((n0 *ws-set-code-n*)
+            (src0 (pad:v-src *ux-lines*)))
+        (pad:ux-insert! 97)
+        (say (string-append "CHECK status=" *read-status*))
+        (say (string-append "CHECK say=" *pl-say*))
+        (say (string-append "CHECK set="
+                            (number->string (- *ws-set-code-n* n0))))
+        (say (if (string=? (pad:v-src *ux-lines*) src0)
+                 "CHECK src=same"
+                 "CHECK src=changed")))))

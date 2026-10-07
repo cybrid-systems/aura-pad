@@ -110,6 +110,34 @@
   (pad:ux-say-at)
   0)
 
+(define (pad:ux-ins xs i ch)
+  (cond
+    ((null? xs) (list ch))
+    ((= i 0) (cons ch xs))
+    (#t (cons (car xs) (pad:ux-ins (cdr xs) (- i 1) ch)))))
+
+(define (pad:ux-set-line L i row)
+  (if (= i 0)
+      (cons row (cdr L))
+      (cons (car L) (pad:ux-set-line (cdr L) (- i 1) row))))
+
+;; First edit after a check. The projection changes. set-code does not.
+;; query:dirty-nodes is the next check, not this insert.
+(define (pad:ux-insert! ch)
+  (if (not (and (pad:ux-on?)
+                (or (string=? *read-status* "checked")
+                    (string=? *read-status* "stale"))))
+      0
+      (let ((lc (pad:v-linecol *ux-lines* *ux-point*)))
+        (set! *ux-lines*
+              (pad:ux-set-line *ux-lines* (car lc)
+                               (pad:ux-ins (pad:ux-nth *ux-lines* (car lc))
+                                           (cadr lc) ch)))
+        (set! *ux-point* (+ *ux-point* 1))
+        (set! *read-status* "stale")
+        (set! *pl-say* "check again to ask aura")
+        0)))
+
 (define (pad:ux-check!)
   (if (not *read-ready*)
       (load (string-append *pad-home* "/soft/pad/read.aura"))
