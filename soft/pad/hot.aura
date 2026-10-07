@@ -17,6 +17,19 @@
 (define *propose-tag* "boot")
 (define *gate-word* "")
 
+;; std/hot-strategy register! takes an ast:snapshot. On Soft 18b48dc..0ba8690
+;; a plain snapshot leaves every workspace closure "invalid closure" and
+;; eval-current alone does not rebind (out/newaura/repro/snap_inv.aura,
+;; aura#4349 comment). Restore of that same snapshot + one eval-current
+;; does, and changes no code. Returns register!'s own result.
+(define (pad:hs-register! name body)
+  (let ((r (hot-strategy:register! name body)))
+    (if (and (pair? r) (pair? (cdr r)) (pair? (cddr r)) (number? (caddr r)))
+        (begin (try (ast:restore (caddr r)) (catch (e) #f))
+               (try (eval-current) (catch (e) #f)))
+        #f)
+    r))
+
 ;; Seed both slots with one body via set-code, then register pd:law.
 (define (pd:strategy-seed! body)
   (if (= *strategy-seeded* 1)
@@ -29,7 +42,7 @@
             (list #f "seed")
             (begin
               (eval-current)
-              (hot-strategy:register! "pd:law" body)
+              (pad:hs-register! "pd:law" body)
               (set! *main-body* body)
               (set! *strategy-seeded* 1)
               (set! *race-backend* 0)

@@ -67,7 +67,7 @@
             (list #f "seed")
             (begin
               (eval-current)
-              (hot-strategy:register! "pd:helper" body)
+              (pad:hs-register! "pd:helper" body)
               (set! *helper-main-body* body)
               (set! *helper-seeded* 1)
               (set! *race-backend* 0)
@@ -168,7 +168,7 @@
              (begin
                (pd:gate-reject! "swap" "")
                (pd:helper-out! "helper_reject"))
-             (let ((why (pad:plan-check (try (pd:helper) (catch (e) #f)))))
+             (let ((why (pad:plan-check-body (try (pd:helper) (catch (e) #f)) clean)))
                (if (not (string=? why "ok"))
                    (begin
                      (set! *helper-why* why)
