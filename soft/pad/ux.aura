@@ -1,0 +1,7 @@
+;; Sentence-line flag. This file only answers whether the flag is on.
+;; The line, the keys, and the workspace come in later steps.
+;; Soft reserved: never bind quote.
+
+(define (pad:ux-on?)
+  (let ((v (getenv "PAD_SENTENCE")))
+    (and (string? v) (string=? v "1"))))

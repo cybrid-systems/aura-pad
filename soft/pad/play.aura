@@ -39,6 +39,7 @@
 (load (string-append *pad-home* "/soft/pad/screen.aura"))
 (load (string-append *pad-home* "/soft/pad/emacs.aura"))
 (load (string-append *pad-home* "/soft/pad/win.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
 
 ;; PAD_PAGE=big starts on the twelve-row page (scripts/bench_editors.sh)
 (pad:play-reset! (if (equal? (getenv "PAD_PAGE") "big") *lc-big-page* *play-start*))
@@ -49,7 +50,11 @@
     (pad:pf-open! *play-file*)
     0)
 ;; aura-pad sets PAD_VI=1 (evil normal / insert). Smokes leave it unset.
-(pad:vi-boot!)
+;; PAD_SENTENCE=1 is the sentence branch even when PAD_VI=1 is also set.
+;; That branch does not call pad:vi-boot!, so the frame has no [normal].
+(if (pad:ux-on?)
+    0
+    (pad:vi-boot!))
 ;; PAD_DEFER=1: early frame before the rows below a string edit settle.
 ;; With the stdin poll (char-ready?, aura#4358 fixed in b8f008d) the
 ;; early frame is on by default (PAD_DEFER=0 turns it off) and a waiting
