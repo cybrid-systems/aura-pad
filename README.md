@@ -145,6 +145,7 @@ flip 翻到下一页。story:undo 把旧画面换回来。
 Tutorial: [`docs/tutorial.md`](docs/tutorial.md).
 Requirements: [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md).
 Design: [`docs/DESIGN.md`](docs/DESIGN.md).
+Next design (M18–M24): [`docs/sentence-design.md`](docs/sentence-design.md).
 Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 Milestones: [`docs/m0.md`](docs/m0.md), [`docs/m1.md`](docs/m1.md),
 [`docs/m2.md`](docs/m2.md), [`docs/m3.md`](docs/m3.md), [`docs/m35.md`](docs/m35.md),

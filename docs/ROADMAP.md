@@ -186,3 +186,20 @@ numbers are in `perf-emacs.md` (they are 10–30× faster per key).
 | Skip SNAP rows C already has (wire v2, still fail closed) | pad + C reader only | done, opt-in `--wire2` (`PAD_WIRE2_OK`): frames 44 → 12 lines, **no latency gain** (cursor 1.86 vs 1.71 ms, insert 3.16 vs 3.24 ms, noise), v1 stays default |
 
 Each lever lands with a before/after line in `perf.md`.
+
+## M18–M24 — sentence line on the live workspace (designed)
+
+Not shipped. The spec is [`sentence-design.md`](sentence-design.md).
+M0–M13 stay as they are. M14–M17 window issues are closed.
+The next work is the 60 issues in that document, one commit each.
+The default binary stays vi until step 21, so today's smoke stays green.
+Typing stays on the line cache. A check, and an AI write, happen in a
+child workspace. KEEP only when the score is strictly higher.
+
+- M18 — Open a real module, edit, save, and hear one engine sentence.
+- M19 — Save the projection, not `query:code`.
+- M20 — Who wrote it survives save and reopen, or the pad says soft-only.
+- M21 — One sentence is one transaction. Classic mode uses the same card.
+- M22 — Two proposals. Show the blast radius before KEEP.
+- M23 — A child story uses the same path.
+- M24 — Self-repair, and one human-speed rule.
