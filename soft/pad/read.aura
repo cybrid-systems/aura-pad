@@ -21,6 +21,8 @@
 (define *read-frame* #f)
 (define *read-cache* (list))
 (define *read-status* "none")
+(define *read-missing* "none")
+(define *read-extra* "none")
 
 (define (pad:read-bool b)
   (if b "true" "false"))
@@ -153,7 +155,26 @@
       0)
   0)
 
-(define (pad:read-finish! code0 t0)
+;; M9 shape: missing = Soft defines the engine did not birth,
+;; extra = engine births the Soft define scan missed. Log only.
+;; A non-empty diff stays "checked" and does not write SAY.
+;; pad:hl-tokens is the editor highlighter (play loads hl before view).
+(define (pad:read-diff L)
+  (let* ((toks (pad:hl-tokens (pad:v-src L)))
+         (soft (pad:ws-soft-defs toks))
+         (eng (pad:ws-engine-defs toks)))
+    (list (pad:ws-diff soft eng) (pad:ws-diff eng soft))))
+
+(define (pad:read-log-diff! miss extra)
+  (let ((ms (pad:ws-names-str miss))
+        (ex (pad:ws-names-str extra)))
+    (set! *read-missing* ms)
+    (set! *read-extra* ex)
+    (pad:read-show! (string-append "READ missing=" ms))
+    (pad:read-show! (string-append "READ extra=" ex))
+    0))
+
+(define (pad:read-finish! code0 t0 miss extra)
   (let ((rows (try (workspace :list) (catch (e) #f))))
     (if (not (or (null? rows) (pair? rows)))
         (pad:read-note! "READ list-fail")
@@ -177,9 +198,10 @@
                             (pad:read-show! "READ q-sane=true")
                             (pad:read-show! "READ root=same")
                             (pad:read-show! "READ state=checked")
+                            (pad:read-log-diff! miss extra)
                             0)))))))))
 
-(define (pad:read-gather! c n0 e0 code0 t0)
+(define (pad:read-gather! c L n0 e0 code0 t0)
   (let ((look (pad:read-lookup "hello")))
     (if (string? look)
         (begin
@@ -193,10 +215,11 @@
                                (pad:read-plain (pad:q-defines))
                                (pad:read-plain (pad:q-defuse "hello"))
                                (pad:read-plain (pad:q-node-types))
-                               (pad:read-refs look))))
+                               (pad:read-refs look)))
+                  (diff (pad:read-diff L)))
               (pad:read-back! c n0 e0 #t)
               (set! *read-cache* cache)
-              (pad:read-finish! code0 t0))))))
+              (pad:read-finish! code0 t0 (car diff) (cadr diff)))))))
 
 (define (pad:read-switched! c L n0 e0 code0 t0)
   (try (workspace :switch c) (catch (e) #f))
@@ -211,7 +234,7 @@
               (begin
                 (pad:read-back! c n0 e0 #t)
                 (pad:read-note! "READ eval-fail"))
-              (pad:read-gather! c n0 e0 code0 t0))))))
+              (pad:read-gather! c L n0 e0 code0 t0))))))
 
 (define (pad:read-check! L)
   (let ((code0 (pad:q-code))

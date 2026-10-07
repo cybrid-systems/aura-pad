@@ -11,6 +11,13 @@
 (load (string-append *pad-home* "/soft/pad/view.aura"))
 (load (string-append *pad-home* "/soft/pad/read.aura"))
 (pad:read-load!)
+;; hl.aura requires std/string. Load it after the baseline. If that
+;; require rebound string-join, put the pad copy back and do not call
+;; the rebound one (std/string's join hangs, aura#4372).
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(if (not (eq? string-join *read-join*))
+    (set! string-join *read-join*)
+    0)
 
 (define (say s)
   (display s)

@@ -1,0 +1,52 @@
+;; Step 14. Log Soft names against engine names.
+;; A non-empty diff stays checked and does not change the projection or SAY.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+(define *pl-say* "")
+(define *read-ready* #f)
+(define *read-frame* #f)
+(define *pad-def-lookup* #f)
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/read.aura"))
+(pad:read-load!)
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(if (not (eq? string-join *read-join*))
+    (set! string-join *read-join*)
+    0)
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define say0 *pl-say*)
+(define code-before (pad:q-code))
+
+(define (one tag L)
+  (let ((src0 (pad:v-src L))
+        (n0 *ws-set-code-n*))
+    (say (string-append "DIFF " tag))
+    (pad:read-check! L)
+    (say (string-append "CHECK " tag "_status=" *read-status*))
+    (say (string-append "CHECK " tag "_src="
+                        (if (string=? (pad:v-src L) src0) "same" "changed")))
+    (say (string-append "CHECK " tag "_say="
+                        (if (string=? *pl-say* say0) "same" "changed")))
+    (say (string-append "CHECK " tag "_set="
+                        (number->string (- *ws-set-code-n* n0))))
+    (say (string-append "CHECK " tag "_missing=" *read-missing*))
+    (say (string-append "CHECK " tag "_extra=" *read-extra*))
+    0))
+
+(one "flat"
+     (pad:v-lines "(define (hello x) (+ x 1))\n(define (main) (hello 3))"))
+(one "note"
+     (pad:v-lines "(define ; note\n  (hello x) (+ x 1))\n(define (main) (hello 3))"))
+(say (if (string=? (pad:q-code) code-before) "CHECK root=same" "READ_DISAGREE"))
+(let ((rows (try (workspace :list) (catch (e) #f))))
+  (say (if (and (or (null? rows) (pair? rows))
+                (not (pad:read-has-name? rows "read")))
+           "CHECK child_gone=true"
+           "CHECK child_gone=false")))
