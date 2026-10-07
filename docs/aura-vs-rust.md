@@ -9,6 +9,24 @@ Every Aura claim below was checked against the source at Aura tip
 [`perf.md`](perf.md), [`perf-aura.md`](perf-aura.md),
 [`perf-emacs.md`](perf-emacs.md), [`DESIGN.md`](DESIGN.md).
 
+**Re-check on `18b48dc` (2026-10-07).** Every aura-pad issue #4343–#4370
+was re-run (`docs/ISSUES.md`). Changed claims:
+- Child workspaces are now isolated and removable (#4368 / #4369):
+  switch + conflicts-with + `workspace:delete`, no heal.
+- A saved book reopens with authors and remapped node ids (#4365 /
+  #4367), so who-wrote-what after an open comes from the engine.
+- `char-ready?` exists (#4358), and fibers no longer corrupt `read-line`
+  (#4356). A fiber still does not run while main waits in `read-line`.
+- `mutate:atomic-batch` gates now (#4362, deprecated). The default soft
+  gate commits caller arity mismatches, so hard mode stays required.
+- Still true: the per-call cost (#4350) and `vector-set!` scaling (worse,
+  R1); no relower gain at editor scale (#4357). New: a plain
+  `ast:snapshot` invalidates workspace closures (R5), and workspace
+  `#t` / `#f` evaluate to `1` / `0` (R6). Under the hard gate a rebind
+  leaves callers with `invalid closure`, and an uncaught one re-runs the
+  entry file (R7). The faster main
+  `e7b236d` / `0ba8690` breaks captured `set!` (R4).
+
 ## 中文摘要
 
 **一句话：Aura 不是更快的 Rust。下一代编辑器真正需要、而 Rust 生态
@@ -565,9 +583,10 @@ GPU-rendered frames (GPUI). The pad is a 4 ms terminal editor: under one
 **Concurrency.**
 - CLI fibers are OS threads: `fiber:spawn-backend` = 2, and `p09`
   showed no speedup.
-- They race `read-line` and corrupt the heap (#4356).
-- There is no stdin poll (#4358), `fiber:yield` is a no-op, and
-  `eval:async` runs inline.
+- They raced `read-line` and corrupted the heap (#4356, fixed in
+  `18b48dc`); a fiber still does not run while main waits in `read-line`.
+- `char-ready?` now exists (#4358, b8f008d); `fiber:yield` is a no-op
+  and `eval:async` runs inline.
 - tokio/rayon give real async I/O and data parallelism.
 
 **Ecosystem.** Rust has tree-sitter grammars for hundreds of languages,
