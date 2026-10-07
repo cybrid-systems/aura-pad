@@ -11,6 +11,37 @@ aura-pad issue #4343–#4370 was re-run on `18b48dc` (repros in
 `out/newaura/repro/`); the repro is trusted over the closed label. Pad
 work never invents a replacement API.
 
+### Re-check on main `02f03f3` (2026-10-07 14:45 CST): still not usable
+
+`02f03f3` (after `0ba8690`: 420f4c1 heap-boundary closures, b7bedcb,
+02f03f3) was built in `dev:v1.0.9` and kept as `build/aura.02f03f3`;
+`build/aura` stays `18b48dc`. Repros: `out/newaura/repro/tip02/`
+(originals) and `reg_02f03f3/` (R2–R7), with `reg_18b48dc/` as the base.
+
+| item | `18b48dc` | `02f03f3` | verdict |
+|------|-----------|-----------|---------|
+| #4343 spin 10000, N=0/200/800 | 1642/3573/9658 ms | 141/130/211 ms | fixed |
+| #4350 2000 calls, N=0/300/1000 | 182/466/1186 ms | 17/24/31 ms | fixed (but R4) |
+| #4349 restore + `eval-current` | `g` runs the rebound body (3) | restored body (2) | better |
+| R1 #4346 `vector-set!` per 200, N=600 | 4266 ms | 4052 ms (`c69e644` 440) | still |
+| R2 #4360 add-path rebind | `invalid closure` | same | still |
+| R3 #4362 soft gate | commits arity + unbound | unbound refused, arity commits | half |
+| R4 captured `set!` / `string-trim` | correct | A1 unbound `set!: i`, A5 5, A6 0; `string-trim` hangs | still (blocks the pad) |
+| R5 #4349 `ast:snapshot` | caller + leaf invalid | caller invalid, leaf ok | still |
+| R6 #4357 workspace `#t`/`#f` | `1`/`0` | `1`/`0` | still |
+| R7 #4360 hard-gate rebind, entry re-run | invalid + re-run | same | still |
+| every other #4343–#4370 repro | pass | pass | fixed |
+
+Re-check comments on the new tip:
+[#4346](https://github.com/cybrid-systems/aura/issues/4346#issuecomment-6032609932),
+[#4360](https://github.com/cybrid-systems/aura/issues/4360#issuecomment-6032617084),
+[#4362](https://github.com/cybrid-systems/aura/issues/4362#issuecomment-6032621355),
+[#4349](https://github.com/cybrid-systems/aura/issues/4349#issuecomment-6032626694),
+[#4357](https://github.com/cybrid-systems/aura/issues/4357#issuecomment-6032628586),
+R4 on [#4350](https://github.com/cybrid-systems/aura/issues/4350#issuecomment-6032631883).
+Reopening these six is pending the user's form. No pad workaround can be
+dropped: the pad stays on `18b48dc`.
+
 ### Fixed on `18b48dc`: workaround removed, native path used
 
 | Aura issue | Was | Pad now |
