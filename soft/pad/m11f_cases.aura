@@ -55,16 +55,26 @@
   (m11:acc-end! "M11F" 1)
   #t)
 
+;; try- worlds still listed (workspace :list rows are (id name . flag)).
+(define (m11:try-worlds xs)
+  (cond ((null? xs) 0)
+        ((and (pair? (car xs)) (pair? (cdr (car xs))) (string? (cadr (car xs)))
+              (>= (string-length (cadr (car xs))) 4)
+              (string=? (substring (cadr (car xs)) 0 4) "try-"))
+         (+ 1 (m11:try-worlds (cdr xs))))
+        (#t (m11:try-worlds (cdr xs)))))
 (define (m11:sec-f2)
   ;; 2. No idea beats the page: nothing comes back, root code, page and
-  ;;    root bindings are as before (aura#4368 heal), no undo entry. A
-  ;;    gated idea never gets a world.
+  ;;    root bindings are as before (switch 0 alone, aura#4368 fixed), no
+  ;;    undo entry. A gated idea never gets a world; a tried world is
+  ;;    deleted (aura#4369 fixed) and no try- world stays listed.
   (m11:acc-begin!)
   (m11:fresh!)
   (let* ((code0 (pad:q-code))
          (L0 (pad:es-L *pl-st*))
          (u0 (length *robot-undo*))
          (k0 *world-children*)
+         (d0 *world-deleted*)
          (r (m11:world-out! (pad:world-race! "helper" *m11-ideas-none* *m11-goal*))))
     (m11:expect-str "F2_TAG" (car r) "NOWIN")
     (m11:expect-str "F2_SAY" *pl-say* "the helper tried 2 ideas in its own worlds, none did better than your page (1 of 3 checks), nothing changed")
@@ -72,6 +82,8 @@
     (m11:expect "F2_IDEA1_SCORE" (pad:nth (m11:idea 1) 2) 0)
     (m11:expect-str "F2_IDEA2" (pad:nth (m11:idea 2) 1) "gate")
     (m11:expect "F2_ONE_WORLD" (- *world-children* k0) 1)
+    (m11:expect "F2_WORLD_DELETED" (- *world-deleted* d0) 1)
+    (m11:expect "F2_NO_TRY_LISTED" (m11:try-worlds (workspace :list)) 0)
     (m11:expect-true "F2_CODE_SAME" (string=? (pad:q-code) code0))
     (m11:expect-true "F2_PAGE_SAME" (eq? (pad:es-L *pl-st*) L0))
     (m11:expect "F2_GREET_ROOT" (greet 1) 2)

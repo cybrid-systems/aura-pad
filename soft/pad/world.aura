@@ -21,13 +21,12 @@
 ;;   the goal score in root equals the winner's score.
 ;; A mismatch prints M11_WORLD_DISAGREE.
 ;;
-;; A child's rebind changes the shared top-level bindings, and after a
-;; child eval-current root's own eval-current does not put root's back
-;; (aura#4368). So after every idea: workspace :switch 0, then
-;; ast:restore of the root snapshot + one eval-current. Children are not
-;; removed: workspace:discard only resets a child to root's state (its
-;; documented meaning), and workspace:delete can leave root holding a
-;; binding into the freed child (aura#4369: SIGSEGV / hang).
+;; After every idea: workspace :switch 0 (root's bindings come back with
+;; the switch, aura#4368 fixed in 19abd2e), workspace:conflicts-with of
+;; the child, then workspace:delete of the child (no leaked binding,
+;; aura#4369 fixed in 78973ab / 58e53a9). No ast:restore + eval-current
+;; heal of root and no child left behind. Older Soft (c69e644) needs the
+;; heal and must keep its children; this file targets 18b48dc or newer.
 ;; Goal: ((label thunk want) ...); a check passes when (thunk) is equal?
 ;; to want; a thunk that raises fails. Workspace ids start at 0 and 0 is
 ;; false in Soft, so ids are tested with number?.
@@ -39,6 +38,7 @@
 (define *world-kept* 0)
 (define *world-disagree* 0)
 (define *world-children* 0)
+(define *world-deleted* 0)  ; children removed with workspace:delete
 
 (define (pad:world-pass? chk)
   (let ((got (try ((cadr chk)) (catch (e) "world-raised"))))
@@ -52,15 +52,19 @@
 (define (pad:world-subset? a b)
   (cond ((null? a) #t) ((member (car a) b) (pad:world-subset? (cdr a) b)) (#t #f)))
 
-;; Back to root, root bindings back (aura#4368).
-(define (pad:world-home! snap)
-  (try (workspace :switch 0) (catch (e) #f))
-  (pad:robot-heal! snap))
+;; Back to root; the switch brings root's bindings back (aura#4368 fixed).
+(define (pad:world-home!)
+  (try (workspace :switch 0) (catch (e) #f)))
+;; Remove a tried child (aura#4369 fixed: no binding into the freed child).
+(define (pad:world-drop! c)
+  (if (eq? (try (workspace:delete c) (catch (e) #f)) #t)
+      (set! *world-deleted* (+ *world-deleted* 1))
+      #f))
 
 ;; One idea in its own world. Returns
 ;; (k status score eng-names conflicts child-code why ops)
 ;; status: "tried" | "gate" (Soft gate said no) | "refused" | "no-world".
-(define (pad:world-run1 k who why ops goal code0 snap)
+(define (pad:world-run1 k who why ops goal code0)
   (let ((g (pad:robot-gate who ops)))
     (if (not (string=? g "ok"))
         (list k "gate" -1 (list) (list) "" why ops)
@@ -77,16 +81,17 @@
                        (code (pad:q-code))
                        (eng (pad:time-changed-in (pad:time-defs code) (pad:time-defs code0)
                                                  (pad:time-changed-in (pad:time-defs code0) (pad:time-defs code) (list)))))
-                  (pad:world-home! snap)
+                  (pad:world-home!)
                   (let ((cf (try (workspace:conflicts-with c) (catch (e) (list)))))
+                    (pad:world-drop! c)
                     (list k (if (eq? r #t) "tried" "refused") score eng (if (list? cf) cf (list))
                           code why ops)))))))))
 
-(define (pad:world-run-all who tries goal code0 snap k)
+(define (pad:world-run-all who tries goal code0 k)
   (if (or (null? tries) (> k *world-max*))
       (list)
-      (cons (pad:world-run1 k who (car (car tries)) (cadr (car tries)) goal code0 snap)
-            (pad:world-run-all who (cdr tries) goal code0 snap (+ k 1)))))
+      (cons (pad:world-run1 k who (car (car tries)) (cadr (car tries)) goal code0)
+            (pad:world-run-all who (cdr tries) goal code0 (+ k 1)))))
 
 ;; Engine check of one tried idea: (names-ok conflicts-ok).
 (define (pad:world-idea-ok? t)
@@ -117,9 +122,8 @@
   (set! *world-races* (+ *world-races* 1))
   (let* ((L0 (pad:es-L *pl-st*))
          (code0 (pad:q-code))
-         (snap (ast:snapshot "world"))
          (base (pad:world-score goal))
-         (ts (pad:world-run-all who tries goal code0 snap 1))
+         (ts (pad:world-run-all who tries goal code0 1))
          (same (and (eq? (pad:es-L *pl-st*) L0) (string=? (pad:q-code) code0)))
          (ideas-ok (pad:world-ideas-ok? ts))
          (win (pad:world-best ts base #f))
@@ -180,4 +184,5 @@
   (string-append "races=" (number->string *world-races*)
                  " kept=" (number->string *world-kept*)
                  " children=" (number->string *world-children*)
+                 " deleted=" (number->string *world-deleted*)
                  " wdisagree=" (number->string *world-disagree*)))
