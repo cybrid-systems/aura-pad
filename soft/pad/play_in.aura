@@ -496,9 +496,11 @@
                                      dm)))))))))
               ;; mode changes are not editor commands. Movement and inserts
               ;; fall through and use the same paths as the modeless map.
+              ;; "vi-do" means vi.aura already edited; just draw one frame.
               ((and *vi-on* (string? c)
                     (or (string=? c "to-insert") (string=? c "to-normal")
-                        (string=? c "append") (string=? c "normal-key")))
+                        (string=? c "append") (string=? c "normal-key")
+                        (string=? c "vi-do")))
                (pad:vi-meta! c))
               (fast (if (equal? (pad:play-cmd! c) "quit") "quit" "snap"))
               (in (if *vi-on* (pad:vi-bytes! line) (pad:pi-bytes! line)))

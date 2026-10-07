@@ -10,9 +10,11 @@
 ;;   ctrl-x ctrl-s        save (Emacs). ctrl-s alone is the M9 notebook
 ;;                        "check" key, so here it only says how to save.
 ;;   ctrl-q, ctrl-x ctrl-c  quit. With unsaved changes the first press
-;;                        says so and the next quit key quits. ctrl-c
-;;                        alone says how to quit (aura-pad hands ctrl-c
-;;                        to Soft as a key byte, not as SIGINT).
+;;                        says so and the next ctrl-x ctrl-c (or ctrl-q,
+;;                        or ctrl-c) quits. ctrl-c alone, before that,
+;;                        says how to quit (aura-pad hands ctrl-c to Soft
+;;                        as a key byte, not as SIGINT).
+;;   ctrl-x ctrl-e        run the page (pad:vi-eval! in vi.aura).
 ;; Every other key goes to pad:play-step! as before.
 ;;
 ;; The pad never writes a file it could not load byte for byte. A file
@@ -38,7 +40,10 @@
 (define *pf-max-lines* 18)
 ;; protocol lines the file keys arrive as (ctrl-x 24, ctrl-q 17,
 ;; ctrl-s 19, ctrl-c 3; a fast ctrl-x ctrl-s can come in one read)
-(define *pf-keys* (list "IN 24" "IN 17" "IN 19" "IN 24 19" "IN 24 3" "IN 3"))
+;; "IN 5" is ctrl-e (end of line) and stays a normal key. Only the
+;; chord ctrl-x ctrl-e runs the page, so the coalesced form is listed
+;; and a split ctrl-e is noticed because ctrl-x left *pf-cx* set.
+(define *pf-keys* (list "IN 24" "IN 17" "IN 19" "IN 24 19" "IN 24 3" "IN 24 5" "IN 3"))
 (define *pf-help* "ctrl-x ctrl-s saves, ctrl-q quits")
 
 ;; "1 line", "3 lines"
@@ -148,7 +153,7 @@
       (begin
         (set! *pf-quit* #t)
         (set! *pl-say* (string-append *pf-name* " is not saved yet - ctrl-x ctrl-s saves,"
-                                      " ctrl-q again quits"))
+                                      " ctrl-x ctrl-c again quits"))
         (pad:play-emit!)
         "go")))
 
@@ -165,12 +170,20 @@
        (pad:pf-save!)
        (pad:play-emit!)
        "go")
-      ((or (string=? line "IN 17") (and cx (string=? line "IN 3")) (string=? line "IN 24 3"))
+      ((or (string=? line "IN 17")
+           (and cx (string=? line "IN 3"))
+           (string=? line "IN 24 3")
+           ;; the warning is up: a lone ctrl-c counts as the second press
+           (and armed (string=? line "IN 3")))
        (pad:pf-quit! armed))
+      ((or (and cx (string=? line "IN 5")) (string=? line "IN 24 5"))
+       (pad:vi-eval!)
+       (pad:play-emit!)
+       "go")
       ((string=? line "IN 24")
        (set! *pf-cx* #t)
        (set! *pf-quit* armed)
-       (set! *pl-say* "ctrl-x - now ctrl-s saves, ctrl-c quits")
+       (set! *pl-say* "ctrl-x - now ctrl-s saves, ctrl-c quits, ctrl-e runs this page")
        (pad:play-emit!)
        "go")
       (cx

@@ -50,6 +50,21 @@ if grep -qiE 'error:|unbound variable' "$OUT/unit.txt" "$OUT/unit.err"; then
 fi
 grep -q '^PAD_VI_TEST_OK$' "$OUT/unit.txt" || { echo "vi_check: unit" >&2; exit 1; }
 
+# No file: ctrl-x says how to quit, and :e runs the starter page (hello 3 => 4).
+printf '%s\n' 'IN 24' \
+  | PAD_VI=1 run_aura "$ROOT/soft/pad/play.aura" >"$OUT/cx.txt" 2>"$OUT/cx.err" \
+  || { cat "$OUT/cx.err" >&2; exit 1; }
+grep -q 'ctrl-c quits' "$OUT/cx.txt" || { echo "vi_check: no-file ctrl-x" >&2; exit 1; }
+printf '%s\n' 'IN 58' 'IN 101' 'IN 13' 'IN 17' \
+  | PAD_VI=1 run_aura "$ROOT/soft/pad/play.aura" >"$OUT/eval.txt" 2>"$OUT/eval.err" \
+  || { cat "$OUT/eval.err" >&2; exit 1; }
+if grep -qiE 'error:|unbound variable' "$OUT/eval.txt" "$OUT/eval.err"; then
+  echo "vi_check: eval Soft error" >&2
+  cat "$OUT/eval.err" >&2
+  exit 1
+fi
+grep -q 'ran: 4' "$OUT/eval.txt" || { echo "vi_check: :e did not run" >&2; exit 1; }
+
 # File editor: ctrl-f, ctrl-n, i, Z, Esc, save. Page becomes ab / cZd.
 printf 'ab\ncd\n' >"$OUT/page.txt"
 printf '%s\n' 'IN 6' 'IN 14' 'IN 105' 'IN 90' 'IN 27' 'IN 24' 'IN 19' 'IN 17' \

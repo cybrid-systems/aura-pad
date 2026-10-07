@@ -2,26 +2,60 @@
 ;; Loaded by play.aura. Off unless PAD_VI=1 (aura-pad sets that; the
 ;; smokes do not, so the modeless keymap in keys.aura stays put).
 ;;
-;; Normal (the start): h j k l move, i types, a appends, Esc stays.
-;; Insert: letters type, Esc returns to normal.
+;; Normal (the start):
+;;   h j k l move, i types, a appends, Esc stays.
+;;   x / X delete a letter, dd deletes the line, D deletes to the end
+;;   of the line (it does not join), yy copies the line, p pastes.
+;;   u takes the last edit back. 0 / $ go to the ends of the line,
+;;   gg / G to the top and the bottom. w / b move by words.
+;;   I / A / o / O open insert at the start, the end, below, above.
+;;   r replaces the letter under the cursor.
+;;   : opens a command line: e / eval / run runs the page, w saves,
+;;   q quits, wq saves and quits. ZZ saves and quits, ZQ quits.
+;; Insert: letters type, Esc returns to normal. : is a letter there.
 ;; Both modes: ctrl-b left, ctrl-f right, ctrl-p up, ctrl-n down,
 ;; and the arrow keys. ctrl-] jumps back (ctrl-b used to). ctrl-v
-;; copies the region (ctrl-p used to). Other ctrl keys are unchanged
-;; (ctrl-a / ctrl-e, ctrl-q, ctrl-x, ctrl-o, ...).
+;; copies the region (ctrl-p used to).
+;; ctrl-x ctrl-c quits (with a file, file.aura owns that chord and
+;; warns once when the page is not saved). ctrl-x ctrl-e runs the page.
+;; Alt-x is the bytes 27 120 in ONE read (a lone 27 is still Esc).
+;; Enter on an empty Alt-x line runs the page.
+;;
+;; Running the page uses (eval ...), not set-code, so the editor stays
+;; loaded. display and newline inside the page are caught so they do
+;; not write into the SNAP stream. On this Aura a let that binds those
+;; names sticks to the top level, so the real primitives are put back
+;; before the next frame.
 ;;
 ;; Esc is byte 27, which is also the start of an arrow. C sends one
 ;; read() as one "IN b1 b2 ..." line, and a real Esc is a one-byte
 ;; read, so a lone 27 leaves insert. 27 91 / 27 79 in the SAME line
-;; is still an arrow. A split "IN 27" then "IN 91" is Esc, then "[".
-;; Soft reserved: never bind quote.
+;; is still an arrow. A split "IN 27" then "IN 120" is Esc, then x,
+;; not Alt-x.
+;; Soft reserved: never bind quote. No named let captures an outer local.
 
 (define *vi-mode* "normal")
 (define *vi-base* "")
+(define *vi-op* "")
+(define *vi-line* "")
+(define *vi-prompt* ": ")
+(define *vi-mx* #f)
+(define *vi-cx* #f)
+(define *vi-arg* 0)
+(define *vi-out* (list ""))
+(define *vi-ran* #f)
+(define *vi-gap* (list->string (list 32 47 32)))
+(define *vi-disp* display)
+(define *vi-nl* newline)
 
 (define (pad:vi-title!)
   (set! *pl-title*
         (string-append *vi-base*
                        (if (string=? *vi-mode* "insert") " [insert]" " [normal]"))))
+
+(define (pad:vi-has-file?)
+  (let ((v (getenv "PAD_FILE")))
+    (and (string? v) (> (string-length v) 0))))
 
 ;; Call after the file title is set (play.aura). Returns #t when modal.
 (define (pad:vi-boot!)
@@ -30,8 +64,13 @@
         (begin
           (set! *vi-on* #t)
           (set! *vi-mode* "normal")
+          (set! *vi-op* "")
+          (set! *vi-cx* #f)
           (set! *vi-base* *pl-title*)
-          (pad:vi-title!))
+          (pad:vi-title!)
+          (if (pad:vi-has-file?)
+              0
+              (set! *pl-say* "normal - :eval runs this page, ctrl-x ctrl-c quits")))
         (set! *vi-on* #f))
     *vi-on*))
 
@@ -41,11 +80,570 @@
   (let ((w (pad:kv-get *keymap* b)))
     (if w w "unknown")))
 
+(define (pad:vi-can-right?)
+  (let* ((st *pl-st*)
+         (L (car st))
+         (l (cadr st))
+         (col (caddr st))
+         (n (length L))
+         (len (length (list-ref L l))))
+    (not (and (= l (- n 1)) (>= col len)))))
+
+(define (pad:vi-mode-word? cmd)
+  (or (string=? cmd "vi-do")
+      (string=? cmd "to-insert")
+      (string=? cmd "to-normal")
+      (string=? cmd "append")
+      (string=? cmd "normal-key")))
+
+;; --- command line and running the page ---
+
+;; A let/define of display inside eval sticks to the top level on this
+;; Aura, and set! of the primitive before that stick is an error. Put
+;; the primitives back when the names are variables, and ignore the
+;; error when the page never ran.
+(define (pad:vi-restore-io!)
+  (try (set! display *vi-disp*) (catch (e) 0))
+  (try (set! newline *vi-nl*) (catch (e) 0)))
+
+(define (pad:vi-cut s)
+  (if (> (string-length s) 160) (string-append (substring s 0 160) "...") s))
+
+(define (pad:vi-ol s i n acc k)
+  (if (or (>= i n) (>= k 160))
+      acc
+      (let ((c (string-ref s i)))
+        (pad:vi-ol s (+ i 1) n
+                   (string-append acc
+                                  (if (or (= c 10) (= c 13) (= c 9))
+                                      " "
+                                      (list->string (list c))))
+                   (+ k 1)))))
+
+(define (pad:vi-one-line s)
+  (if (string? s) (pad:vi-ol s 0 (string-length s) "" 0) ""))
+
+(define (pad:vi-plist v d n)
+  (cond
+    ((> n 6) "...")
+    ((null? v) "")
+    ((not (pair? v)) (string-append ". " (pad:vi-p v (+ d 1))))
+    ((null? (cdr v)) (pad:vi-p (car v) (+ d 1)))
+    (#t (string-append (pad:vi-p (car v) (+ d 1)) " "
+                       (pad:vi-plist (cdr v) d (+ n 1))))))
+
+(define (pad:vi-p v d)
+  (cond
+    ((> d 4) "...")
+    ((string? v) (pad:vi-one-line v))
+    ((number? v) (number->string v))
+    ((null? v) "()")
+    ((equal? v #t) "#t")
+    ((equal? v #f) "#f")
+    ((pair? v) (string-append "(" (pad:vi-plist v d 0) ")"))
+    (#t "a value")))
+
+(define (pad:vi-add-s! s)
+  (let ((cur (car *vi-out*)))
+    (if (>= (string-length cur) 160)
+        0
+        (set-car! *vi-out* (string-append cur (pad:vi-one-line s))))))
+
+(define (pad:vi-add! v)
+  (pad:vi-add-s! (pad:vi-p v 0)))
+
+(define (pad:vi-wrap src)
+  (string-append
+    "(try (cons 1 (let () (define (display v) (pad:vi-add! v)) (define (newline) (pad:vi-add! *vi-gap*)) "
+    src
+    ")) (catch (e) (cons 0 e)))"))
+
+(define (pad:vi-skip-sp s i n)
+  (if (or (>= i n) (not (= (string-ref s i) 32)))
+      i
+      (pad:vi-skip-sp s (+ i 1) n)))
+
+(define (pad:vi-word-end s i n)
+  (if (or (>= i n) (= (string-ref s i) 32))
+      i
+      (pad:vi-word-end s (+ i 1) n)))
+
+(define (pad:vi-word s)
+  (let ((n (string-length s)))
+    (substring s (pad:vi-skip-sp s 0 n) (pad:vi-word-end s (pad:vi-skip-sp s 0 n) n))))
+
+(define (pad:vi-first-line s)
+  (let ((i (if (string? s) (string-index s "\n" 0) -1)))
+    (cond
+      ((not (string? s)) "")
+      ((< i 0) s)
+      (#t (substring s 0 i)))))
+
+(define (pad:vi-after s mark)
+  (let ((i (string-index s mark 0)))
+    (if (< i 0) "" (substring s (+ i (string-length mark)) (string-length s)))))
+
+;; Kid words only. The raw interpreter line can contain "unbound
+;; variable" / "error:", and the smokes treat those as a Soft crash.
+(define (pad:vi-soften s)
+  (let* ((line (pad:vi-first-line s))
+         (name (pad:vi-word (pad:vi-after line "unbound variable: "))))
+    (cond
+      ((> (string-length name) 0) (string-append name " is not defined yet"))
+      ((or (string-contains? line "error:") (string-contains? line "unbound"))
+       "did not run - check the parens")
+      ((string=? line "") "did not run - check the parens")
+      (#t (pad:vi-cut line)))))
+
+(define (pad:vi-blank-i s i n)
+  (if (>= i n)
+      #t
+      (let ((c (string-ref s i)))
+        (if (or (= c 32) (= c 10) (= c 13) (= c 9))
+            (pad:vi-blank-i s (+ i 1) n)
+            #f))))
+
+(define (pad:vi-blank? s)
+  (pad:vi-blank-i s 0 (string-length s)))
+
+(define (pad:vi-exec src)
+  (set-car! *vi-out* "")
+  (set! *vi-ran* (try (eval (pad:vi-wrap src)) (catch (e) (cons 0 e))))
+  (pad:vi-restore-io!)
+  *vi-ran*)
+
+(define (pad:vi-report! r)
+  (let ((out (pad:vi-cut (pad:vi-one-line (car *vi-out*)))))
+    (set! *pl-say*
+          (cond
+            ((not (pair? r)) "did not run - check the parens")
+            ((and (number? (car r)) (= (car r) 0))
+             (string-append "did not run: " (pad:vi-soften (cdr r))))
+            ((and (number? (car r)) (= (car r) 1))
+             (let ((v (cdr r)))
+               (cond
+                 ((and (null? v) (string=? out "")) "ran, and it returned nothing")
+                 ((string=? out "") (string-append "ran: " (pad:vi-cut (pad:vi-p v 0))))
+                 ((null? v) (string-append "ran, printed: " out))
+                 (#t (string-append "ran: " (pad:vi-cut (pad:vi-p v 0)) " printed: " out)))))
+            (#t "did not run - check the parens")))))
+
+(define (pad:vi-eval!)
+  (if (pad:vi-blank? (pad:play-src))
+      (begin
+        (set! *pl-say* "the page is empty")
+        (set! *pl-keys* (+ *pl-keys* 1))
+        "vi-do")
+      (begin
+        (pad:vi-report! (pad:vi-exec (pad:play-src)))
+        (set! *pl-keys* (+ *pl-keys* 1))
+        "vi-do")))
+
+(define (pad:vi-quit! force)
+  (cond
+    ((not (pad:vi-has-file?)) "quit")
+    (force "quit")
+    (*pf-ro* "quit")
+    ((string=? (pad:play-src) *pf-saved*) "quit")
+    (*pf-quit*
+     (set! *pf-quit* #f)
+     "quit")
+    (#t
+     (set! *pf-quit* #t)
+     (set! *pl-say* (string-append *pf-name* " is not saved yet - ctrl-x ctrl-s saves,"
+                                  " ctrl-x ctrl-c again quits"))
+     "vi-do")))
+
+(define (pad:vi-write! and-quit)
+  (if (not (pad:vi-has-file?))
+      (if and-quit
+          "quit"
+          (begin
+            (set! *pl-say* "no file to save")
+            "vi-do"))
+      (let ((r (pad:pf-save!)))
+        (if (and and-quit (string=? r "saved"))
+            "quit"
+            "vi-do"))))
+
+(define (pad:vi-colon!)
+  (let ((w (pad:vi-word *vi-line*))
+        (mx *vi-mx*))
+    (set! *vi-op* "")
+    (set! *vi-line* "")
+    (set! *vi-mx* #f)
+    (cond
+      ((or (string=? w "e") (string=? w "eval") (string=? w "run")) (pad:vi-eval!))
+      ((or (string=? w "q") (string=? w "quit")) (pad:vi-quit! #f))
+      ((or (string=? w "q!") (string=? w "quit!")) (pad:vi-quit! #t))
+      ((or (string=? w "w") (string=? w "write") (string=? w "save")) (pad:vi-write! #f))
+      ((or (string=? w "wq") (string=? w "x")) (pad:vi-write! #t))
+      ((string=? w "help")
+       (set! *pl-say* "eval runs this page, w saves, q quits")
+       "vi-do")
+      ((string=? w "")
+       (if mx
+           (pad:vi-eval!)
+           (begin
+             (set! *pl-say* "eval runs this page, w saves, q quits")
+             "vi-do")))
+      (#t
+       (set! *pl-say* (string-append "no command " w " - eval runs, w saves, q quits"))
+       "vi-do"))))
+
+(define (pad:vi-colon-start! mx)
+  (set! *vi-op* ":")
+  (set! *vi-line* "")
+  (set! *vi-mx* mx)
+  (set! *vi-cx* #f)
+  (set! *vi-prompt* (if mx "M-x " ": "))
+  (set! *pl-say*
+        (if mx
+            "M-x - enter runs this page, q quits, w saves"
+            ": - eval runs this page, w saves, q quits"))
+  "vi-do")
+
+(define (pad:vi-type! b)
+  (if (< (string-length *vi-line*) 48)
+      (set! *vi-line* (string-append *vi-line* (list->string (list b))))
+      0)
+  (set! *pl-say* (string-append *vi-prompt* *vi-line*))
+  "vi-do")
+
+(define (pad:vi-bs!)
+  (let ((n (string-length *vi-line*)))
+    (if (= n 0)
+        (pad:vi-cancel!)
+        (begin
+          (set! *vi-line* (substring *vi-line* 0 (- n 1)))
+          (set! *pl-say* (string-append *vi-prompt* *vi-line*))
+          "vi-do"))))
+
+;; --- line edits (normal mode) ---
+
+(define (pad:vi-undo-push U)
+  (let ((un (length U)))
+    (cond
+      ((<= *undo-max* 0) (list))
+      ((> un *undo-max*) (reverse (drop (reverse U) (- un *undo-max*))))
+      (#t U))))
+
+(define (pad:vi-drop-line!)
+  (let* ((st *pl-st*)
+         (L (car st))
+         (l (cadr st))
+         (col (caddr st))
+         (n (length L))
+         (ln (list-ref L l)))
+    (if (and (= n 1) (null? ln))
+        (begin
+          (set! *pl-rej* (+ *pl-rej* 1))
+          (set! *pl-say* "nothing to delete")
+          "vi-do")
+        (let* ((only (= n 1))
+               (last (and (not only) (= l (- n 1))))
+               (L2 (if only
+                       (list (list))
+                       (append (reverse (drop (reverse L) (- n l)))
+                               (drop L (+ l 1)))))
+               (l2 (cond (only 0) (last (- l 1)) (#t l)))
+               (ln2 (list-ref L2 l2))
+               (len2 (length ln2))
+               (col2 (cond (last len2) (only 0) ((> col len2) len2) (#t col)))
+               (kill (if only (list ln) (if last (list (list) ln) (list ln (list)))))
+               (U (pad:vi-undo-push (cons (list L l col) (list-ref st 5)))))
+          (set! *pl-st* (list L2 l2 col2 kill (list) U))
+          (pad:play-ok! "deleted the line")
+          "vi-do"))))
+
+(define (pad:vi-x!)
+  (let* ((st *pl-st*)
+         (col (caddr st))
+         (ln (list-ref (car st) (cadr st))))
+    (if (>= col (length ln))
+        (begin
+          (set! *pl-rej* (+ *pl-rej* 1))
+          (set! *pl-say* "nothing under the cursor")
+          "vi-do")
+        (let ((ch (list-ref ln col)))
+          (pad:play-cmd! "right")
+          (pad:play-cmd! "back")
+          (set! *pl-st* (list (car *pl-st*) (cadr *pl-st*) (caddr *pl-st*)
+                              (list (list ch)) (list) (list-ref *pl-st* 5)))
+          (set! *pl-say* "deleted a letter")
+          "vi-do"))))
+
+(define (pad:vi-X!)
+  (let* ((st *pl-st*)
+         (col (caddr st))
+         (ln (list-ref (car st) (cadr st))))
+    (if (= col 0)
+        (begin
+          (set! *pl-rej* (+ *pl-rej* 1))
+          (set! *pl-say* "nothing before the cursor")
+          "vi-do")
+        (let ((ch (list-ref ln (- col 1))))
+          (pad:play-cmd! "back")
+          (set! *pl-st* (list (car *pl-st*) (cadr *pl-st*) (caddr *pl-st*)
+                              (list (list ch)) (list) (list-ref *pl-st* 5)))
+          (set! *pl-say* "deleted a letter")
+          "vi-do"))))
+
+(define (pad:vi-D!)
+  (let* ((st *pl-st*)
+         (col (caddr st))
+         (ln (list-ref (car st) (cadr st))))
+    (if (>= col (length ln))
+        (begin
+          (set! *pl-rej* (+ *pl-rej* 1))
+          (set! *pl-say* "nothing under the cursor")
+          "vi-do")
+        (begin
+          (pad:play-cmd! "kill-line")
+          (set! *pl-say* "deleted to the end of the line")
+          "vi-do"))))
+
+(define (pad:vi-yy!)
+  (let* ((st *pl-st*)
+         (L (car st))
+         (l (cadr st))
+         (ln (list-ref L l)))
+    (set! *pl-st* (list L l (caddr st) (list ln (list)) (list-ref st 4) (list-ref st 5)))
+    (pad:play-ok! "copied the line")
+    "vi-do"))
+
+(define (pad:vi-p!)
+  (let ((r (pad:play-cmd! "yank")))
+    (if (string=? r "ok") (set! *pl-say* "pasted") 0)
+    "vi-do"))
+
+(define (pad:vi-replace! b)
+  (let* ((st *pl-st*)
+         (L (car st))
+         (l (cadr st))
+         (col (caddr st))
+         (ln (list-ref L l))
+         (len (length ln))
+         (n (length L)))
+    (if (>= col len)
+        (begin
+          (set! *pl-rej* (+ *pl-rej* 1))
+          (set! *pl-say* "nothing under the cursor")
+          "vi-do")
+        (let* ((pre (if (<= col 0) (list) (reverse (drop (reverse ln) (- len col)))))
+               (post (drop ln (+ col 1)))
+               (ln2 (append pre (cons b post)))
+               (L2 (append (reverse (drop (reverse L) (- n l)))
+                           (cons ln2 (drop L (+ l 1)))))
+               (U (pad:vi-undo-push (cons (list L l col) (list-ref st 5)))))
+          (set! *pl-st* (list L2 l col (list-ref st 3) (list) U))
+          (pad:play-ok! "replaced")
+          "vi-do"))))
+
+(define (pad:vi-insert-here!)
+  (set! *vi-mode* "insert")
+  (set! *vi-op* "")
+  (set! *vi-cx* #f)
+  (pad:vi-title!)
+  (set! *pl-say* "insert - type, esc goes back")
+  "vi-do")
+
+(define (pad:vi-open-below!)
+  (pad:play-cmd! "end")
+  (let ((r (pad:play-cmd! "enter")))
+    (if (string=? r "ok") (pad:vi-insert-here!) "vi-do")))
+
+(define (pad:vi-open-above!)
+  (pad:play-cmd! "home")
+  (let ((r (pad:play-cmd! "open-line")))
+    (if (string=? r "ok") (pad:vi-insert-here!) "vi-do")))
+
+(define (pad:vi-go-insert! cmd)
+  (let ((r (pad:play-cmd! cmd)))
+    (if (string=? r "ok") (pad:vi-insert-here!) "vi-do")))
+
+;; Words are runs of letters that are not spaces. w moves to the next
+;; one, including the next line; b moves back to the start of a word.
+(define (pad:vi-skip-word ln i len)
+  (if (or (>= i len) (= (list-ref ln i) 32)) i (pad:vi-skip-word ln (+ i 1) len)))
+
+(define (pad:vi-skip-spaces ln i len)
+  (if (or (>= i len) (not (= (list-ref ln i) 32)))
+      i
+      (pad:vi-skip-spaces ln (+ i 1) len)))
+
+(define (pad:vi-w!)
+  (let* ((st *pl-st*)
+         (L (car st))
+         (l (cadr st))
+         (col (caddr st))
+         (n (length L))
+         (ln (list-ref L l))
+         (len (length ln))
+         (i (pad:vi-skip-spaces ln (pad:vi-skip-word ln col len) len)))
+    (cond
+      ((< i len)
+       (set! *pl-st* (list L l i (list-ref st 3) (list-ref st 4) (list-ref st 5)))
+       (pad:play-ok! *pl-say*)
+       "vi-do")
+      ((< l (- n 1))
+       (set! *pl-st* (list L (+ l 1) 0 (list-ref st 3) (list-ref st 4) (list-ref st 5)))
+       (pad:play-ok! *pl-say*)
+       "vi-do")
+      (#t
+       (pad:play-reject! "too-far")
+       "vi-do"))))
+
+(define (pad:vi-skip-back-sp ln i)
+  (if (or (< i 0) (not (= (list-ref ln i) 32)))
+      i
+      (pad:vi-skip-back-sp ln (- i 1))))
+
+(define (pad:vi-word-start ln i)
+  (if (or (<= i 0) (= (list-ref ln (- i 1)) 32))
+      i
+      (pad:vi-word-start ln (- i 1))))
+
+(define (pad:vi-b-pos L l col)
+  (if (and (= l 0) (= col 0))
+      #f
+      (let* ((prev (= col 0))
+             (l2 (if prev (- l 1) l))
+             (ln (list-ref L l2))
+             (start (if prev (length ln) col)))
+        (if (= start 0)
+            (pad:vi-b-pos L l2 0)
+            (let ((i (pad:vi-skip-back-sp ln (- start 1))))
+              (if (< i 0)
+                  (if (= l2 0) #f (pad:vi-b-pos L l2 0))
+                  (list l2 (pad:vi-word-start ln i))))))))
+
+(define (pad:vi-b!)
+  (let* ((st *pl-st*)
+         (pos (pad:vi-b-pos (car st) (cadr st) (caddr st))))
+    (if (not pos)
+        (begin (pad:play-reject! "too-far") "vi-do")
+        (begin
+          (set! *pl-st* (list (car st) (car pos) (cadr pos)
+                              (list-ref st 3) (list-ref st 4) (list-ref st 5)))
+          (pad:play-ok! *pl-say*)
+          "vi-do"))))
+
+(define (pad:vi-cancel!)
+  (set! *vi-op* "")
+  (set! *vi-line* "")
+  (set! *vi-mx* #f)
+  (set! *pl-say* "normal - press i to type")
+  "vi-do")
+
+(define (pad:vi-pend! op say)
+  (set! *vi-op* op)
+  (set! *vi-line* "")
+  (set! *vi-mx* #f)
+  (set! *vi-cx* #f)
+  (set! *pl-say* say)
+  "vi-do")
+
+(define (pad:vi-redo! b)
+  (set! *vi-op* "")
+  (pad:vi-cmd b))
+
+(define (pad:vi-act! name)
+  (set! *vi-op* "")
+  (cond
+    ((string=? name "dd") (pad:vi-drop-line!))
+    ((string=? name "x") (pad:vi-x!))
+    ((string=? name "X") (pad:vi-X!))
+    ((string=? name "D") (pad:vi-D!))
+    ((string=? name "yy") (pad:vi-yy!))
+    ((string=? name "p") (pad:vi-p!))
+    ((string=? name "r") (pad:vi-replace! *vi-arg*))
+    ((string=? name "o") (pad:vi-open-below!))
+    ((string=? name "O") (pad:vi-open-above!))
+    ((string=? name "I") (pad:vi-go-insert! "home"))
+    ((string=? name "A") (pad:vi-go-insert! "end"))
+    ((string=? name "w") (pad:vi-w!))
+    ((string=? name "b") (pad:vi-b!))
+    ((string=? name "eval") (pad:vi-eval!))
+    ((string=? name "ZZ") (pad:vi-write! #t))
+    ((string=? name "ZQ") (pad:vi-quit! #t))
+    ((string=? name "cx")
+     (set! *pl-say* "ctrl-x - now ctrl-c quits, ctrl-e runs this page")
+     "vi-do")
+    ((string=? name "cx-no")
+     (set! *pl-say* "ctrl-x and that key do not go together")
+     "vi-do")
+    ((string=? name "c-hint")
+     (set! *pl-say* "to quit press ctrl-q (ctrl-x ctrl-c works too)")
+     "vi-do")
+    ((string=? name "d-hint")
+     (set! *pl-say* "d deletes a line - press d again")
+     "vi-do")
+    ((string=? name "y-hint")
+     (set! *pl-say* "y copies a line - press y again")
+     "vi-do")
+    ((string=? name "r-hint")
+     (set! *pl-say* "r replaces one letter")
+     "vi-do")
+    (#t (pad:vi-cancel!))))
+
+(define (pad:vi-op-byte b)
+  (cond
+    ((= b 27) (pad:vi-cancel!))
+    ((string=? *vi-op* ":")
+     (cond
+       ((or (= b 10) (= b 13)) (pad:vi-colon!))
+       ((or (= b 8) (= b 127)) (pad:vi-bs!))
+       ((and (>= b 32) (<= b 126)) (pad:vi-type! b))
+       (#t (pad:vi-type-keep!))))
+    ((string=? *vi-op* "d")
+     (set! *vi-op* "")
+     (if (= b 100) (pad:vi-act! "dd") (pad:vi-act! "d-hint")))
+    ((string=? *vi-op* "y")
+     (set! *vi-op* "")
+     (if (= b 121) (pad:vi-act! "yy") (pad:vi-act! "y-hint")))
+    ((string=? *vi-op* "g")
+     (set! *vi-op* "")
+     (if (= b 103) "bob" (pad:vi-redo! b)))
+    ((string=? *vi-op* "r")
+     (set! *vi-op* "")
+     (if (and (>= b 32) (<= b 126))
+         (begin (set! *vi-arg* b) (pad:vi-act! "r"))
+         (pad:vi-act! "r-hint")))
+    ((string=? *vi-op* "Z")
+     (set! *vi-op* "")
+     (cond
+       ((= b 90) (pad:vi-act! "ZZ"))
+       ((= b 81) (pad:vi-act! "ZQ"))
+       (#t (pad:vi-redo! b))))
+    (#t (pad:vi-cancel!))))
+
+(define (pad:vi-type-keep!)
+  (set! *pl-say* (string-append *vi-prompt* *vi-line*))
+  "vi-do")
+
+(define (pad:vi-cx-start!)
+  (set! *vi-cx* #t)
+  (set! *vi-op* "")
+  (pad:vi-act! "cx"))
+
+(define (pad:vi-cx-byte b)
+  (set! *vi-cx* #f)
+  (cond
+    ((= b 3) "quit")
+    ((= b 5) (pad:vi-act! "eval"))
+    ((= b 17) "quit")
+    (#t (pad:vi-act! "cx-no"))))
+
 ;; One idle byte -> a command word, a char code, or a mode word
-;; (to-insert / to-normal / append / normal-key).
+;; (to-insert / to-normal / append / normal-key / vi-do).
 (define (pad:vi-cmd b)
   (cond
+    ((not (string=? *vi-op* "")) (pad:vi-op-byte b))
+    (*vi-cx* (pad:vi-cx-byte b))
     ((= b 27) "to-normal")
+    ((= b 24) (pad:vi-cx-start!))
+    ((= b 3) (pad:vi-act! "c-hint"))
     ((= b 2) "left")
     ((= b 6) "right")
     ((= b 14) "next-line")
@@ -60,28 +658,44 @@
     ((= b 108) "right")
     ((= b 105) "to-insert")
     ((= b 97) "append")
+    ((= b 120) (pad:vi-act! "x"))
+    ((= b 88) (pad:vi-act! "X"))
+    ((= b 100) (pad:vi-pend! "d" "d - press d again to delete the line"))
+    ((= b 68) (pad:vi-act! "D"))
+    ((= b 121) (pad:vi-pend! "y" "y - press y again to copy the line"))
+    ((= b 112) (pad:vi-act! "p"))
+    ((= b 117) "undo")
+    ((= b 48) "home")
+    ((= b 36) "end")
+    ((= b 103) (pad:vi-pend! "g" "g - press g again to go to the top"))
+    ((= b 71) "eob")
+    ((= b 73) (pad:vi-act! "I"))
+    ((= b 65) (pad:vi-act! "A"))
+    ((= b 111) (pad:vi-act! "o"))
+    ((= b 79) (pad:vi-act! "O"))
+    ((= b 114) (pad:vi-pend! "r" "r - type a letter to replace"))
+    ((= b 119) (pad:vi-act! "w"))
+    ((= b 98) (pad:vi-act! "b"))
+    ((= b 58) (pad:vi-colon-start! #f))
+    ((= b 90) (pad:vi-pend! "Z" "Z - Z saves and quits, Q quits"))
     ((and (>= b 32) (<= b 126)) "normal-key")
     (#t (pad:vi-ctrl b))))
 
-(define (pad:vi-can-right?)
-  (let* ((st *pl-st*)
-         (L (car st))
-         (l (cadr st))
-         (col (caddr st))
-         (n (length L))
-         (len (length (list-ref L l))))
-    (not (and (= l (- n 1)) (>= col len)))))
-
-;; Apply a mode word. Returns "snap" (the caller writes one frame).
+;; Apply a mode word. Returns "snap" (the caller writes one frame)
+;; or "quit". "vi-do" was already carried out in pad:vi-cmd.
 (define (pad:vi-meta! c)
   (cond
+    ((string=? c "vi-do") "snap")
     ((string=? c "to-insert")
      (set! *vi-mode* "insert")
+     (set! *vi-op* "")
+     (set! *vi-cx* #f)
      (pad:vi-title!)
      (pad:play-ok! "insert - type, esc goes back")
      "snap")
     ((string=? c "to-normal")
      (set! *vi-mode* "normal")
+     (set! *vi-op* "")
      (pad:vi-title!)
      (pad:play-ok! "normal - press i to type")
      "snap")
@@ -89,6 +703,8 @@
      (let ((moved (pad:vi-can-right?)))
        (if moved (pad:play-cmd! "right") 0)
        (set! *vi-mode* "insert")
+       (set! *vi-op* "")
+       (set! *vi-cx* #f)
        (pad:vi-title!)
        (set! *pl-say* "insert - type, esc goes back")
        (if moved 0 (set! *pl-keys* (+ *pl-keys* 1)))
@@ -107,14 +723,23 @@
          (display (pad:play-snap)))
      "go")))
 
+(define (pad:vi-took! cmd rest)
+  (let* ((r (if (pad:vi-mode-word? cmd) (pad:vi-meta! cmd) (pad:play-cmd! cmd)))
+         (e (pad:vi-emit! r)))
+    (if (string=? e "quit") "quit" (pad:vi-each rest (list)))))
+
 ;; Rest of a multi-byte line. esc is the escape-sequence state, passed
 ;; in so the loop does not capture an outer local. A trailing lone 27
 ;; leaves insert; 27 followed by 91 or 79 in this same line is an arrow.
+;; 27 followed by 120 in this same line is Alt-x.
 (define (pad:vi-each xs esc)
   (if (null? xs)
       (begin (set! *pl-esc* esc) "go")
       (let ((b (car xs)) (rest (cdr xs)))
         (cond
+          ((and (null? esc) (string=? *vi-op* "")
+                (= b 27) (pair? rest) (= (car rest) 120))
+           (pad:vi-took! (pad:vi-colon-start! #t) (cdr rest)))
           ((pair? esc)
            (let* ((step (pad:key-step esc b))
                   (cmd (car step))
@@ -128,15 +753,7 @@
           ((and (= b 15) (null? esc))
            (let ((e (pad:vi-emit! (pad:who-key!))))
              (if (string=? e "quit") "quit" (pad:vi-each rest (list)))))
-          (#t
-           (let* ((cmd (pad:vi-cmd b))
-                  (r (if (and (string? cmd)
-                              (or (string=? cmd "to-insert") (string=? cmd "to-normal")
-                                  (string=? cmd "append") (string=? cmd "normal-key")))
-                         (pad:vi-meta! cmd)
-                         (pad:play-cmd! cmd)))
-                  (e (pad:vi-emit! r)))
-             (if (string=? e "quit") "quit" (pad:vi-each rest (list)))))))))
+          (#t (pad:vi-took! (pad:vi-cmd b) rest))))))
 
 (define (pad:vi-bytes! line)
   (set! *pi-slow* (+ *pi-slow* 1))

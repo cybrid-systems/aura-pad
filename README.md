@@ -29,10 +29,21 @@ It installs one binary, `bin/aura-pad`, and the pad's Soft files in
 Keys: aura-pad starts in **vi normal mode** (evil-style). `i` types,
 `a` appends, Esc returns to normal. Move with the arrows, `hjkl`, or
 the emacs keys **ctrl-b / ctrl-f / ctrl-p / ctrl-n** (left / right /
-up / down) in either mode. **ctrl-x ctrl-s** saves (a lone ctrl-s is
+up / down) in either mode. `x` / `X` delete a letter, `dd` deletes the
+line, `D` deletes to the end of the line, `yy` copies it, `p` pastes,
+`u` takes the last edit back. `0` / `$` are the ends of the line,
+`gg` / `G` the top and the bottom, `w` / `b` the next and previous
+word. `I` / `A` / `o` / `O` start typing at the start, the end, the
+line below, or the line above. `r` replaces one letter.
+**ctrl-x ctrl-s** saves (a lone ctrl-s is
 still M9's "check", so saving uses the emacs pair). **ctrl-q** (or
-ctrl-x ctrl-c) quits; with unsaved changes the first press warns and
-the second quits. **ctrl-\** is the emergency exit (nothing is saved).
+ctrl-x ctrl-c) quits, with or without a file; with unsaved changes the
+first press warns and the next ctrl-x ctrl-c, ctrl-q, or ctrl-c quits.
+**`:e`** (or `:eval` / `:run`) runs the page and shows the result on
+the status line. **Alt-x** then Enter does the same (the terminal must
+send Esc and `x` in one read). **ctrl-x ctrl-e** runs it too. `:w`
+saves, `:q` quits, `:wq` saves and quits. **ctrl-\** is the emergency
+exit (nothing is saved).
 `PAD_VI=0` keeps the old modeless map (ctrl-b jumps back, ctrl-p
 copies). The title shows the file name and `[normal]` or `[insert]`.
 Problems are appended to `~/.local/state/aura-pad/aura-pad.log`
@@ -58,7 +69,10 @@ pick the build dir / image). With no aura at all it says how to get one.
 中文：先装一次（`bash scripts/build_c.sh --install`），以后像 vi / emacs
 一样一条命令打开文件：`aura-pad hello.txt`。默认是 vi 的 normal 模式，
 `i` 才打字，Esc 回到 normal；方向键、`hjkl`，以及 emacs 的 ctrl-b / ctrl-f /
-ctrl-p / ctrl-n 都能上下左右移动。ctrl-x ctrl-s 保存，ctrl-q 退出。
+ctrl-p / ctrl-n 都能上下左右移动。`dd` 删行，`x` 删字，`yy` 复制，`p` 粘贴，
+`u` 撤销。`:e` 或 `:eval` 运行当前页（Alt-x 再回车、ctrl-x ctrl-e 也行），
+结果出现在状态行。ctrl-x ctrl-s 保存，ctrl-q 或 ctrl-x ctrl-c 退出
+（没保存时先提示，再按一次才退出）。
 出错看 `~/.local/state/aura-pad/aura-pad.log`（会轮转）。
 
 Requirements: [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md).

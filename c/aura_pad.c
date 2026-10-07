@@ -358,6 +358,7 @@ static void usage(void) {
             "  Starts in vi normal mode: i types, a appends, Esc returns.\n"
             "  Arrows, hjkl, and ctrl-b/f/p/n move in either mode.\n"
             "  ctrl-x ctrl-s saves, ctrl-q (or ctrl-x ctrl-c) quits.\n"
+            "  dd deletes a line. :eval (or alt-x, then enter) runs the page.\n"
             "  ctrl-\\ is the emergency exit (nothing is saved).\n"
             "  PAD_VI=0 keeps the old modeless keys.\n"
             "options: --plain|--ansi  --wire1|--wire2  --where (show what would run)\n"

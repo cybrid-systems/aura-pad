@@ -16,7 +16,7 @@ checks what lands in FILE and on the terminal. Scenarios:
            FILE still "pad\\n"
   emergency FILE holds "pad\\n": type "x", ctrl-\\ (SIGQUIT from the tty)
            -> exits 131 at once, FILE still "pad\\n"
-  vi       FILE holds "ab\\ncd\\n": ctrl-f, ctrl-n, i, Z, Esc, x (must not
+  vi       FILE holds "ab\\ncd\\n": ctrl-f, ctrl-n, i, Z, Esc, q (must not
            insert), ctrl-x ctrl-s, ctrl-q -> FILE is "ab\\ncZd\\n" and the
            screen showed normal then insert then normal
 
@@ -160,7 +160,7 @@ def main():
         key([27], 0.4)               # Esc
         if not mode_is("normal"):
             fail("Esc did not return to normal mode", out)
-        key([120])                   # x must not insert in normal mode
+        key([113])                   # q must not insert in normal mode
         key([24]); key([19])
         if not wait_for("saved " + name, 10):
             fail("no 'saved' say", out)
