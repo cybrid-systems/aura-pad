@@ -1,0 +1,185 @@
+;; aura-pad -- open and save a text file: `aura-pad FILE` (c/aura_pad.c).
+;; Soft owns the file. C only puts the absolute path in PAD_FILE and
+;; forwards key bytes; it never reads, writes or names the file.
+;; Tip primitives only: read-file gives a string, or () when the file is
+;; missing or not a readable regular file; write-file gives 1 on success.
+;; Needs keys.aura (play state) and play_in.aura (pad:play-step!);
+;; play.aura loads this file and calls pad:pf-open! when PAD_FILE is set.
+;;
+;; Keys, file mode only (the play page without FILE is unchanged):
+;;   ctrl-x ctrl-s        save (Emacs). ctrl-s alone is the M9 notebook
+;;                        "check" key, so here it only says how to save.
+;;   ctrl-q, ctrl-x ctrl-c  quit. With unsaved changes the first press
+;;                        says so and the next quit key quits. ctrl-c
+;;                        alone says how to quit (aura-pad hands ctrl-c
+;;                        to Soft as a key byte, not as SIGINT).
+;; Every other key goes to pad:play-step! as before.
+;;
+;; The pad never writes a file it could not load byte for byte. A file
+;; with more than *pf-max-lines* lines, a line longer than *pf-max-col*,
+;; or a byte outside printable ASCII (tab, CR, UTF-8, ...) opens to look
+;; at only: rows cut to fit, odd bytes shown as "?", saving off.
+;; A missing file is a new page; the first save creates it.
+;; No named let captures an outer local (aura#4353); no top-level named
+;; let (aura#4352). Soft reserved: never bind quote.
+
+(define *pf-on* #f)       ; a file is open (PAD_FILE)
+(define *pf-path* "")     ; absolute path from C
+(define *pf-name* "")     ; last path part, for the title and the words
+(define *pf-new* #f)      ; the file did not exist at open
+(define *pf-ro* #f)       ; does not fit the pad exactly: look only
+(define *pf-nl* #t)       ; the file ended with a newline (kept on save)
+(define *pf-saved* "")    ; page text at open / last save
+(define *pf-cx* #f)       ; ctrl-x pressed, waiting for the second key
+(define *pf-quit* #f)     ; a quit key was refused once (unsaved)
+;; File page: roomier than the 40 x 12 play page, still one screen
+;; (6-char gutter + 72 = 78 columns; 18 rows + title, say, legend).
+(define *pf-max-col* 72)
+(define *pf-max-lines* 18)
+;; protocol lines the file keys arrive as (ctrl-x 24, ctrl-q 17,
+;; ctrl-s 19, ctrl-c 3; a fast ctrl-x ctrl-s can come in one read)
+(define *pf-keys* (list "IN 24" "IN 17" "IN 19" "IN 24 19" "IN 24 3" "IN 3"))
+(define *pf-help* "ctrl-x ctrl-s saves, ctrl-q quits")
+
+;; "1 line", "3 lines"
+(define (pad:pf-lines n)
+  (string-append (number->string n) (if (= n 1) " line" " lines")))
+
+;; Last path part: "/a/b/c.txt" -> "c.txt".
+(define (pad:pf-base p)
+  (let pf-b ((s p) (i 0) (from 0))
+    (let ((j (string-index s "/" i)))
+      (if (< j 0)
+          (substring s from (string-length s))
+          (pf-b s (+ j 1) (+ j 1))))))
+
+;; Text -> line strings, split at "\n" with string-index (one step per
+;; line, not one per char like pad:v-split).
+(define (pad:pf-split s)
+  (let pf-s ((t s) (i 0) (n (string-length s)) (acc (list)))
+    (let ((j (if (< i n) (string-index t "\n" i) -1)))
+      (if (< j 0)
+          (reverse (cons (substring t i n) acc))
+          (pf-s t (+ j 1) n (cons (substring t i j) acc))))))
+
+;; Look-only row: cut to the page width, odd bytes as "?" (63).
+(define (pad:pf-cut ln)
+  (map (lambda (c) (if (and (>= c 32) (<= c 126)) c 63))
+       (if (> (length ln) *pf-max-col*) (reverse (drop (reverse ln) (- (length ln) *pf-max-col*))) ln)))
+
+;; Open PATH into the play page. Returns "new", "ok" or "ro".
+(define (pad:pf-open! path)
+  (let* ((raw (read-file path))
+         (new (not (string? raw)))
+         (s0 (if new "" raw))
+         (n0 (string-length s0))
+         ;; never split more than one page worth of text
+         (cap (* *pf-max-lines* (+ *pf-max-col* 1)))
+         (big (> n0 (+ cap 1)))
+         (s1 (if big (substring s0 0 cap) s0))
+         (nl (or new (and (> n0 0) (not big) (= (string-ref s0 (- n0 1)) 10))))
+         (s (if (and nl (> (string-length s1) 0)) (substring s1 0 (- (string-length s1) 1)) s1))
+         (L0 (map pad:v-codes (pad:pf-split s)))
+         (flat (apply append L0))
+         (lo (if (null? flat) 32 (apply min flat)))
+         (hi (if (null? flat) 32 (apply max flat)))
+         (wide (apply max (cons 0 (map length L0))))
+         (ro (or big (> (length L0) *pf-max-lines*) (> wide *pf-max-col*) (< lo 32) (> hi 126)))
+         (L (if ro
+                (map pad:pf-cut (if (> (length L0) *pf-max-lines*)
+                                    (reverse (drop (reverse L0) (- (length L0) *pf-max-lines*)))
+                                    L0))
+                L0))
+         (name (pad:pf-base path)))
+    (set! *play-max-col* *pf-max-col*)
+    (set! *play-max-lines* *pf-max-lines*)
+    (pad:play-reset! "")
+    (set! *pl-st* (pad:es-at L 0 0))
+    (set! *pf-on* #t)
+    (set! *pf-path* path)
+    (set! *pf-name* name)
+    (set! *pf-new* new)
+    (set! *pf-ro* ro)
+    (set! *pf-nl* nl)
+    (set! *pf-saved* (pad:v-src L))
+    (set! *pf-cx* #f)
+    (set! *pf-quit* #f)
+    (set! *pl-title* (string-append "aura pad: " name (if ro " (look only)" "")))
+    (set! *pl-say*
+          (cond
+            (new (string-append "new page " name " - " *pf-help*))
+            (ro (string-append name " is too big or has letters the pad cannot show,"
+                               " so the pad only looks - ctrl-q quits"))
+            (#t (string-append "opened " name " (" (pad:pf-lines (length L)) ") - " *pf-help*))))
+    (cond (new "new") (ro "ro") (#t "ok"))))
+
+;; Write the page back. Returns "saved", "ro" or "fail"; sets the say.
+(define (pad:pf-save!)
+  (if *pf-ro*
+      (begin
+        (set! *pl-say* (string-append *pf-name* " stays as it was: the pad only looks at this file"))
+        "ro")
+      (let* ((src (pad:play-src))
+             (body (cond
+                     ((and *pf-new* (string=? src "")) "")
+                     (*pf-nl* (string-append src "\n"))
+                     (#t src)))
+             (r (write-file *pf-path* body)))
+        (if (equal? r 1)
+            (begin
+              (set! *pf-saved* src)
+              (set! *pl-say* (string-append "saved " *pf-name* " ("
+                                            (pad:pf-lines (length (car *pl-st*))) ")"))
+              "saved")
+            (begin
+              (set! *pl-say* (string-append "could not save " *pf-name* " - is the folder there?"))
+              "fail")))))
+
+;; A quit key. Unsaved changes: say so once; the next quit key quits.
+(define (pad:pf-quit! armed)
+  (if (or armed *pf-ro* (string=? (pad:play-src) *pf-saved*))
+      "quit"
+      (begin
+        (set! *pf-quit* #t)
+        (set! *pl-say* (string-append *pf-name* " is not saved yet - ctrl-x ctrl-s saves,"
+                                      " ctrl-q again quits"))
+        (pad:play-emit!)
+        "go")))
+
+;; One protocol line in file mode, when it is a file key, ctrl-x is
+;; pending or a quit was refused (play.aura checks that with builtins
+;; before calling, so plain typing pays no extra Soft call). Returns
+;; "quit" or "go" like pad:play-step!.
+(define (pad:pf-line! line)
+  (let ((cx *pf-cx*) (armed *pf-quit*))
+    (set! *pf-cx* #f)
+    (set! *pf-quit* #f)
+    (cond
+      ((or (and cx (string=? line "IN 19")) (string=? line "IN 24 19"))
+       (pad:pf-save!)
+       (pad:play-emit!)
+       "go")
+      ((or (string=? line "IN 17") (and cx (string=? line "IN 3")) (string=? line "IN 24 3"))
+       (pad:pf-quit! armed))
+      ((string=? line "IN 24")
+       (set! *pf-cx* #t)
+       (set! *pf-quit* armed)
+       (set! *pl-say* "ctrl-x - now ctrl-s saves, ctrl-c quits")
+       (pad:play-emit!)
+       "go")
+      (cx
+       (set! *pl-say* "ctrl-x and that key do not go together")
+       (pad:play-emit!)
+       "go")
+      ((string=? line "IN 19")
+       (set! *pl-say* (string-append "to save " *pf-name* ", press ctrl-x then ctrl-s"))
+       (pad:play-emit!)
+       "go")
+      ((string=? line "IN 3")
+       (set! *pl-say* "to quit press ctrl-q (ctrl-x ctrl-c works too)")
+       (pad:play-emit!)
+       "go")
+      (#t
+       ;; another key after a refused quit: the warning no longer holds
+       (if armed (set! *pl-say* *pf-help*) 0)
+       (pad:play-step! line)))))

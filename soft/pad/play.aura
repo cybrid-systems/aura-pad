@@ -8,27 +8,42 @@
 ;; buffer, cursor, jump stack, HL tape, marks and kid words. C forwards
 ;; bytes and blits; it never learns what a key means.
 ;; Soft reserved: never bind quote.
-(load "/workspace/aura-pad/soft/pad/buffer.aura")
-(load "/workspace/aura-pad/soft/pad/lines.aura")
-(load "/workspace/aura-pad/soft/pad/edit.aura")
-(load "/workspace/aura-pad/soft/pad/hl.aura")
-(load "/workspace/aura-pad/soft/pad/jump.aura")
-(load "/workspace/aura-pad/soft/pad/view.aura")
-(load "/workspace/aura-pad/soft/pad/lc.aura")
-(load "/workspace/aura-pad/soft/pad/keys.aura")
-(load "/workspace/aura-pad/soft/pad/card.aura")
-(load "/workspace/aura-pad/soft/pad/who.aura")
+;;
+;; aura-pad FILE (c/aura_pad.c) starts this file with AURA_PAD_HOME (the
+;; dir that holds soft/pad, installed or source tree) and PAD_FILE (the
+;; absolute path of FILE). file.aura opens and saves it; without
+;; PAD_FILE the play page below is unchanged. The smokes run without
+;; AURA_PAD_HOME (box layout, /workspace/aura-pad).
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/lc.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/card.aura"))
+(load (string-append *pad-home* "/soft/pad/who.aura"))
 
 
 ;; M8 (KEY goal:), M10 (IN 15 ctrl-o) and the one-call-per-line
 ;; key path live in play_in.aura (loadable, so gap_test.aura can check
 ;; its frames against the keys.aura path).
-(load "/workspace/aura-pad/soft/pad/play_in.aura")
-(load "/workspace/aura-pad/soft/pad/wire2.aura")
+(load (string-append *pad-home* "/soft/pad/play_in.aura"))
+(load (string-append *pad-home* "/soft/pad/wire2.aura"))
+(load (string-append *pad-home* "/soft/pad/file.aura"))
 
 ;; PAD_PAGE=big starts on the twelve-row page (scripts/bench_editors.sh)
 (pad:play-reset! (if (equal? (getenv "PAD_PAGE") "big") *lc-big-page* *play-start*))
 (pad:who-reset!)
+;; aura-pad FILE: open it (file.aura). getenv gives () when unset.
+(define *play-file* (getenv "PAD_FILE"))
+(if (and (string? *play-file*) (> (string-length *play-file*) 0))
+    (pad:pf-open! *play-file*)
+    0)
 ;; PAD_DEFER=1: early frame before the rows below a string edit settle.
 ;; With a stdin poll primitive (aura#4358) the early frame is on by
 ;; default (PAD_DEFER=0 turns it off) and a waiting key skips the settle.
@@ -47,10 +62,14 @@
 (let loop ()
   (let ((line (read-line)))
     (if (string? line)
-        ;; "WIRE ..." (87 = W) is C's wire offer, not a key
-        (if (string=? (if (and (> (string-length line) 5) (= (string-ref line 0) 87))
-                          (pad:w2-line! line)
-                          (pad:play-step! line))
+        ;; "WIRE ..." (87 = W) is C's wire offer, not a key; file keys
+        ;; (ctrl-x / ctrl-q / ctrl-s, file mode only) go to file.aura
+        (if (string=? (cond
+                        ((and (> (string-length line) 5) (= (string-ref line 0) 87))
+                         (pad:w2-line! line))
+                        ((and *pf-on* (or *pf-cx* *pf-quit* (member line *pf-keys*)))
+                         (pad:pf-line! line))
+                        (#t (pad:play-step! line)))
                       "quit")
             0
             (loop))

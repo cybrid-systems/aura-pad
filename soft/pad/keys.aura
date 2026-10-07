@@ -20,6 +20,9 @@
 (define *pl-stack* (list))
 (define *pl-esc* (list))
 (define *pl-say* "")
+;; TITLE text before " keys=": aura-pad FILE puts the file name here
+;; (file.aura); the play page keeps the old title byte for byte.
+(define *pl-title* "aura pad (Soft)")
 ;; wire v2 (soft/pad/wire2.aura, play.aura only): frames carry only the
 ;; DIRTY rows. Off until C offers it ("WIRE 2" from pad_play --wire2).
 (define *w2-on* #f)
@@ -374,7 +377,7 @@
         (if (pad:v-in? l dirty) dirty (cons l dirty)))))
 
 (define (pad:play-title)
-  (string-append "aura pad (Soft) keys="
+  (string-append *pl-title* " keys="
                  (number->string *pl-keys*)
                  " no=" (number->string *pl-rej*)))
 
@@ -429,7 +432,7 @@
        (set! *w2-gen* (+ *w2-gen* 1))
        (string-append
          "SNAP v2 pad\nGEN " (number->string *w2-gen*) " base=" (number->string (- *w2-gen* 1))
-         "\nTITLE aura pad (Soft) keys=" (number->string *pl-keys*)
+         "\nTITLE " *pl-title* " keys=" (number->string *pl-keys*)
          " no=" (number->string *pl-rej*) "\n"
          "CURSOR line=" (number->string l) " col=" (number->string col) "\n"
          "SAY " *pl-say* "\n"
@@ -443,7 +446,7 @@
       (#t
         (string-append
           "SNAP v1 pad\n"
-          "TITLE aura pad (Soft) keys=" (number->string *pl-keys*)
+          "TITLE " *pl-title* " keys=" (number->string *pl-keys*)
           " no=" (number->string *pl-rej*) "\n"
           "CURSOR line=" (number->string l) " col=" (number->string col) "\n"
           "SAY " *pl-say* "\n"
@@ -460,7 +463,7 @@
          (l (pad:es-l *pl-st*))
          (col (pad:es-col *pl-st*))
          (dirty (pad:play-cache! L l col))
-         (title (string-append "aura pad (Soft) keys="
+         (title (string-append *pl-title* " keys="
                                (number->string *pl-keys*)
                                " no=" (number->string *pl-rej*)))
          (lines (pad:v-split *pl-src*))
