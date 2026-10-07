@@ -47,7 +47,11 @@ or a prompt. **ctrl-x ctrl-f** opens a file (a partial name is enough),
 **ctrl-x ctrl-b** lists buffers, **ctrl-x b** switches to one.
 **Alt-f** / **Alt-b** / **Alt-d** move by a word or delete one (Esc and
 the letter in one read). **gd** jumps to where a name is born. **gD**
-and **space c D** find every use and land on the next one. **M-x search** finds text; ctrl-s finds the
+and **space c D** find every use, say which one and the line, and land
+on the next. **space c N** goes back one use. **\*** finds the word
+under the cursor; **n** and **N** walk forward and back. **/** searches,
+and **ctrl-r** finds the previous match. **ctrl-a** and **ctrl-e** go to
+the ends of the line. **M-x search** finds text; ctrl-s finds the
 next match. **M-x find-file** opens a file.
 **M-x help** opens a page that is the map: split a page, move to the
 other one, close one. **ctrl-x 2** splits below, **ctrl-x 3** beside,
@@ -94,7 +98,9 @@ ctrl-p / ctrl-n 都能上下左右移动。`dd` 删行，`x` 删字，`yy` 复�
 （没保存时先提示，再按一次才退出）。ctrl-g 取消。ctrl-x ctrl-f 按文件名
 打开（写一部分就行），ctrl-x ctrl-b 列出 buffer，ctrl-x b 切换。
 Alt-f / Alt-b / Alt-d 按词移动或删除。gd 跳到名字诞生的地方。
-gD 和空格 c D 找出每一处使用，并落到下一处。M-x search 搜文字，ctrl-s 找下一个。
+gD 和空格 c D 找出每一处使用，状态行写出第几个和行号，并落到下一处。
+空格 c N 回到上一处。* 搜光标上的词，n 和 N 前后走。/ 搜索，ctrl-r 找上一处。
+ctrl-a 和 ctrl-e 到行首行尾。M-x search 搜文字，ctrl-s 找下一个。
 M-x help 打开一页说明：ctrl-x 2 在下面分屏，ctrl-x 3 在旁边分屏，
 ctrl-x o 换到另一页，ctrl-x 0 关掉这一页，ctrl-x 1 只留这一页。
 M-x layout 让三种画面比赛（故事占满、旁边一页帮手、或者叠成一本），

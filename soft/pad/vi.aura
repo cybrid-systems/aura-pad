@@ -8,7 +8,12 @@
 ;;   of the line (it does not join), yy copies the line, p pastes.
 ;;   u takes the last edit back. 0 / $ go to the ends of the line,
 ;;   gg / G to the top and the bottom. gd jumps to where a name is born.
-;;   gD and space c D find every use and land on the next one.
+;;   gD and space c D find every use. The line says which one (2/3) and
+;;   the line number. space c N and gN go back one use.
+;;   * finds the word under the cursor. n walks forward, N backward.
+;;   # walks backward from this word. / opens the same search as ctrl-s.
+;;   ctrl-r repeats the search backward. ctrl-a / ctrl-e / ctrl-k are
+;;   the emacs line keys (start, end, delete to the end).
 ;;   w / b move by words.
 ;;   I / A / o / O open insert at the start, the end, below, above.
 ;;   r replaces the letter under the cursor.
@@ -44,6 +49,10 @@
 (define *vi-base* "")
 (define *vi-op* "")
 (define *vi-line* "")
+;; Last search * n N should repeat. *vi-pat-word* is true when the
+;; pattern is a whole word (* and #), false for a typed search.
+(define *vi-pat* "")
+(define *vi-pat-word* #f)
 (define *vi-prompt* ": ")
 (define *vi-mx* #f)
 (define *vi-cx* #f)
@@ -58,6 +67,8 @@
 ;; before that file is loaded, and they never touch *pf-* (file.aura
 ;; may not be loaded yet).
 (define *em-anchor* #f)
+(define *em-from* 0)
+(define *em-hit* #f)
 (define *em-files* #f)
 (define (pad:em-other-dirty) "")
 (define (pad:em-hint!)
@@ -82,6 +93,7 @@
   (set! *vi-line* "")
   (set! *vi-mx* #f)
   (set! *vi-cx* #f)
+  (set! *em-hit* #f)
   (set! *pl-say* "quit")
   "vi-do")
 (define (pad:em-find-start!)
@@ -692,6 +704,159 @@
   (or (string=? *vi-op* ":") (string=? *vi-op* "find")
       (string=? *vi-op* "buf") (string=? *vi-op* "s")))
 
+;; A word is letters, digits, and the scheme marks ! - ? _. A symbol
+;; token wins when the cursor sits on a name, so * does not cut a
+;; name in half. Otherwise the letters around the cursor are the word.
+(define (pad:vi-word-char? c)
+  (or (and (>= c 48) (<= c 57))
+      (and (>= c 65) (<= c 90))
+      (and (>= c 97) (<= c 122))
+      (= c 33) (= c 45) (= c 63) (= c 95)))
+
+(define (pad:vi-word-left ln i)
+  (if (<= i 0)
+      i
+      (if (pad:vi-word-char? (list-ref ln (- i 1)))
+          (pad:vi-word-left ln (- i 1))
+          i)))
+
+(define (pad:vi-word-right ln i len)
+  (if (>= i len)
+      i
+      (if (pad:vi-word-char? (list-ref ln i))
+          (pad:vi-word-right ln (+ i 1) len)
+          i)))
+
+;; (word start-point). start-point is -1 when there is no word.
+(define (pad:vi-word-span)
+  (let* ((L (pad:es-L *pl-st*))
+         (tok (pad:sym-tok-in (pad:lc-toks L) (pad:play-point))))
+    (if tok
+        (list (car (cdr (cdr (cdr tok)))) (cadr tok))
+        (let* ((l (cadr *pl-st*))
+               (col (caddr *pl-st*))
+               (ln (list-ref L l))
+               (len (length ln)))
+          (if (>= col len)
+              (list "" -1)
+              (if (not (pad:vi-word-char? (list-ref ln col)))
+                  (list "" -1)
+                  (let* ((a (pad:vi-word-left ln col))
+                         (b (pad:vi-word-right ln col len)))
+                    (list (list->string
+                           (map integer->char
+                                (pad:take (- b a) (pad:drop a ln))))
+                          (pad:v-point L l a)))))))))
+
+(define (pad:vi-bound? src i k)
+  (let ((n (string-length src)))
+    (and (if (= i 0) #t (not (pad:vi-word-char? (string-ref src (- i 1)))))
+         (if (>= (+ i k) n)
+             #t
+             (not (pad:vi-word-char? (string-ref src (+ i k))))))))
+
+(define (pad:vi-skip-src-word src i n)
+  (if (>= i n)
+      i
+      (if (pad:vi-word-char? (string-ref src i))
+          (pad:vi-skip-src-word src (+ i 1) n)
+          i)))
+
+;; Next exact hit at or after `from`. Whole-word hits must sit on a
+;; word boundary, so "hello" does not match inside "hellothere".
+(define (pad:vi-find-at src q word from)
+  (let ((n (if (string? src) (string-length src) 0))
+        (k (string-length q)))
+    (if (<= k 0)
+        -1
+        (if (< from 0)
+            -1
+            (if (>= from n)
+                -1
+                (let ((i (string-index src q from)))
+                  (cond
+                    ((< i 0) -1)
+                    ((if word (pad:vi-bound? src i k) #t) i)
+                    (#t (pad:vi-find-at src q word
+                                        (pad:vi-skip-src-word src i n))))))))))
+
+;; Last hit strictly before `upto`, or best (start with -1).
+(define (pad:vi-find-before src q word from upto best)
+  (if (>= from upto)
+      best
+      (let ((i (pad:vi-find-at src q word from)))
+        (cond
+          ((< i 0) best)
+          ((>= i upto) best)
+          (#t (pad:vi-find-before src q word (+ i 1) upto i))))))
+
+;; where is "top", "bottom", or "search" (keep the Search: prompt).
+;; origin is the match we started from, or -1. Landing on it again
+;; means this is the only one.
+(define (pad:vi-land-hit! hit q wrapped where origin)
+  (let* ((lc (pad:v-linecol (car *pl-st*) hit))
+         (here (and (= (cadr *pl-st*) (car lc)) (= (caddr *pl-st*) (cadr lc))))
+         (only (or here (and wrapped (>= origin 0) (= hit origin)))))
+    (set! *em-hit* hit)
+    (if here
+        0
+        (set! *pl-st* (list (car *pl-st*) (car lc) (cadr lc)
+                            (list-ref *pl-st* 3) (list-ref *pl-st* 4)
+                            (list-ref *pl-st* 5))))
+    (set! *pl-say*
+          (cond
+            ((string=? where "search") (string-append "Search: " q))
+            (only (string-append "only this " q))
+            (wrapped
+             (string-append "found " q
+                            (if (string=? where "bottom")
+                                ", from the bottom"
+                                ", from the top")))
+            (#t (string-append "found " q))))
+    "vi-do"))
+
+;; dir 1 searches at/after `from`. dir -1 searches strictly before it.
+(define (pad:vi-search-go! q word from dir where origin)
+  (let* ((src (pad:play-src))
+         (n (string-length src))
+         (hit (if (= dir 1)
+                  (pad:vi-find-at src q word from)
+                  (pad:vi-find-before src q word 0 from -1))))
+    (if (>= hit 0)
+        (pad:vi-land-hit! hit q #f where origin)
+        (let ((hit2 (if (= dir 1)
+                        (if (> from 0) (pad:vi-find-at src q word 0) -1)
+                        (pad:vi-find-before src q word 0 n -1))))
+          (if (< hit2 0)
+              (begin (set! *em-hit* #f) (set! *pl-say* "no match") "vi-do")
+              (pad:vi-land-hit! hit2 q #t where origin))))))
+
+(define (pad:vi-star! dir)
+  (let* ((span (pad:vi-word-span))
+         (q (car span))
+         (origin (cadr span)))
+    (if (or (string=? q "") (< origin 0))
+        (begin (set! *pl-say* "put the cursor on a word first") "vi-do")
+        (begin
+          (set! *vi-pat* q)
+          (set! *vi-pat-word* #t)
+          (pad:vi-search-go! q #t
+                             (if (= dir 1) (+ origin (string-length q)) origin)
+                             dir
+                             (if (= dir 1) "top" "bottom")
+                             origin)))))
+
+(define (pad:vi-again! dir)
+  (if (string=? *vi-pat* "")
+      (begin (set! *pl-say* "press * or / to search first") "vi-do")
+      (let ((origin (if (number? *em-hit*) *em-hit* -1))
+            (pt (pad:play-point)))
+        (pad:vi-search-go! *vi-pat* *vi-pat-word*
+                           (if (= dir 1) (+ pt 1) pt)
+                           dir
+                           (if (= dir 1) "top" "bottom")
+                           origin))))
+
 ;; Next reference start after pt, or -1 to wrap to the first.
 (define (pad:vi-next-ref refs pt)
   (cond
@@ -699,13 +864,39 @@
     ((> (car refs) pt) (car refs))
     (#t (pad:vi-next-ref (cdr refs) pt))))
 
+(define (pad:vi-ref-last refs)
+  (if (null? (cdr refs)) (car refs) (pad:vi-ref-last (cdr refs))))
+
+(define (pad:vi-ref-prev refs pt best)
+  (cond
+    ((null? refs) best)
+    ((< (car refs) pt) (pad:vi-ref-prev (cdr refs) pt (car refs)))
+    (#t best)))
+
+(define (pad:vi-ref-index refs dest i)
+  (cond
+    ((null? refs) 0)
+    ((= (car refs) dest) i)
+    (#t (pad:vi-ref-index (cdr refs) dest (+ i 1)))))
+
+;; dir 1 is the next use, dir -1 the previous. (dest wrapped?)
+(define (pad:vi-ref-pick refs pt dir)
+  (if (= dir 1)
+      (let ((nxt (pad:vi-next-ref refs pt)))
+        (if (< nxt 0) (list (car refs) #t) (list nxt #f)))
+      (let ((prv (pad:vi-ref-prev refs pt -1)))
+        (if (< prv 0)
+            (list (pad:vi-ref-last refs) #t)
+            (list prv #f)))))
+
 (define (pad:vi-jump! cmd)
   (pad:play-jump! cmd)
   "vi-do")
 
-;; Doom SPC c D / gD: every use of the name under the cursor. The count
-;; stays on the status line. The cursor lands on the next use, then wraps.
-(define (pad:vi-refs!)
+;; gD / space c D walk every use. The line says "name 2/3 line 4" (the
+;; line number matches the gutter, which starts at 1). space c N / gN
+;; walk back. n and N stay on the search, not on this list.
+(define (pad:vi-refs! dir)
   (let* ((src (pad:play-src))
          (pt (pad:play-point))
          (toks (pad:lc-toks (pad:es-L *pl-st*)))
@@ -715,15 +906,21 @@
         (pad:play-reject! (car r))
         (let* ((refs (list-ref r 3))
                (n (length refs))
-               (nxt (pad:vi-next-ref refs pt))
-               (dest (if (< nxt 0) (car refs) nxt)))
+               (pick (pad:vi-ref-pick refs pt dir))
+               (dest (car pick))
+               (wrapped (cadr pick))
+               (idx (pad:vi-ref-index refs dest 0))
+               (lc (pad:v-linecol (pad:es-L *pl-st*) dest)))
           (if (= dest pt)
               0
               (begin
                 (set! *pl-stack* (cons pt *pl-stack*))
                 (pad:play-move-to! dest)))
           (pad:play-ok!
-           (string-append name " is used " (number->string n) " times"))))
+           (string-append name " "
+                          (number->string (+ idx 1)) "/" (number->string n)
+                          " line " (number->string (+ (car lc) 1))
+                          (if (and wrapped (> n 1)) " again" "")))))
     "vi-do"))
 
 (define (pad:vi-op-byte b)
@@ -735,6 +932,10 @@
        ((or (= b 10) (= b 13)) (pad:em-enter!))
        ((or (= b 8) (= b 127)) (pad:vi-bs!))
        ((and (string=? *vi-op* "s") (= b 19)) (pad:em-search-next!))
+       ((and (string=? *vi-op* "s") (= b 18))
+        (if (string=? *vi-line* "")
+            (pad:em-hint!)
+            (pad:vi-search-go! *vi-line* #f (pad:play-point) -1 "search" -1)))
        ((and (>= b 32) (<= b 126)) (pad:vi-type! b))
        (#t (pad:vi-type-keep!))))
     ((string=? *vi-op* "d")
@@ -748,17 +949,19 @@
      (cond
        ((= b 103) "bob")
        ((= b 100) (pad:vi-jump! "goto-def"))
-       ((= b 68) (pad:vi-refs!))
+       ((= b 68) (pad:vi-refs! 1))
+       ((= b 78) (pad:vi-refs! -1))
        (#t (pad:vi-redo! b))))
     ((string=? *vi-op* "spc")
      (set! *vi-op* "")
      (if (= b 99)
-         (pad:vi-pend! "spc-c" "D finds every use")
+         (pad:vi-pend! "spc-c" "D next use, N the one before")
          (pad:vi-redo! b)))
     ((string=? *vi-op* "spc-c")
      (set! *vi-op* "")
      (cond
-       ((= b 68) (pad:vi-refs!))
+       ((= b 68) (pad:vi-refs! 1))
+       ((= b 78) (pad:vi-refs! -1))
        ((= b 100) (pad:vi-jump! "goto-def"))
        (#t (pad:vi-redo! b))))
     ((string=? *vi-op* "r")
@@ -808,6 +1011,11 @@
     ((= b 24) (pad:vi-cx-start!))
     ((= b 3) (pad:vi-act! "c-hint"))
     ((= b 19) (pad:em-search-start!))
+    ((= b 18) (pad:vi-again! -1))
+    ((= b 1) "home")
+    ((= b 5) "end")
+    ((= b 11) "kill-line")
+    ((= b 25) "yank")
     ((= b 2) "left")
     ((= b 6) "right")
     ((= b 14) "next-line")
@@ -831,8 +1039,13 @@
     ((= b 117) "undo")
     ((= b 48) "home")
     ((= b 36) "end")
-    ((= b 103) (pad:vi-pend! "g" "g - g to the top, d jumps to the name"))
+    ((= b 103) (pad:vi-pend! "g" "g to the top, d jumps, D next use, N previous"))
     ((= b 32) (pad:vi-pend! "spc" "space c D finds every use"))
+    ((= b 42) (pad:vi-star! 1))
+    ((= b 35) (pad:vi-star! -1))
+    ((= b 110) (pad:vi-again! 1))
+    ((= b 78) (pad:vi-again! -1))
+    ((= b 47) (pad:em-search-start!))
     ((= b 71) "eob")
     ((= b 73) (pad:vi-act! "I"))
     ((= b 65) (pad:vi-act! "A"))
@@ -905,7 +1118,8 @@
           ((and (null? esc) (string=? *vi-op* "")
                 (= b 27) (pair? rest)
                 (or (= (car rest) 120) (= (car rest) 102)
-                    (= (car rest) 98) (= (car rest) 100)))
+                    (= (car rest) 98) (= (car rest) 100)
+                    (= (car rest) 60) (= (car rest) 62)))
            (pad:vi-took! (pad:em-meta! (car rest)) (cdr rest)))
           ((pair? esc)
            (let* ((step (pad:key-step esc b))

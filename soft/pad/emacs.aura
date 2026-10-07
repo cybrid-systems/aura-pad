@@ -8,8 +8,10 @@
 ;;   M-x switch-buffer      jump to one of them
 ;;   ctrl-x ctrl-f / ctrl-b / b   the same three, from the ctrl-x prefix
 ;;   ctrl-g                 cancel. A search goes back to where it started.
+;;   ctrl-r                 the previous match (n is the next one).
 ;;   alt-f / alt-b / alt-d  the next word, the previous word, delete the
 ;;                          word. One read must hold Esc and the letter.
+;;   alt-< / alt->          top and bottom. One read holds Esc and the mark.
 ;;
 ;; An empty M-x line still runs the page (pad:vi-colon! keeps that).
 ;; Soft reserved: never bind quote. No while+set! (aura#4372). No
@@ -20,8 +22,7 @@
 
 (define *em-bufs* (list))
 (define *em-cur* "")
-(define *em-from* 0)
-(define *em-hit* #f)
+;; *em-from* and *em-hit* live in vi.aura so n / N and isearch share them.
 
 ;; --- buffers ----------------------------------------------------------
 ;; A record is (path name src line col saved ro nl new). *em-cur* is the
@@ -327,12 +328,16 @@
        (set! *vi-line* "")
        (pad:em-switch! w)))
     ((string=? *vi-op* "s")
-     (set! *vi-op* "")
-     (set! *vi-line* "")
-     (set! *em-anchor* #f)
-     (if (string=? *pl-say* "no match")
-         "vi-do"
-         (begin (set! *pl-say* "found") "vi-do")))
+     (let ((q *vi-line*))
+       (set! *vi-op* "")
+       (set! *vi-line* "")
+       (set! *em-anchor* #f)
+       (if (> (string-length q) 0)
+           (begin (set! *vi-pat* q) (set! *vi-pat-word* #f))
+           0)
+       (if (string=? *pl-say* "no match")
+           "vi-do"
+           (begin (set! *pl-say* "found") "vi-do"))))
     (#t (pad:vi-colon!))))
 
 (define (pad:em-command w rest mx)
@@ -402,4 +407,6 @@
     ((= b 102) (pad:em-fwd!))
     ((= b 98) (pad:vi-b!))
     ((= b 100) (pad:em-kill-word!))
+    ((= b 60) "bob")
+    ((= b 62) "eob")
     (#t "to-normal")))
