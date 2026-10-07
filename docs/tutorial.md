@@ -1,8 +1,8 @@
-# 跟着做：M-x 的空格补全，和 set-code
+# 跟着做：M-x 的 tab 补全，和 set-code
 
 两件事经常被说成一件。它们不是。
 
-空格补全发生在状态行的 `M-x` 里。Soft 拿你打的前几个字母，去对一张命令表。它不读文件，也不碰工作区。
+补全发生在状态行的 `M-x` 里。Tab 把词补上。空格会弹出候选项，同时把这个空格留在行里，这样后面可以打参数。空格不会把你打的字母长成整条命令。Soft 拿你打的前几个字母，去对一张命令表。它不读文件，也不碰工作区。
 
 `set-code` 是引擎的原语。它把一整段源码装进当前工作区，换掉那里原来的程序。打字、补全、`:e` 都不调用它。
 
@@ -17,50 +17,56 @@ aura-pad hello.aura
 Alt-x：终端要在同一次读取里送出 Esc 和 `x`。状态行变成：
 
 ```
-M-x - space completes the word, enter runs it. ...
+M-x - tab completes the word, space shows the matches and types a space, enter runs it. ...
 ```
 
 再按的字母出现在 `M-x ` 后面。ctrl-g 取消，回到 normal。
 
 空的 M-x 直接回车，会运行当前页。这和 `:e` 是同一条路，走的是 `eval`，不是 `set-code`。
 
-## 2. 空格补全命令词
+## 2. tab 补全，空格弹出候选项
 
-补的是第一个词。规则和 Emacs 的 `minibuffer-complete-word` 同一类：能确定多少就补多少，不确定就把候选项写在状态行上。
+补的是第一个词。Tab 能确定多少就补多少。空格不把词补长，它把候选项写在状态行上，并留下这个空格，所以 `ask what` 还是两个词。
 
-打 `fi`，按空格。行变成：
+打 `fi`，按 tab。行变成：
 
 ```
 M-x find-file 
 ```
 
-末尾那个空格表示这个词已经结束。接下来打的是参数，比如文件名的一部分。回车之后，写对了就打开，写一部分也会挑最像的那个名字。
+末尾那个空格表示这个词已经结束。同样打 `fi` 再按空格，行是 `fi `，状态行列出 `find-file`。字母没有被补成整条命令。
 
-打 `f`，按空格。`f` 开头的命令不止一个（`find-file` 和 `flip`）。行还是 `f`，状态行把它们列出来：
+接下来打的是参数，比如文件名的一部分。回车之后，写对了就打开，写一部分也会挑最像的那个名字。要让第一个词变成 `find-file`，按的是 tab。
+
+打 `f`，按 tab。`f` 开头的命令不止一个（`find-file` 和 `flip`）。行还是 `f`，状态行把它们列出来：
 
 ```
 M-x f  (find-file flip)
 ```
 
-再打一个字母，缩小范围，然后再按空格。
+按空格也列出这两条，同时行变成 `f `。再退一格，打一个字母缩小范围，然后再按 tab。
 
-打 `lay`，按空格。共同的开头是 `layout`，可是后面还有 `layout:story`、`layout:beside`、`layout:book`、`layout:undo`。第一次空格只把词长到 `layout`，并列出这些名字。再按一次空格，词才结束，行变成 `layout `，后面可以打参数。回车会跑 `layout`。
+打 `lay`，按 tab。共同的开头是 `layout`，可是后面还有 `layout:story`、`layout:beside`、`layout:book`、`layout:undo`。第一次 tab 只把词长到 `layout`，并列出这些名字。再按一次 tab，词才结束，行变成 `layout `，后面可以打参数。回车会跑 `layout`。这时如果按的是空格，行也变成 `layout `，候选项还在，但不会补成 `layout:story`。
 
-打 `de`，按空格。两个名字共享 `delete-`，行变成 `delete-`。再打 `w` 和空格，得到 `delete-window `。
+打 `de`，按 tab。两个名字共享 `delete-`，行变成 `delete-`。再打 `w` 和 tab，得到 `delete-window `。
 
-打 `zz`，按空格。没有命令这样开头。字母留着，状态行说 `no command zz`。
+打 `zz`，按 tab。没有命令这样开头。字母留着，状态行说 `no command zz`。按空格也这么说，同时行变成 `zz `。
 
-第一个词已经结束后，再按的空格就是参数里的空格。`find-file a ` 不会再去补全 `a`。
+第一个词已经结束后，再按的空格就是参数里的空格。`find-file a ` 不会再去补全 `a`。Tab 也不会补参数。
 
-什么都不打就按空格，状态行列出命令表。太长会被截成 160 个字符，末尾是 `...`。
+什么都不打就按空格或 tab，状态行列出命令表，行仍然是空的。太长会被截成 160 个字符，末尾是 `...`。
 
-冒号提示不是这条路。`:f` 再按空格，得到的是 `f `，不会变成 `find-file`。
+冒号提示不是这条路。`:f` 再按空格，得到的是 `f `，不会变成 `find-file`，也不会列出 M-x 的命令。
 
-短名字仍然要自己打完再回车，空格不把它们展开：`ff`、`q`、`w`。`gptel` 在表里。打 `gp` 再按空格，词长到 `gptel`（后面还有 `gptel-send` 和 `gptel-rewrite`）。这个词已经是一条命令，再按一次空格才变成 `gptel `，后面是参数。
+短名字仍然要自己打完再回车，tab 不把它们展开：`ff`、`q`、`w`。`gptel` 在表里。打 `gp` 再按 tab，词长到 `gptel`（后面还有 `gptel-send` 和 `gptel-rewrite`）。这个词已经是一条命令，再按一次 tab 才变成 `gptel `，后面是参数。按空格会列出这三个名字，同时行变成 `gptel `。
 
 `switch:故事` 这种带页名的命令不在表里。页名是你自己的，补全不会编一个。
 
-C 只把空格的字节 `32` 交上来。补哪一个词，是 `soft/pad/emacs.aura` 里的 `pad:em-complete-space!` 决定的。
+C 只把 tab 的字节 `9` 和空格的字节 `32` 交上来。补哪一个词，是 `soft/pad/emacs.aura` 里的 `pad:em-complete!` 决定的。空格列出候选项，是 `pad:em-cands!`。
+
+## 2b. Shift-V 选中，y 复制，p 粘贴
+
+normal 模式下按 Shift-V。标题变成 `[visual]`，当前这一行被选中。`j` 和 `k` 把选区拉长，状态行写出选了几行。`y` 复制这些整行，回到 normal。`p` 把复制的文字粘在光标处。再按一次 Shift-V，或者 Esc，选区取消。insert 模式里的 V 仍然是一个字母。
 
 ## 3. set-code 在玩什么
 

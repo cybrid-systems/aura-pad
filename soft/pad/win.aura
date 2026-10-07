@@ -370,7 +370,7 @@
 (define (pad:wn-map back)
   (string-append
     "Aura pad map\n"
-    "Type M-x, then a command. Space completes the word. Enter runs it.\n"
+    "Type M-x, then a command. Tab completes the word. Space shows the matches and types a space. Enter runs it.\n"
     "Your page is named " back ". M-x switch:" back " brings it back.\n"
     "find-file opens a file. A short name is enough.\n"
     "ask QUESTION chats about this page. The answer opens on the chat page.\n"
@@ -380,6 +380,7 @@
     "gd jumps to where this name is born. space c d does that too.\n"
     "gD and space c D find every use. The line says 2/3 and the line. space c N goes back.\n"
     "* finds the word under the cursor. n finds the next. N finds the previous. / searches.\n"
+    "V selects lines. y copies them. p pastes.\n"
     "ctrl-a and ctrl-e go to the ends of the line. ctrl-k deletes to the end.\n"
     "alt-< goes to the top. alt-> goes to the bottom.\n"
     "list-buffers names open pages. switch-buffer jumps to one.\n"

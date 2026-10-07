@@ -14,6 +14,7 @@
 ;;   # walks backward from this word. / opens the same search as ctrl-s.
 ;;   ctrl-r repeats the search backward. ctrl-a / ctrl-e / ctrl-k are
 ;;   the emacs line keys (start, end, delete to the end).
+;;   V selects whole lines. y copies them. p pastes at the cursor.
 ;;   w / b move by words.
 ;;   I / A / o / O open insert at the start, the end, below, above.
 ;;   r replaces the letter under the cursor.
@@ -30,7 +31,9 @@
 ;; carry alt-f, alt-b, and alt-d (forward word, back word, delete word).
 ;; ctrl-g cancels a prefix, a prompt, or a half-typed command.
 ;; ctrl-x ctrl-f opens a file, ctrl-x ctrl-b lists buffers, ctrl-x b
-;; switches. M-x find-file and M-x search do the same jobs.
+;; switches. M-x find-file and M-x search do the same jobs. In M-x, tab
+;; completes the first word. Space lists the matches and types a space.
+;; It does not grow the word. A space after that word is the argument.
 ;;
 ;; Running the page uses (eval ...), not set-code, so the editor stays
 ;; loaded. display and newline inside the page are caught so they do
@@ -46,6 +49,7 @@
 ;; Soft reserved: never bind quote. No named let captures an outer local.
 
 (define *vi-mode* "normal")
+(define *vi-vanchor* -1)
 (define *vi-base* "")
 (define *vi-op* "")
 (define *vi-line* "")
@@ -78,9 +82,12 @@
 (define (pad:em-search-next!) (pad:em-search-now!))
 (define (pad:em-enter!) (pad:vi-colon!))
 (define (pad:em-command w rest mx) #f)
-;; emacs.aura replaces this. Before that file loads, space in M-x is
-;; just a space, so :q still works with vi.aura alone.
-(define (pad:em-complete-space!)
+;; emacs.aura replaces these. Before that file loads, tab leaves the
+;; line alone and space is still a space, so :q works with vi.aura alone.
+(define (pad:em-complete!)
+  (set! *pl-say* (string-append *vi-prompt* *vi-line*))
+  "vi-do")
+(define (pad:em-cands!)
   (if (< (string-length *vi-line*) 160)
       (set! *vi-line* (string-append *vi-line* " "))
       0)
@@ -102,6 +109,9 @@
   (set! *vi-mx* #f)
   (set! *vi-cx* #f)
   (set! *em-hit* #f)
+  (if (string=? *vi-mode* "visual")
+      (begin (set! *vi-mode* "normal") (set! *vi-vanchor* -1) (pad:vi-title!))
+      0)
   (set! *pl-say* "quit")
   "vi-do")
 (define (pad:em-find-start!)
@@ -138,7 +148,10 @@
 (define (pad:vi-title!)
   (set! *pl-title*
         (string-append *vi-base*
-                       (if (string=? *vi-mode* "insert") " [insert]" " [normal]"))))
+                       (cond
+                         ((string=? *vi-mode* "insert") " [insert]")
+                         ((string=? *vi-mode* "visual") " [visual]")
+                         (#t " [normal]")))))
 
 (define (pad:vi-has-file?)
   (let ((v (getenv "PAD_FILE")))
@@ -151,6 +164,7 @@
         (begin
           (set! *vi-on* #t)
           (set! *vi-mode* "normal")
+          (set! *vi-vanchor* -1)
           (set! *vi-op* "")
           (set! *vi-cx* #f)
           (set! *vi-base* *pl-title*)
@@ -411,25 +425,20 @@
   (set! *vi-prompt* (if mx "M-x " ": "))
   (set! *pl-say*
         (if mx
-            "M-x - space completes the word, enter runs it. help opens the map, find-file opens, ask chats"
+            "M-x - tab completes the word, space shows the matches and types a space, enter runs it. help opens the map, find-file opens, ask chats"
             ": - eval runs this page, w saves, q quits, M-x help opens the map"))
   "vi-do")
 
 (define (pad:vi-type! b)
-  ;; M-x space completes the command word. A space after that word, and
-  ;; a space in the colon prompt, stay ordinary characters.
-  (if (and (= b 32) *vi-mx* (string=? *vi-op* ":"))
-      (pad:em-complete-space!)
-      (begin
-        (if (< (string-length *vi-line*) 160)
-            (set! *vi-line* (string-append *vi-line* (list->string (list b))))
-            0)
-        (cond
-          ((string=? *vi-op* "s") (pad:em-search-now!))
-          ((or (string=? *vi-op* "find") (string=? *vi-op* "buf")) (pad:em-hint!))
-          (#t
-           (set! *pl-say* (string-append *vi-prompt* *vi-line*))
-           "vi-do")))))
+  (if (< (string-length *vi-line*) 160)
+      (set! *vi-line* (string-append *vi-line* (list->string (list b))))
+      0)
+  (cond
+    ((string=? *vi-op* "s") (pad:em-search-now!))
+    ((or (string=? *vi-op* "find") (string=? *vi-op* "buf")) (pad:em-hint!))
+    (#t
+     (set! *pl-say* (string-append *vi-prompt* *vi-line*))
+     "vi-do")))
 
 (define (pad:vi-bs!)
   (let ((n (string-length *vi-line*)))
@@ -936,6 +945,82 @@
                           (if (and wrapped (> n 1)) " again" "")))))
     "vi-do"))
 
+;; Visual line mode. V anchors the current line. Motions extend the
+;; selection. y copies those whole lines. p pastes and leaves visual.
+(define (pad:vi-vcount)
+  (let ((a *vi-vanchor*) (b (cadr *pl-st*)))
+    (if (< a 0)
+        1
+        (if (<= a b) (+ (- b a) 1) (+ (- a b) 1)))))
+
+(define (pad:vi-visual-say!)
+  (let ((n (pad:vi-vcount)))
+    (set! *pl-say*
+          (if (= n 1)
+              "visual - this line, y copies"
+              (string-append "visual - " (number->string n) " lines, y copies")))
+    0))
+
+(define (pad:vi-visual-move! cmd)
+  (pad:play-cmd! cmd)
+  (pad:vi-visual-say!)
+  "vi-do")
+
+(define (pad:vi-visual-off!)
+  (set! *vi-mode* "normal")
+  (set! *vi-vanchor* -1)
+  (set! *vi-op* "")
+  (pad:vi-title!)
+  0)
+
+(define (pad:vi-visual!)
+  (if (string=? *vi-mode* "visual")
+      (begin
+        (pad:vi-visual-off!)
+        (set! *pl-say* "normal - press i to type")
+        "vi-do")
+      (begin
+        (set! *vi-mode* "visual")
+        (set! *vi-vanchor* (cadr *pl-st*))
+        (set! *vi-op* "")
+        (set! *vi-cx* #f)
+        (pad:vi-title!)
+        (pad:vi-visual-say!)
+        "vi-do")))
+
+(define (pad:vi-vy!)
+  (let* ((st *pl-st*)
+         (a *vi-vanchor*)
+         (b (cadr st))
+         (lo (if (<= a b) a b))
+         (hi (if (<= a b) b a))
+         (lines (pad:sublist (car st) lo (+ hi 1)))
+         (n (pad:vi-vcount)))
+    (set! *pl-st* (list (car st) (cadr st) (caddr st)
+                        (append lines (list (list))) (list) (list-ref st 5)))
+    (pad:vi-visual-off!)
+    (set! *pl-say* (if (= n 1) "copied the line"
+                       (string-append "copied " (number->string n) " lines")))
+    "vi-do"))
+
+(define (pad:vi-visual-byte b)
+  (cond
+    ((= b 27) (begin (set! *vi-vanchor* -1) "to-normal"))
+    ((= b 86) (pad:vi-visual!))
+    ((= b 121) (pad:vi-vy!))
+    ((= b 112) (begin (pad:vi-visual-off!) (pad:vi-p!)))
+    ((or (= b 104) (= b 2)) (pad:vi-visual-move! "left"))
+    ((or (= b 108) (= b 6)) (pad:vi-visual-move! "right"))
+    ((or (= b 106) (= b 14)) (pad:vi-visual-move! "next-line"))
+    ((or (= b 107) (= b 16)) (pad:vi-visual-move! "prev-line"))
+    ((or (= b 48) (= b 1)) (pad:vi-visual-move! "home"))
+    ((or (= b 36) (= b 5)) (pad:vi-visual-move! "end"))
+    ((= b 71) (pad:vi-visual-move! "eob"))
+    ((= b 119) (pad:vi-visual-move! "w"))
+    ((= b 98) (pad:vi-visual-move! "b"))
+    ((= b 103) (pad:vi-pend! "g" "g to the top"))
+    (#t (begin (pad:vi-visual-say!) "vi-do"))))
+
 (define (pad:vi-op-byte b)
   (cond
     ((pad:vi-prompt?)
@@ -949,6 +1034,8 @@
         (if (string=? *vi-line* "")
             (pad:em-hint!)
             (pad:vi-search-go! *vi-line* #f (pad:play-point) -1 "search" -1)))
+       ((and (= b 9) *vi-mx* (string=? *vi-op* ":")) (pad:em-complete!))
+       ((and (= b 32) *vi-mx* (string=? *vi-op* ":")) (pad:em-cands!))
        ((and (>= b 32) (<= b 126)) (pad:vi-type! b))
        (#t (pad:vi-type-keep!))))
     ((string=? *vi-op* "d")
@@ -960,7 +1047,10 @@
     ((string=? *vi-op* "g")
      (set! *vi-op* "")
      (cond
-       ((= b 103) "bob")
+       ((= b 103)
+        (if (string=? *vi-mode* "visual")
+            (pad:vi-visual-move! "bob")
+            "bob"))
        ((= b 100) (pad:vi-jump! "goto-def"))
        ((= b 68) (pad:vi-refs! 1))
        ((= b 78) (pad:vi-refs! -1))
@@ -1020,6 +1110,7 @@
     ((= b 7) (pad:em-keyboard-quit!))
     ((not (string=? *vi-op* "")) (pad:vi-op-byte b))
     (*vi-cx* (pad:vi-cx-byte b))
+    ((string=? *vi-mode* "visual") (pad:vi-visual-byte b))
     ((= b 27) "to-normal")
     ((= b 24) (pad:vi-cx-start!))
     ((= b 3) (pad:vi-act! "c-hint"))
@@ -1067,6 +1158,7 @@
     ((= b 114) (pad:vi-pend! "r" "r - type a letter to replace"))
     ((= b 119) (pad:vi-act! "w"))
     ((= b 98) (pad:vi-act! "b"))
+    ((= b 86) (pad:vi-visual!))
     ((= b 58) (pad:vi-colon-start! #f))
     ((= b 90) (pad:vi-pend! "Z" "Z - Z saves and quits, Q quits"))
     ((and (>= b 32) (<= b 126)) "normal-key")
@@ -1086,6 +1178,7 @@
      "snap")
     ((string=? c "to-normal")
      (set! *vi-mode* "normal")
+     (set! *vi-vanchor* -1)
      (set! *vi-op* "")
      (pad:vi-title!)
      (pad:play-ok! "normal - press i to type")
@@ -1140,8 +1233,10 @@
                   (esc2 (car (cdr step))))
              (if (and (string? cmd) (string=? cmd "pending"))
                  (pad:vi-each rest esc2)
-                 (let ((e (pad:vi-emit! (pad:play-cmd! cmd))))
-                   (if (string=? e "quit") "quit" (pad:vi-each rest (list)))))))
+                 (let ((r (pad:play-cmd! cmd)))
+                   (if (string=? *vi-mode* "visual") (pad:vi-visual-say!) 0)
+                   (let ((e (pad:vi-emit! r)))
+                     (if (string=? e "quit") "quit" (pad:vi-each rest (list))))))))
           ((and (= b 27) (pair? rest) (or (= (car rest) 91) (= (car rest) 79)))
            (pad:vi-each rest (list 27)))
           ((and (= b 15) (null? esc))

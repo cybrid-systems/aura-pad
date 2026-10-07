@@ -15,9 +15,11 @@
 ;;   alt-< / alt->          top and bottom. One read holds Esc and the mark.
 ;;
 ;; An empty M-x line still runs the page (pad:vi-colon! keeps that).
-;; Space on the first word completes it (pad:em-complete-space!). A
-;; space after that word is the argument. Short aliases (ff, q, w) are
-;; not in the completion table; enter still accepts them.
+;; Tab completes the first word (pad:em-complete!). Space lists the
+;; matches and types a space (pad:em-cands!). It does not grow the
+;; word. A space after that word is the argument.
+;; Short aliases (ff, q, w) are not in the completion table; enter
+;; still accepts them.
 ;; Soft reserved: never bind quote. No while+set! (aura#4372). No
 ;; named let that closes over an outer local (aura#4353).
 
@@ -344,13 +346,15 @@
            (begin (set! *pl-say* "found") "vi-do"))))
     (#t (pad:vi-colon!))))
 
-;; --- M-x space completion ---------------------------------------------
-;; Emacs minibuffer-complete-word, one step, on the first word only.
-;; One match becomes that name plus a space. Several matches grow to
-;; the letters they share, and the status line lists them. A word that
-;; is already a whole command (layout, and also layout:story) takes a
-;; real space on the next press, so the rest can be an argument.
-;; Nothing that starts that way leaves the letters and says no command.
+;; --- M-x tab completion -----------------------------------------------
+;; Tab completes the first word, one step. One match becomes that name
+;; plus a space. Several matches grow to the letters they share, and
+;; the status line lists them. A word that is already a whole command
+;; (layout, and also layout:story) takes a real space on the next tab,
+;; so the rest can be an argument. Space does not complete: it lists
+;; the matches and types a space, so "ask what" stays two words.
+;; A space after that word is the argument. Nothing that starts that
+;; way says no command.
 
 (define *em-cmds*
   (list
@@ -433,13 +437,35 @@
 (define (pad:em-say-choices line hits)
   (pad:vi-cut (string-append *vi-prompt* line "  (" (pad:em-names-join hits "") ")")))
 
-(define (pad:em-complete-space!)
+(define (pad:em-type-space! line)
+  (set! *vi-line* (if (< (string-length line) 160)
+                      (string-append line " ")
+                      line))
+  (set! *pl-say* (string-append *vi-prompt* *vi-line*))
+  "vi-do")
+
+;; Space lists matches and types a space. It does not grow the word.
+(define (pad:em-cands!)
+  (let ((line *vi-line*))
+    (cond
+      ((>= (string-index line " " 0) 0) (pad:em-type-space! line))
+      ((string=? line "")
+       (set! *pl-say* (pad:em-say-choices "" *em-cmds*))
+       "vi-do")
+      (#t
+       (let ((hits (pad:em-hits *em-cmds* line (list))))
+         (if (< (string-length line) 160)
+             (set! *vi-line* (string-append line " "))
+             0)
+         (if (null? hits)
+             (begin (set! *pl-say* (string-append "no command " line)) "vi-do")
+             (begin (set! *pl-say* (pad:em-say-choices *vi-line* hits)) "vi-do")))))))
+
+;; Tab completes the first word.
+(define (pad:em-complete!)
   (let ((line *vi-line*))
     (cond
       ((>= (string-index line " " 0) 0)
-       (set! *vi-line* (if (< (string-length line) 160)
-                           (string-append line " ")
-                           line))
        (set! *pl-say* (string-append *vi-prompt* *vi-line*))
        "vi-do")
       ((string=? line "")
