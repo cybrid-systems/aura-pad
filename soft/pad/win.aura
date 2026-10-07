@@ -380,7 +380,9 @@
     "gd jumps to where this name is born. space c d does that too.\n"
     "gD and space c D find every use. The line says 2/3 and the line. space c N goes back.\n"
     "* finds the word under the cursor. n finds the next. N finds the previous. / searches.\n"
-    "V selects lines. y copies them. p pastes.\n"
+    "V selects lines in blue. y copies them. d deletes them. p pastes.\n"
+    "d then a motion deletes. dG deletes through the bottom. dgg deletes through the top.\n"
+    "c changes that text and lets you type. y copies it. cc changes one line.\n"
     "ctrl-a and ctrl-e go to the ends of the line. ctrl-k deletes to the end.\n"
     "alt-< goes to the top. alt-> goes to the bottom.\n"
     "list-buffers names open pages. switch-buffer jumps to one.\n"
@@ -551,15 +553,26 @@
   (let ((x (- col left)))
     (cond ((< x 0) 0) ((> x w) w) (#t x))))
 
-(define (pad:wn-block lines top left h w border i)
+(define (pad:wn-vis-line? sel line)
+  (if (not (and (= sel 1) (pad:vw-visual-on?)))
+      #f
+      (let ((a *vi-vanchor*) (b (cadr *pl-st*)))
+        (if (<= a b)
+            (and (>= line a) (<= line b))
+            (and (>= line b) (<= line a))))))
+
+(define (pad:wn-block lines top left h w border sel i)
   (if (>= i h)
       ""
       (let ((pay (string-append
                    (pad:wn-slice (pad:wn-nth lines (+ top i)) 0 left (+ left (- w 1)) "")
                    border))
-            (dots (pad:wn-rep "." w)))
-        (string-append "T " pay "\nH " dots "\nM " dots "\n"
-                       (pad:wn-block lines top left h w border (+ i 1))))))
+            (dots (pad:wn-rep "." w))
+            (mk (if (pad:wn-vis-line? sel (+ top i))
+                    (pad:wn-rep "v" w)
+                    (pad:wn-rep "." w))))
+        (string-append "T " pay "\nH " dots "\nM " mk "\n"
+                       (pad:wn-block lines top left h w border sel (+ i 1))))))
 
 (define (pad:wn-one rec)
   (let* ((leaf (car rec))
@@ -586,7 +599,7 @@
       " wh=" (number->string (pad:wn-wh (list-ref leaf 8)))
       "\n"
       (pad:wn-block (pad:wn-lines-of (cadr leaf)) top left h w
-                    (pad:wn-border (list-ref leaf 7)) 0))))
+                    (pad:wn-border (list-ref leaf 7)) sel 0))))
 
 (define (pad:wn-body rects)
   (if (null? rects) "" (string-append (pad:wn-one (car rects)) (pad:wn-body (cdr rects)))))

@@ -64,9 +64,11 @@ M-x f  (find-file flip)
 
 C 只把 tab 的字节 `9` 和空格的字节 `32` 交上来。补哪一个词，是 `soft/pad/emacs.aura` 里的 `pad:em-complete!` 决定的。空格列出候选项，是 `pad:em-cands!`。
 
-## 2b. Shift-V 选中，y 复制，p 粘贴
+## 2b. Shift-V 选中，d 删除，y 复制
 
-normal 模式下按 Shift-V。标题变成 `[visual]`，当前这一行被选中。`j` 和 `k` 把选区拉长，状态行写出选了几行。`y` 复制这些整行，回到 normal。`p` 把复制的文字粘在光标处。再按一次 Shift-V，或者 Esc，选区取消。insert 模式里的 V 仍然是一个字母。
+normal 模式下按 Shift-V。标题变成 `[visual]`，当前这一行变成蓝底。`j` 和 `k` 把蓝底拉长，状态行写出选了几行。`d` 删掉这些整行，`y` 复制它们，然后回到 normal。`p` 把复制的文字粘在光标处。再按一次 Shift-V，或者 Esc，蓝底取消。insert 模式里的 V 仍然是一个字母。
+
+`d`、`c`、`y` 后面可以跟一个动作。`dd` 仍是删一行。`dG` 从这一行删到文末，`dgg` 删到文首，`dj` 删这一行和下一行，`dw` 删到下一个词，`d$` 删到行尾。`c` 和这些动作一样，只是删完进入 insert。`cc` 改掉一整行。`y` 只复制，不改页面。
 
 ## 3. set-code 在玩什么
 

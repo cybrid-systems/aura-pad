@@ -56,7 +56,10 @@ next match. **M-x find-file** opens a file.
 In **M-x**, tab completes the command word (`fi` then tab becomes
 `find-file `). Space shows the matches and types a space, so `ask what`
 stays two words. It does not grow `fi` into `find-file`. **V** selects
-lines, **y** copies them, and **p** pastes.
+lines and paints them blue. **y** copies them, **d** deletes them, and
+**p** pastes. **d** then a motion deletes that text: **dG** through the
+bottom, **dgg** through the top, **dw** a word. **c** changes it and
+lets you type.
 See [`docs/tutorial.md`](docs/tutorial.md).
 **M-x ask** then some words chats about this page. The answer opens on
 the chat page. **M-x chat** opens that page. **M-x rewrite** then how
@@ -114,7 +117,9 @@ M-x ask 再写几个字，就和这一页聊天，回答开在 chat 页。M-x ch
 M-x rewrite 再写想怎么改，会换掉这一页，u 把你的页换回来。聊天用的是 DeepSeek v4.1 flash。
 在 M-x 里按 tab 会补全命令词（打 `fi` 再按 tab 变成 `find-file `）。
 空格会弹出候选项，并把这个空格留在行里，所以 `ask what` 仍是两个词。
-空格不会把 `fi` 补成 `find-file`。Shift-V 选中整行，y 复制，p 粘贴。
+空格不会把 `fi` 补成 `find-file`。Shift-V 选中整行，选中的行是蓝底。
+y 复制，d 删除选区，p 粘贴。d 再加一个动作会删掉那一段：dG 删到文末，
+dgg 删到文首，dw 删一个词。c 改掉那一段并进入输入。
 跟着做见 [`docs/tutorial.md`](docs/tutorial.md)。
 M-x help 打开一页说明：ctrl-x 2 在下面分屏，ctrl-x 3 在旁边分屏，
 ctrl-x o 换到另一页，ctrl-x 0 关掉这一页，ctrl-x 1 只留这一页。

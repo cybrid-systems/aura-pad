@@ -141,11 +141,87 @@
 (define (pad:wn-many?) #f)
 (define (pad:wn-snap) "")
 
+;; Mark letter v is a selected cell. C paints it with a blue background.
+;; The cached row keeps its real marks; only the frame that goes out
+;; is rewritten, and only while visual line mode is on.
+(define (pad:vw-visual-on?)
+  (try (and (string=? *vi-mode* "visual") (>= *vi-vanchor* 0))
+       (catch (e) #f)))
+
+(define (pad:vw-rep ch n)
+  (cond
+    ((<= n 0) "")
+    ((= n 1) ch)
+    (#t (let ((h (pad:vw-rep ch (quotient n 2))))
+          (if (= (modulo n 2) 0)
+              (string-append h h)
+              (string-append h h ch))))))
+
+(define (pad:vw-origin s)
+  (let ((i (string-index s "\nORIGIN line=" 0)))
+    (if (< i 0)
+        0
+        (let ((j (string-index s " " (+ i 13))))
+          (if (< j 0)
+              0
+              (let ((n (string->number (substring s (+ i 13) j))))
+                (if (number? n) n 0)))))))
+
+(define (pad:vw-sel? origin row)
+  (let ((a *vi-vanchor*) (b (cadr *pl-st*)) (line (+ origin row)))
+    (if (<= a b)
+        (and (>= line a) (<= line b))
+        (and (>= line b) (<= line a)))))
+
+(define (pad:vw-rnum line)
+  (if (and (>= (string-length line) 3)
+           (= (string-ref line 0) 82)
+           (= (string-ref line 1) 32))
+      (string->number (substring line 2 (string-length line)))
+      #f))
+
+(define (pad:vw-paint-go s i n origin row armed acc)
+  (if (>= i n)
+      acc
+      (let ((j (string-index s "\n" i)))
+        (let ((j2 (if (< j 0) n j))
+              (next (if (< j 0) n (+ j 1))))
+          (let ((line (substring s i j2))
+                (nl (if (< j 0) "" "\n")))
+            (let ((rn (pad:vw-rnum line)))
+              (if (number? rn)
+                  (pad:vw-paint-go s next n origin rn #t
+                                   (string-append acc line nl))
+                  (cond
+              ((and (>= (string-length line) 2)
+                    (= (string-ref line 0) 77)
+                    (= (string-ref line 1) 32))
+               (pad:vw-paint-go s next n origin
+                                (if armed row (+ row 1))
+                                #f
+                                (string-append acc
+                                               (if (pad:vw-sel? origin row)
+                                                   (string-append "M "
+                                                                  (pad:vw-rep "v" (- (string-length line) 2)))
+                                                   line)
+                                               nl)))
+              (#t (pad:vw-paint-go s next n origin row armed
+                                   (string-append acc line nl)))))))))))
+
+(define (pad:vw-paint s)
+  (cond
+    ((not (string? s)) s)
+    ((not (pad:vw-visual-on?)) s)
+    ((< (string-length s) 6) s)
+    ((not (string=? (substring s 0 4) "SNAP")) s)
+    (#t (pad:vw-paint-go s 0 (string-length s) (pad:vw-origin s) 0 #f ""))))
+
 ;; Replaces the identity in keys.aura.
 (define (pad:vw-frame s)
-  (if (or *w2-on* (not (string? s)) (< (string-length s) 7)
-          (not (string=? (substring s 0 7) "SNAP v1")))
-      s
-      (if (pad:wn-many?)
-          (pad:wn-snap)
-          (pad:vw-maybe s))))
+  (cond
+    ((not (string? s)) s)
+    ((< (string-length s) 7) s)
+    (*w2-on* (pad:vw-paint s))
+    ((not (string=? (substring s 0 7) "SNAP v1")) s)
+    ((pad:wn-many?) (pad:wn-snap))
+    (#t (pad:vw-paint (pad:vw-maybe s)))))

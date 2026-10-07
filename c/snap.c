@@ -53,7 +53,9 @@ static const char *hl_sgr(char k) {
     }
 }
 
-static int mark_ok(char c) { return c == '.' || c == 'd' || c == 'r'; }
+static int mark_ok(char c) {
+    return c == '.' || c == 'd' || c == 'r' || c == 'v';
+}
 
 void pad_snap_free(PadSnap *s) {
     for (int i = 0; i < s->nrows; i++) {
@@ -610,6 +612,8 @@ static void draw_cell(FILE *o, int ansi, Attr *pen, char ch, char hl, char mk,
             fputs(";1;4", o);
         else if (mk == 'r')
             fputs(";4", o);
+        else if (mk == 'v')
+            fputs(";44", o); /* blue background; Soft chose the cells */
         if (cursor)
             fputs(";7", o);
         fputc('m', o);
