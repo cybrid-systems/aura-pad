@@ -21,8 +21,9 @@
 ;;   "the helper's hello now wants 2 things, but bye gives it 1"
 ;;   "the helper's bye does not fit (bye 4)"
 ;; typecheck-incremental lines (after a KEEP) go through the same table.
-;; "unbound variable: X" is dropped when X is a notebook define:
-;; typecheck-incremental reports value defines as unbound (aura#4363).
+;; Every diagnostic is kept: typecheck-incremental sees value defines
+;; and drops a refused body's diagnostics since 022f284 (aura#4363 fixed),
+;; so there is no false "unbound" to filter.
 ;; The engine silently closes a missing ")" in a rebind body, so the
 ;; robot gate counts brackets itself (pad:why-brackets-ok?).
 ;; Soft reserved: never bind quote.
@@ -184,11 +185,9 @@
         (let* ((rest (substring line (+ k 2) (string-length line)))
                (c (pad:why-find rest ": " 0)))
           (if (and (>= c 0) (< c 8)) (substring rest (+ c 2) (string-length rest)) rest)))))
-;; keep a message unless it is a false "unbound" for a notebook define
+;; keep every non-empty message (aura#4363 fixed: no false "unbound")
 (define (pad:why-diag-real? msg)
-  (if (string-prefix? msg "unbound variable: ")
-      (not (pad:ew-nid (pad:why-after msg "unbound variable: " *why-stops*)))
-      (> (string-length msg) 0)))
+  (> (string-length msg) 0))
 (define (pad:why-diag-msgs lines acc)
   (cond
     ((null? lines) (reverse acc))

@@ -8,12 +8,12 @@
 ;;           ("passes 1 of 3 checks", or aura's / the gate's reason).
 ;;           The verifier never evals generated code (aura#4359): the
 ;;           idea goes into a child world by one typed-mutate-atomic
-;;           (pad:world-run1, world.aura), the checks run there, root is
-;;           healed after (aura#4368). A refused idea gets why.aura's
+;;           (pad:world-run1, world.aura), the checks run there, the
+;;           child is deleted after. A refused idea gets why.aura's
 ;;           sentence (replayed in root, then healed).
 ;; fix    -> the helper's next idea, given the last idea and that sentence.
-;; intend passes its strings in reused slots (aura#4370), so the pad
-;; copies them before anything keeps them.
+;; intend's code / err strings are the pad's to keep (aura#4370 fixed in
+;; 18b48dc; no copy).
 ;; intend-history is aura's own timeline ("attempt_1:passes 1 of 3
 ;; checks", "attempt_2:success"); the pad shows it as "try 1: passes 1 of
 ;; 3 checks | try 2: ok" and checks it against Soft's own log of the
@@ -55,11 +55,11 @@
          (code0 (caddr *fx-ctx*))
          (snap (pad:nth *fx-ctx* 3))
          (why (pad:nth *fx-ctx* 4))
-         (ops (pad:fx-dec (string-append code "")))
+         (ops (pad:fx-dec code))
          (n (length goal))
          (t (if (null? ops)
                 (list 0 "gate" -1 (list) (list) "" why ops)
-                (pad:world-run1 (+ (length *fx-log*) 1) who why ops goal code0 snap)))
+                (pad:world-run1 (+ (length *fx-log*) 1) who why ops goal code0)))
          (st (pad:nth t 1))
          (score (pad:nth t 2))
          (text (cond
@@ -73,9 +73,9 @@
     text))
 ;; The fixer's next idea as a string. No idea -> "" (intend logs
 ;; "empty from fixer" and does not call the verifier; Soft logs it too).
-;; intend hands code / err in reused string slots (aura#4370): copy first.
+;; code / err are kept as handed over (aura#4370 fixed).
 (define (pad:fx-fix fixer code err)
-  (let ((ops (fixer (pad:fx-dec (string-append code "")) (string-append err ""))))
+  (let ((ops (fixer (pad:fx-dec code) err)))
     (if (and (pair? ops) (pair? (pad:fx-dec (pad:fx-enc ops))))
         (pad:fx-enc ops)
         (begin
