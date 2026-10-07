@@ -220,10 +220,15 @@ M10 谁写的：ctrl-o 回答"这一行是谁写的"（孩子 / 助手 / 宏 / �
 ## Soft smoke
 
 Image `ghcr.io/cybrid-systems/dev:v1.0.9`, Soft tip binary
-`/workspace/aura-grok/build/aura` (host GLIBC is often too old — smoke
+`/workspace/aura-grok/build/aura`, built from aura **`18b48dc`** (main
+`0ba8690` / `e7b236d` hang the pad, see [`docs/ISSUES.md`](docs/ISSUES.md))
+(host GLIBC is often too old — smoke
 always runs Soft inside Docker with `--entrypoint /usr/local/bin/gosu`).
 Soft runs natively in that container (no nested docker). Never
-`build_soft4132`. Needs `AURA_SANDBOX=off`.
+`build_soft4132`. Needs `AURA_SANDBOX=off`. `scripts/run_soft.sh` sets
+`AURA_MUTATE_TYPE_GATE=hard` unless told otherwise. Last full run:
+`PAD_LIVE=0 bash scripts/smoke.sh` → `PAD_SMOKE_OK` on `18b48dc`
+(2026-10-07, 15.5 min, M0–M13 + gap / perf / aura-perf / wire2 / cli).
 
 ```bash
 bash scripts/smoke.sh         # M0..M10 (+ live MiniMax if keyed) → PAD_SMOKE_OK
@@ -288,4 +293,4 @@ Soft (`soft/pad/keys.aura`). C forwards bytes and paints.
 
 Apache-2.0. Soft tip: `/workspace/aura-grok/build/aura`.
 
-Aura vs Rust for a next-generation (AI-era) editor, verified on Soft tip `c69e644`: [`docs/aura-vs-rust.md`](docs/aura-vs-rust.md).
+Aura vs Rust for a next-generation (AI-era) editor, verified on Soft tip `c69e644`, re-checked on `18b48dc`: [`docs/aura-vs-rust.md`](docs/aura-vs-rust.md).
