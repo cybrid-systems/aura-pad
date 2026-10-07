@@ -40,7 +40,7 @@ cd /workspace/aura-pad
 if ! command -v emacs >/dev/null 2>&1; then
   (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends emacs-nox) >/tmp/apt.log 2>&1 || true
 fi
-cc -std=c11 -O2 -Wall -Wextra c/snap.c c/pad_play.c -o out/bench/pad_play
+cc -std=c11 -O2 -Wall -Wextra c/snap.c c/play_loop.c c/pad_play.c -o out/bench/pad_play
 P=out/bench/page.scm
 L="python3 scripts/latency_pty.py --n $N --cold 22:7f --cold-n ${COLD_N:-12}"
 DOWN6=1b5b42,1b5b42,1b5b42,1b5b42,1b5b42,1b5b42
