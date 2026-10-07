@@ -32,11 +32,18 @@
       (#t (loop (cdr xs))))))
 
 ;; Workspace generation (engine metrics face) or -1 when unreadable.
-(define (pad:pen-gen)
+;; Generations the engine counted for snapshot heals (time.aura
+;; pad:time-snap, a Soft 18b48dc+ workaround): not page changes, so the
+;; pad's generation leaves them out and a KEEP still moves it by one.
+(define *pen-gen-skew* 0)
+(define (pad:pen-raw-gen)
   (try
     (let ((g (engine:metrics "ast:generation")))
       (if (number? g) g -1))
     (catch (e) -1)))
+(define (pad:pen-gen)
+  (let ((g (pad:pen-raw-gen)))
+    (if (< g 0) g (- g *pen-gen-skew*))))
 
 (define (pad:pen-total)
   (let ((t (pad:alist-get (pad:m-summary) ":total")))

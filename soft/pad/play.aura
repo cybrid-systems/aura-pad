@@ -45,13 +45,16 @@
     (pad:pf-open! *play-file*)
     0)
 ;; PAD_DEFER=1: early frame before the rows below a string edit settle.
-;; With a stdin poll primitive (aura#4358) the early frame is on by
-;; default (PAD_DEFER=0 turns it off) and a waiting key skips the settle.
+;; With the stdin poll (char-ready?, aura#4358 fixed in b8f008d) the
+;; early frame is on by default (PAD_DEFER=0 turns it off) and a waiting
+;; key skips the settle.
 (define *play-poll* (pad:pi-cap-poll))
 (set! *pi-defer* (or (equal? (getenv "PAD_DEFER") "1")
                      (and (not (string=? *play-poll* "")) (not (equal? (getenv "PAD_DEFER") "0")))))
+;; char-ready? (Soft 18b48dc+) is looked up once and called directly;
+;; it answers #t / #f. Older Soft has no poll: *pi-pending* stays #f.
 (if (string=? *play-poll* "char-ready?")
-    (set! *pi-pending* (lambda () (eq? (eval "(char-ready?)") #t)))
+    (set! *pi-pending* (eval "char-ready?"))
     0)
 ;; smoke only: pretend a key is waiting at every k-th early frame
 (if (and (string? (getenv "PAD_TEST_PENDING")) (string->number (getenv "PAD_TEST_PENDING")))

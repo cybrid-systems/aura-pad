@@ -12,9 +12,9 @@
 ;; Save = serialize-workspace (code + mutation log) plus a small Soft
 ;; sidecar (page rows as char codes, who stamps, the strip's who / why).
 ;; Open = deserialize-workspace + the sidecar: no set-code, the log comes
-;; back with its change reasons (sum=). aura#4365 / aura#4367: reopened
-;; records say author=0 and point at old node ids, so ctrl-o after an open
-;; recovers who from the pad stamp whose why equals a record's reason
+;; back with its change reasons (sum=), authors and composites
+;; (aura#4365 fixed), and node provenance follows the reloaded tree
+;; (aura#4367 fixed), so ctrl-o after an open asks the engine
 ;; (pad:time-eng-of). aura#4366: the notebook source ends in #t so the
 ;; reopened program's value is not a pair (ws.aura).
 ;;
@@ -37,8 +37,24 @@
   (list snap L S who why names (pad:q-code) (pad:pen-gen)))
 
 ;; Start the strip at the page as it is now (after a check or an open).
-(define (pad:time-start! label)
+;; A step snapshot. Soft 18b48dc..0ba8690: ast:snapshot leaves every
+;; workspace closure "invalid closure" and eval-current alone does not
+;; rebind them (out/newaura/repro/snap_inv.aura); ast:restore of the new
+;; snapshot + one eval-current does. Not counted as a heal: no code moves,
+;; and the generations it costs go to *pen-gen-skew* (pen.aura).
+(define (pad:time-snap)
   (let ((snap (try (ast:snapshot "time") (catch (e) #f))))
+    (if (number? snap)
+        (let ((g0 (pad:pen-raw-gen)))
+          (try (ast:restore snap) (catch (e) #f))
+          (try (eval-current) (catch (e) #f))
+          (let ((g1 (pad:pen-raw-gen)))
+            (if (and (>= g0 0) (> g1 g0)) (set! *pen-gen-skew* (+ *pen-gen-skew* (- g1 g0))) #f))
+          snap)
+        snap)))
+
+(define (pad:time-start! label)
+  (let ((snap (pad:time-snap)))
     (set! *time-steps* (list (pad:time-step snap (pad:es-L *pl-st*) *who-S* label "" (list))))
     (set! *time-at* 0)
     (set! *time-on* (number? snap))   ; the first id is 0, and 0 is false in Soft
@@ -54,7 +70,7 @@
 (define (pad:time-note! who why names)
   (if (not *time-on*)
       #f
-      (let ((snap (try (ast:snapshot "time") (catch (e) #f))))
+      (let ((snap (pad:time-snap)))
         (set! *time-steps*
               (append (pad:time-take *time-steps* (+ *time-at* 1))
                       (list (pad:time-step snap (pad:es-L *pl-st*) *who-S* who why names))))
@@ -325,16 +341,14 @@
                                               " saved steps, aura has the whole story"))
                 (list "OPEN" *pl-say*)))))))
 
-;; --- who after an open (aura#4365, aura#4367) ---
-;; The reopened log keeps every change reason (sum=) but says author=0
-;; (aura#4365), and the reload renumbers the tree while log targets and
-;; node provenance keep the old ids (aura#4367), so nothing joins the log
-;; to a define by node id. A define last written before the open takes
-;; who from the pad stamp of its row, and aura confirms it: the log must
-;; hold a rebind whose reason is the stamp's why. A write after the open
-;; has a real author (fingerprint != 0; reopened records say 0): plain
-;; M11b. Its mutation id may repeat a reopened one (the id counter is not
-;; restored), so ids never decide old vs new.
+;; --- who after an open (native since aura#4365 / aura#4367 were fixed) ---
+;; The reopened log keeps author and composite (aura#4365 fixed) and its
+;; targets / node provenance follow the reloaded tree (aura#4367 fixed),
+;; so ctrl-o after an open is plain M11b: who comes from the engine's
+;; node provenance. A define is "from the saved book" when the log the
+;; open brought back holds a rebind with its engine reason.
+;; Older Soft (c69e644) said author=0 here; this file targets 18b48dc+.
+;; Id of the last reopened rebind whose reason is why, or 0.
 (define (pad:time-sum-last recs why best)
   (cond
     ((null? recs) best)
@@ -345,13 +359,10 @@
 (define (pad:time-eng-of name st)
   (let ((e (pad:ew-prov name)))
     (cond
-      ((and e (> (pad:nth e 3) 0) (not (= (pad:nth e 5) 0))) e)
-      ((not st) (list name "nobody" "" 0 0 0))
-      ((string=? (car st) "kid") (list name "kid" "" 0 0 0))
-      (#t (let ((id (pad:time-sum-last *time-open-recs* (cadr st) 0)))
-            (if (> id 0)
-                (list name (car st) (cadr st) id 0 0)
-                (list name "someone" "" 0 0 0)))))))
+      ((and e (> (pad:nth e 3) 0)) e)
+      ((and st (string=? (car st) "kid")) (list name "kid" "" 0 0 0))
+      (e e)
+      (#t (list name "nobody" "" 0 0 0)))))
 
 (define (pad:time-who-at l)
   (let* ((wl (pad:es-L *pl-st*))
@@ -368,8 +379,10 @@
   (let* ((l (pad:es-l *pl-st*))
          (x (pad:time-who-at l))
          (v (caddr x))
-         (old (and (cadr x) (> (pad:nth (cadr x) 3) 0) (= (pad:nth (cadr x) 5) 0)))
-         (tag (string-append (pad:ew-tag l x) (if old " reopened=yes author=0" ""))))
+         (e (cadr x))
+         (old (and *time-reopened* e (> (pad:nth e 3) 0)
+                   (> (pad:time-sum-last *time-open-recs* (pad:nth e 2) 0) 0)))
+         (tag (string-append (pad:ew-tag l x) (if old " reopened=yes" ""))))
     (if (string=? v "disagree")
         (begin
           (set! *ew-disagree* (+ *ew-disagree* 1))
