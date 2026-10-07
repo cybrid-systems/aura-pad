@@ -38,7 +38,7 @@ run_box() { # tree rows...
 set -euo pipefail
 cd /workspace/aura-pad
 mkdir -p out/bench
-cc -std=c11 -O2 -Wall -Wextra c/snap.c c/pad_play.c -o out/bench/pad_play_w2b
+cc -std=c11 -O2 -Wall -Wextra c/snap.c $(ls c/play_loop.c 2>/dev/null) c/pad_play.c -o out/bench/pad_play_w2b
 DOWN6=1b5b42,1b5b42,1b5b42,1b5b42,1b5b42,1b5b42
 for row in $ROWS; do
   case "$row" in

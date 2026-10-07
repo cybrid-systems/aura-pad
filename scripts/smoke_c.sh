@@ -92,7 +92,7 @@ view() { "${CRUN[@]}" "$VIEW" "$@"; }
 if grep -nE '"(define|lambda|query:|mutate:|left|right|home|end|back|undo|yank|enter|quit|goto-def|jump-back|find-refs|kill-line|open-line|prev-line|next-line)"' \
      "$ROOT"/c/*.c "$ROOT"/c/*.h \
    || grep -niE '"[^"]*(born|jump|no line|nothing to)[^"]*"' "$ROOT"/c/*.c \
-   || grep -nE 'kb\[[^]]*\] *(==|!=|<|>)' "$ROOT/c/pad_play.c"; then
+   || grep -nE 'kb\[[^]]*\] *(==|!=|<|>)' "$ROOT/c/pad_play.c" "$ROOT/c/play_loop.c" "$ROOT/c/aura_pad.c"; then
   echo "smoke_c: C viewport grew editor logic (see above)" >&2
   exit 1
 fi
