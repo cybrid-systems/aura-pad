@@ -62,6 +62,9 @@
 # body length; C rebuilds or drops and asks for a full frame (fixtures,
 # pad_play ask, v2 == v1 frame for frame, replay bytes, term model;
 # PAD_WIRE2_OK). v1 stays the default.
+# → aura-pad CLI: one installed C binary starts Soft directly (no
+# scripts), `aura-pad FILE` opens / saves FILE in Soft (install, where,
+# missing-aura message, Soft file cases, pty end to end; PAD_CLI_OK).
 # Ends with PAD_SMOKE_OK.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -149,5 +152,8 @@ bash "$ROOT/scripts/smoke_aura_perf.sh"
 
 echo "smoke: wire v2 (changed rows only, fail closed)"
 bash "$ROOT/scripts/smoke_wire2.sh"
+
+echo "smoke: aura-pad CLI (one command, Soft opens and saves FILE)"
+bash "$ROOT/scripts/smoke_cli.sh"
 
 echo "smoke: PAD_SMOKE_OK"
