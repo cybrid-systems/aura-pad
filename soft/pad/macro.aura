@@ -58,7 +58,7 @@
             (list #f "seed")
             (begin
               (eval-current)
-              (hot-strategy:register! "pd:macro" body)
+              (pad:hs-register! "pd:macro" body)
               (set! *macro-main-body* body)
               (set! *macro-seeded* 1)
               (let ((p (try (pd:mshadow) (catch (e) #f))))
@@ -173,7 +173,7 @@
              (begin
                (pd:gate-reject! "swap" "")
                (pd:macro-out! "macro_reject"))
-             (let ((pwhy (pad:plan-check (try (pd:macro) (catch (e) #f)))))
+             (let ((pwhy (pad:plan-check-body (try (pd:macro) (catch (e) #f)) clean)))
                (if (not (string=? pwhy "ok"))
                    (begin
                      (set! *macro-why* pwhy)

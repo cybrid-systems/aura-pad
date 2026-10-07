@@ -114,7 +114,7 @@
                (begin
                  (pd:gate-reject! "swap" "")
                  (pd:goal-out! "goal_reject"))
-               (let ((pwhy (pad:plan-check (try (pd:goal) (catch (e) #f)))))
+               (let ((pwhy (pad:plan-check-body (try (pd:goal) (catch (e) #f)) clean)))
                  (if (not (string=? pwhy "ok"))
                      (begin
                        (set! *goal-why* pwhy)

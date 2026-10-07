@@ -209,7 +209,7 @@
             (list #f "seed")
             (begin
               (eval-current)
-              (hot-strategy:register! "pd:goal" body)
+              (pad:hs-register! "pd:goal" body)
               (set! *goal-main-body* body)
               (set! *goal-seeded* 1)
               (set! *race-backend* 0)
