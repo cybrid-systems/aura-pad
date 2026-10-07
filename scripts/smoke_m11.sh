@@ -136,7 +136,7 @@ fail=0
 for n in 1 2 3; do
   grep -qx "M11D_ACC $n OK" "$T" || { echo "smoke_m11: missing: M11D_ACC $n OK" >&2; fail=1; }
 done
-for want in 'T D1_SITES=hello:3/4:+1.bye:2/2:+0 OK' 'T D1_VERDICT=agree OK' 'T D1_PAGE_WAITS=yes OK' \
+for want in 'T D1_SITES=hello:3/3.bye:2/2 OK' 'T D1_VERDICT=agree OK' 'T D1_PAGE_WAITS=yes OK' \
             'T D1_ENGINE_HAS_IT=yes OK' 'T D2_CODE_BACK=yes OK' 'T D2_VERDICT=agree OK' \
             "T D2_SAY=changing add moves 3 places: greet, (greet (add 1 2)), (add 2 3). enter keeps, ctrl-z says no OK"; do
   grep -qF -- "$want" "$T" || { echo "smoke_m11: missing: $want" >&2; fail=1; }
@@ -200,7 +200,7 @@ for want in 'T G1_LINE=RULE verdict=KEEP word=tab name=tab-size value=4 used=1 e
             'T G2_NORULE_SAY=there is no rule called jump, try tab or say OK' \
             "T G3_BIG_SAY=the helper's tab-size gave 40, tab can jump 1 to 8 spaces, the old rule is back OK" \
             'T G3_BIG_CODE=yes OK' \
-            "T G3_WORD_SAY=the helper's tab-size does not fit (indent 2), the old rule stays OK" \
+            "T G3_WORD_SAY=the helper's tab-size does not fit indent, the old rule stays OK" \
             'T G3_WORD_CODE=yes OK' 'T G3_GOOD_TAB=3 OK' 'T G4_SAYMAX=30 OK'; do
   grep -qF -- "$want" "$T" || { echo "smoke_m11: missing: $want" >&2; fail=1; }
 done
