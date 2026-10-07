@@ -418,7 +418,7 @@
                                                     f)
                                                   (string-append
                                                     "SNAP v1 pad\n"
-                                                    "TITLE aura pad (Soft) keys=" (number->string *pl-keys*)
+                                                    "TITLE " *pl-title* " keys=" (number->string *pl-keys*)
                                                     " no=" (number->string *pl-rej*) "\n"
                                                     "CURSOR line=" (number->string l) " col=" (number->string col2) "\n"
                                                     "SAY " *pl-say* "\n"
@@ -501,7 +501,7 @@
                      (set! *w2-gen* (+ *w2-gen* 1))
                      (string-append
                        "SNAP v2 pad\nGEN " (number->string *w2-gen*) " base=" (number->string (- *w2-gen* 1))
-                       "\nTITLE aura pad (Soft) keys=" (number->string *pl-keys*)
+                       "\nTITLE " *pl-title* " keys=" (number->string *pl-keys*)
                        " no=" (number->string *pl-rej*) "\n"
                        "CURSOR line=" (number->string (cadr st2))
                        " col=" (number->string (caddr st2)) "\n"
@@ -516,7 +516,7 @@
                     (#t
                       (string-append
                         "SNAP v1 pad\n"
-                        "TITLE aura pad (Soft) keys=" (number->string *pl-keys*)
+                        "TITLE " *pl-title* " keys=" (number->string *pl-keys*)
                         " no=" (number->string *pl-rej*) "\n"
                         "CURSOR line=" (number->string (cadr st2))
                         " col=" (number->string (caddr st2)) "\n"

@@ -60,7 +60,7 @@
     (string-append
       "SNAP v2 pad\nGEN " (number->string (+ base 1))
       (if full " base=-\n" (string-append " base=" (number->string base) "\n"))
-      "TITLE aura pad (Soft) keys=" (number->string *pl-keys*)
+      "TITLE " *pl-title* " keys=" (number->string *pl-keys*)
       " no=" (number->string *pl-rej*) "\n"
       "CURSOR line=" (number->string l) " col=" (number->string col) "\n"
       "SAY " *pl-say* "\n"
@@ -90,7 +90,7 @@
     ((string=? line "WIRE 1")
      (set! *w2-on* #f)
      (display (string-append
-                "SNAP v1 pad\nTITLE aura pad (Soft) keys=" (number->string *pl-keys*)
+                "SNAP v1 pad\nTITLE " *pl-title* " keys=" (number->string *pl-keys*)
                 " no=" (number->string *pl-rej*) "\n"
                 "CURSOR line=" (number->string (cadr *pl-st*))
                 " col=" (number->string (caddr *pl-st*)) "\n"
