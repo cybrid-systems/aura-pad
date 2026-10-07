@@ -59,7 +59,14 @@ stays two words. It does not grow `fi` into `find-file`. **V** selects
 lines and paints them blue. **y** copies them, **d** deletes them, and
 **p** pastes. **d** then a motion deletes that text: **dG** through the
 bottom, **dgg** through the top, **dw** a word. **c** changes it and
-lets you type.
+lets you type. A number repeats. **3dd** deletes three lines, **3j**
+moves three lines, and **d3w** deletes three words. **d3j** deletes
+this line and the next three, four lines in all. **f** and **t** find
+a letter on this line. **F** and **T** look backward. **;** repeats
+that find and **,** reverses it. **.** repeats the last change.
+**diw** deletes the word under the cursor, **daw** the word and a
+neighboring space, **di"** the inside of quotes, and **di(** the
+inside of parentheses.
 See [`docs/tutorial.md`](docs/tutorial.md).
 **M-x ask** then some words chats about this page. The answer opens on
 the chat page. **M-x chat** opens that page. **M-x rewrite** then how
@@ -120,6 +127,9 @@ M-x rewrite 再写想怎么改，会换掉这一页，u 把你的页换回来。
 空格不会把 `fi` 补成 `find-file`。Shift-V 选中整行，选中的行是蓝底。
 y 复制，d 删除选区，p 粘贴。d 再加一个动作会删掉那一段：dG 删到文末，
 dgg 删到文首，dw 删一个词。c 改掉那一段并进入输入。
+数字会重复。3dd 删三行，3j 下移三行，d3w 删三个词。d3j 删这一行再加下面三行，一共四行。
+f 和 t 在这一行里找一个字母，F 和 T 往回找。; 按原方向再找，, 反方向找。
+. 重复上一次修改。diw 删光标上的词，daw 连同旁边的空格一起删，di" 删引号里面，di( 删括号里面。
 跟着做见 [`docs/tutorial.md`](docs/tutorial.md)。
 M-x help 打开一页说明：ctrl-x 2 在下面分屏，ctrl-x 3 在旁边分屏，
 ctrl-x o 换到另一页，ctrl-x 0 关掉这一页，ctrl-x 1 只留这一页。

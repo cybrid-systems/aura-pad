@@ -270,6 +270,7 @@
 ;; to a later, worse hit. ctrl-s moves the anchor to just after this hit.
 
 (define (pad:em-search-start!)
+  (pad:vi-clear-num!)
   (set! *em-anchor* (list (cadr *pl-st*) (caddr *pl-st*)))
   (set! *em-from* (pad:play-point))
   (set! *em-hit* #f)
