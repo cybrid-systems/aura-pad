@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Shared Soft runner: tip aura inside ghcr.io/cybrid-systems/dev:v1.0.9.
 # Soft runs natively in the container (no nested docker). Never build_soft4132.
+# Type gate defaults to hard: on Soft 18b48dc the default soft gate commits
+# rebinds with arity / unbound errors that c69e644 refused (aura#4362
+# comment, docs/ISSUES.md R3). AURA_MUTATE_TYPE_GATE=soft still overrides.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 AURA_SRC="${AURA_SRC:-/workspace/aura-grok}"
@@ -33,6 +36,6 @@ exec "${DOCKER[@]}" run --rm -i --entrypoint /usr/local/bin/gosu \
   -e "PAD_BURN_ROUNDS=${PAD_BURN_ROUNDS:-}" \
   -e "PAD_ROUND_DIR=${PAD_ROUND_DIR:-}" \
   -e "PAD_PROPOSE_FILE=${PAD_PROPOSE_FILE:-}" \
-  -e "AURA_MUTATE_TYPE_GATE=${AURA_MUTATE_TYPE_GATE:-}" \
+  -e "AURA_MUTATE_TYPE_GATE=${AURA_MUTATE_TYPE_GATE:-hard}" \
   "${IMG}" \
   dev /usr/bin/stdbuf -oL -eL /workspace/aura-grok/build/aura "$SRC" "$@"

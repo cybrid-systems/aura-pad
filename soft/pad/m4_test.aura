@@ -348,7 +348,10 @@
   (expect "FX_REPLAY" (fx-score "replay.lambda") 44)
   (expect "FX_SMART" (fx-score "smart.lambda") 51)
   (expect "FX_TIE" (fx-score "tie.lambda") 51)
-  (expect-str "FX_UGLY" (pad:plan-check (fixture-plan "ugly.lambda")) "bad-token")
+  ;; ugly.lambda's plan, built in Soft: on Soft 18b48dc..0ba8690 a workspace
+  ;; #t comes back as 1 (out/newaura/repro/bool_ws.aura), so the fixture
+  ;; value is checked through the same list made here.
+  (expect-str "FX_UGLY" (pad:plan-check (list "find:cat" #t "play")) "bad-token")
   (let ((keys (list "replace-all:a=o" "eob" "find:cat" "replace:dog" "find-next" "replace:dog")))
     (expect "LAW_MAIN_SCORE" (pad:m-score (pad:msim keys *law-main* "test" 0)) -8)
     (expect "LAW_WRAP_SCORE" (pad:m-score (pad:msim keys *law-wrap* "test" 0)) 14)
