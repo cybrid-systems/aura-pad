@@ -4,7 +4,12 @@
 ;;  F_NO_WORKSPACE  file mode: define-lookup has no workspace to look in
 ;;  F_FIBER         fiber:spawn + fiber:join hand back the body's value
 ;;  F_REBIND        after set-code + eval-current, mutate:rebind swaps a
-;;                  define for its callers
+;;                  define for its callers. Soft 18b48dc: callers hold an
+;;                  invalid closure after the rebind until one eval-current
+;;                  (hard gate always; soft gate after an ast:snapshot), and
+;;                  an uncaught invalid closure re-runs this whole file
+;;                  (out/newaura/repro/rerun2.aura, aura#4360 comment), so
+;;                  each rebind here is followed by one eval-current
 ;;  F_RESTORE       ast:snapshot / ast:restore + eval-current rolls it back
 ;;  F_RELOWER       engine:metrics "query:incremental-relower-stats" is a
 ;;                  hash; compile:relower-strategy answers a keyword
@@ -31,10 +36,12 @@
          (t2 (af:now))
          (rb (mutate:rebind "ws-hot" "(lambda (x) (+ x 2))" "aura-facts"))
          (t3 (af:now))
+         (ec1 (eval-current))
          (v1 (ws-use 1))
          (r2 (af:expect "F_REBIND" (and (= v0 2) (= v1 3)) (list v0 v1 rb)))
          (sid (ast:snapshot "aura-facts"))
          (rb2 (mutate:rebind "ws-hot" "(lambda (x) (+ x 100))" "aura-facts-2"))
+         (ec3 (eval-current))
          (v2 (ws-use 1))
          (t4 (af:now))
          (rs (ast:restore sid))

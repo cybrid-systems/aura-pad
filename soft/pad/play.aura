@@ -53,7 +53,10 @@
                      (and (not (string=? *play-poll* "")) (not (equal? (getenv "PAD_DEFER") "0")))))
 ;; char-ready? (Soft 18b48dc+) is looked up once and called directly;
 ;; it answers #t / #f. Older Soft has no poll: *pi-pending* stays #f.
-(if (string=? *play-poll* "char-ready?")
+;; PAD_POLL=0 leaves it off: a smoke that pipes a whole key stream sees
+;; char-ready? #t at every key, so no settle would ever be written
+;; (smoke_aura_perf drives the skip path with PAD_TEST_PENDING instead).
+(if (and (string=? *play-poll* "char-ready?") (not (equal? (getenv "PAD_POLL") "0")))
     (set! *pi-pending* (eval "char-ready?"))
     0)
 ;; smoke only: pretend a key is waiting at every k-th early frame

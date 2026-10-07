@@ -52,8 +52,11 @@ keys = [random.choice(pool) for _ in range(240)]
 lines = setup + ["IN " + " ".join(map(str, k)) for k in keys] + ["IN 27 91 68", "IN 27 91 67", "QUIT"]
 open(f"{out}/defer.in", "w").write("\n".join(lines) + "\n")
 PY
+# PAD_POLL=0: the piped stream always has a key waiting, so a real stdin
+# poll (char-ready?, Soft 18b48dc+) would skip every settle; the skip
+# path is checked below with PAD_TEST_PENDING.
 for v in 0 1; do
-  PAD_DEFER=$v bash "$ROOT/scripts/run_soft.sh" /workspace/aura-pad/soft/pad/play.aura \
+  PAD_POLL=0 PAD_DEFER=$v bash "$ROOT/scripts/run_soft.sh" /workspace/aura-pad/soft/pad/play.aura \
     <"$OUT/defer.in" >"$OUT/defer_$v.out" 2>"$OUT/defer_$v.err"
   if soft_errs "$OUT/defer_$v.out" "$OUT/defer_$v.err"; then
     cat "$OUT/defer_$v.err" >&2; echo "smoke_aura_perf: play PAD_DEFER=$v errors" >&2; exit 1
