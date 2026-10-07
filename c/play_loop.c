@@ -26,12 +26,14 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
 
 static struct termios g_saved;
 static volatile sig_atomic_t g_raw = 0;
 static volatile sig_atomic_t g_alt = 0;
+static volatile sig_atomic_t g_winch = 0;
 
 static const char ALT_ON[] = "\033[?1049h";
 static const char ALT_OFF[] = "\033[?1049l";
@@ -96,6 +98,55 @@ static void term_restore(void) {
 }
 
 /* async-signal-safe: tcsetattr and write only */
+static void on_winch(int sig) {
+    (void)sig;
+    g_winch = 1;
+}
+
+void pad_term_cells(int ansi, int *rows, int *cols) {
+    struct winsize ws;
+    int fd;
+    *rows = 0;
+    *cols = 0;
+    if (isatty(STDOUT_FILENO))
+        fd = STDOUT_FILENO;
+    else if (isatty(STDIN_FILENO))
+        fd = STDIN_FILENO;
+    else
+        return;
+    if (ioctl(fd, TIOCGWINSZ, &ws) != 0)
+        return;
+    /* title, say, legend, and in plain mode the caret line */
+    {
+        int chrome = ansi ? 3 : 4;
+        if (ws.ws_row > chrome + 1) {
+            *rows = ws.ws_row - chrome;
+            if (*rows > 240)
+                *rows = 240;
+        }
+        if (ws.ws_col > 10) {
+            *cols = ws.ws_col - 6; /* "%3d | " gutter */
+            if (*cols > 400)
+                *cols = 400;
+        }
+    }
+}
+
+/* Tell Soft the tty changed. Not a key: Soft already owns the map. */
+static void send_win(int to, int ansi, const char *name) {
+    int rows = 0, cols = 0;
+    char msg[64];
+    int n;
+    if (to < 0)
+        return;
+    pad_term_cells(ansi, &rows, &cols);
+    if (rows < 1 || cols < 1)
+        return;
+    n = snprintf(msg, sizeof msg, "WIN %d %d\n", rows, cols);
+    if (n > 0 && n < (int)sizeof msg && write(to, msg, (size_t)n) != n)
+        pad_errlog_msg(name, "could not send the screen size");
+}
+
 static void on_signal(int sig) {
     if (g_raw)
         tcsetattr(STDIN_FILENO, TCSANOW, &g_saved);
@@ -129,6 +180,8 @@ int pad_play_loop(pid_t pid, int to, int from, int errfd, const PadPlayOpt *o) {
     sigaction(SIGQUIT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGHUP, &sa, NULL);
+    sa.sa_handler = on_winch;
+    sigaction(SIGWINCH, &sa, NULL);
     signal(SIGPIPE, SIG_IGN);
     /* One write() per frame: a tty stdout is line-buffered by default,
      * which made every frame ~45 writes; the blit fflush()es at its end. */
@@ -188,6 +241,10 @@ int pad_play_loop(pid_t pid, int to, int from, int errfd, const PadPlayOpt *o) {
             fds[nf].events = POLLIN;
             fds[nf].revents = 0;
             ix_err = nf++;
+        }
+        if (g_winch) {
+            g_winch = 0;
+            send_win(to, o->mode, o->name);
         }
         if (poll(fds, (nfds_t)nf, -1) < 0) {
             if (errno == EINTR) continue;

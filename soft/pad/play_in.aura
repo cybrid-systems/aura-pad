@@ -108,7 +108,7 @@
     (if (not bs)
         (begin
           (pad:play-reject! "unknown")
-          (if *pi-collect* (set! *pi-out* (cons (pad:play-snap) *pi-out*)) (display (pad:play-snap)))
+          (if *pi-collect* (set! *pi-out* (cons (pad:vw-frame (pad:play-snap)) *pi-out*)) (display (pad:vw-frame (pad:play-snap))))
           "go")
         (let pi-each ((xs bs))
           (if (null? xs)
@@ -125,7 +125,7 @@
                   ((string=? r "quit") "quit")
                   ((string=? r "pending") (pi-each (cdr xs)))
                   (#t
-                   (if *pi-collect* (set! *pi-out* (cons (pad:play-snap) *pi-out*)) (display (pad:play-snap)))
+                   (if *pi-collect* (set! *pi-out* (cons (pad:vw-frame (pad:play-snap)) *pi-out*)) (display (pad:vw-frame (pad:play-snap))))
                    (pi-each (cdr xs))))))))))
 
 ;; Stubs. vi.aura redefines these when the editor is modal. Uncalled
@@ -548,10 +548,10 @@
                         "ROWS n=" (number->string (vector-length *lc-rowv*)) "\n"
                         *lc-body*
                         "END\n")))))
-         (if *pi-collect* (set! *pi-out* (cons fr *pi-out*)) (display fr))
+         (if *pi-collect* (set! *pi-out* (cons (pad:vw-frame fr) *pi-out*)) (display (pad:vw-frame fr)))
          "go"))
       ((string=? r "snap")
        (if fast (set! *pi-fast* (+ *pi-fast* 1)) 0)
-       (if *pi-collect* (set! *pi-out* (cons (pad:play-snap) *pi-out*)) (display (pad:play-snap)))
+       (if *pi-collect* (set! *pi-out* (cons (pad:vw-frame (pad:play-snap)) *pi-out*)) (display (pad:vw-frame (pad:play-snap))))
        "go")
       (#t r))))

@@ -19,7 +19,11 @@
 ;; ctrl-x ctrl-c quits (with a file, file.aura owns that chord and
 ;; warns once when the page is not saved). ctrl-x ctrl-e runs the page.
 ;; Alt-x is the bytes 27 120 in ONE read (a lone 27 is still Esc).
-;; Enter on an empty Alt-x line runs the page.
+;; Enter on an empty Alt-x line runs the page. The same read can also
+;; carry alt-f, alt-b, and alt-d (forward word, back word, delete word).
+;; ctrl-g cancels a prefix, a prompt, or a half-typed command.
+;; ctrl-x ctrl-f opens a file, ctrl-x ctrl-b lists buffers, ctrl-x b
+;; switches. M-x find-file and M-x search do the same jobs.
 ;;
 ;; Running the page uses (eval ...), not set-code, so the editor stays
 ;; loaded. display and newline inside the page are caught so they do
@@ -47,6 +51,65 @@
 (define *vi-gap* (list->string (list 32 47 32)))
 (define *vi-disp* display)
 (define *vi-nl* newline)
+
+;; emacs.aura fills these in. The stubs keep :q and empty M-x working
+;; before that file is loaded, and they never touch *pf-* (file.aura
+;; may not be loaded yet).
+(define *em-anchor* #f)
+(define *em-files* #f)
+(define (pad:em-other-dirty) "")
+(define (pad:em-hint!)
+  (set! *pl-say* (string-append *vi-prompt* *vi-line*))
+  "vi-do")
+(define (pad:em-search-now!) (pad:em-hint!))
+(define (pad:em-search-next!) (pad:em-search-now!))
+(define (pad:em-enter!) (pad:vi-colon!))
+(define (pad:em-command w rest mx) #f)
+(define (pad:em-abort-point!)
+  (if (pair? *em-anchor*)
+      (set! *pl-st* (list (car *pl-st*) (car *em-anchor*) (cadr *em-anchor*)
+                          (list-ref *pl-st* 3) (list-ref *pl-st* 4) (list-ref *pl-st* 5)))
+      0)
+  (set! *em-anchor* #f)
+  0)
+(define (pad:em-keyboard-quit!)
+  (pad:em-abort-point!)
+  (set! *vi-op* "")
+  (set! *vi-line* "")
+  (set! *vi-mx* #f)
+  (set! *vi-cx* #f)
+  (set! *pl-say* "quit")
+  "vi-do")
+(define (pad:em-find-start!)
+  (set! *vi-op* "find")
+  (set! *vi-line* "")
+  (set! *vi-mx* #f)
+  (set! *vi-cx* #f)
+  (set! *vi-prompt* "Find file: ")
+  (set! *pl-say* "Find file: ")
+  "vi-do")
+(define (pad:em-list!)
+  (set! *pl-say* "no buffers yet")
+  "vi-do")
+(define (pad:em-buf-start!)
+  (set! *vi-op* "buf")
+  (set! *vi-line* "")
+  (set! *vi-mx* #f)
+  (set! *vi-cx* #f)
+  (set! *vi-prompt* "Switch buffer: ")
+  (set! *pl-say* "Switch buffer: ")
+  "vi-do")
+(define (pad:em-search-start!)
+  (set! *em-anchor* (list (cadr *pl-st*) (caddr *pl-st*)))
+  (set! *vi-op* "s")
+  (set! *vi-line* "")
+  (set! *vi-mx* #f)
+  (set! *vi-cx* #f)
+  (set! *vi-prompt* "Search: ")
+  (set! *pl-say* "Search: ")
+  "vi-do")
+(define (pad:em-meta! b)
+  (if (= b 120) (pad:vi-colon-start! #t) "to-normal"))
 
 (define (pad:vi-title!)
   (set! *pl-title*
@@ -172,6 +235,14 @@
   (let ((n (string-length s)))
     (substring s (pad:vi-skip-sp s 0 n) (pad:vi-word-end s (pad:vi-skip-sp s 0 n) n))))
 
+;; The text after the first word, with the gap spaces dropped.
+(define (pad:vi-rest s)
+  (let* ((n (string-length s))
+         (a (pad:vi-skip-sp s 0 n))
+         (b (pad:vi-word-end s a n))
+         (c (pad:vi-skip-sp s b n)))
+    (substring s c n)))
+
 (define (pad:vi-first-line s)
   (let ((i (if (string? s) (string-index s "\n" 0) -1)))
     (cond
@@ -239,18 +310,30 @@
         (set! *pl-keys* (+ *pl-keys* 1))
         "vi-do")))
 
+(define (pad:vi-quit-name)
+  (if (string=? (pad:play-src) *pf-saved*)
+      (let ((o (pad:em-other-dirty)))
+        (if (string=? o "") *pf-name* o))
+      *pf-name*))
+
 (define (pad:vi-quit! force)
   (cond
-    ((not (pad:vi-has-file?)) "quit")
+    ;; No pad file, and find-file has not opened one either. Do not
+    ;; touch *pf-* here: this runs in tests before file.aura loads.
+    ((and (not (pad:vi-has-file?)) (not *em-files*)
+          (string=? (pad:em-other-dirty) ""))
+     "quit")
     (force "quit")
     (*pf-ro* "quit")
-    ((string=? (pad:play-src) *pf-saved*) "quit")
+    ((and (string=? (pad:play-src) *pf-saved*)
+          (string=? (pad:em-other-dirty) ""))
+     "quit")
     (*pf-quit*
      (set! *pf-quit* #f)
      "quit")
     (#t
      (set! *pf-quit* #t)
-     (set! *pl-say* (string-append *pf-name* " is not saved yet - ctrl-x ctrl-s saves,"
+     (set! *pl-say* (string-append (pad:vi-quit-name) " is not saved yet - ctrl-x ctrl-s saves,"
                                   " ctrl-x ctrl-c again quits"))
      "vi-do")))
 
@@ -267,29 +350,34 @@
             "vi-do"))))
 
 (define (pad:vi-colon!)
-  (let ((w (pad:vi-word *vi-line*))
-        (mx *vi-mx*))
+  (let* ((line *vi-line*)
+         (mx *vi-mx*)
+         (w (pad:vi-word line))
+         (rest (pad:vi-rest line)))
     (set! *vi-op* "")
     (set! *vi-line* "")
     (set! *vi-mx* #f)
-    (cond
-      ((or (string=? w "e") (string=? w "eval") (string=? w "run")) (pad:vi-eval!))
-      ((or (string=? w "q") (string=? w "quit")) (pad:vi-quit! #f))
-      ((or (string=? w "q!") (string=? w "quit!")) (pad:vi-quit! #t))
-      ((or (string=? w "w") (string=? w "write") (string=? w "save")) (pad:vi-write! #f))
-      ((or (string=? w "wq") (string=? w "x")) (pad:vi-write! #t))
-      ((string=? w "help")
-       (set! *pl-say* "eval runs this page, w saves, q quits")
-       "vi-do")
-      ((string=? w "")
-       (if mx
-           (pad:vi-eval!)
-           (begin
-             (set! *pl-say* "eval runs this page, w saves, q quits")
-             "vi-do")))
-      (#t
-       (set! *pl-say* (string-append "no command " w " - eval runs, w saves, q quits"))
-       "vi-do"))))
+    (let ((did (pad:em-command w rest mx)))
+      (if did
+          did
+          (cond
+            ((or (string=? w "e") (string=? w "eval") (string=? w "run")) (pad:vi-eval!))
+            ((or (string=? w "q") (string=? w "quit")) (pad:vi-quit! #f))
+            ((or (string=? w "q!") (string=? w "quit!")) (pad:vi-quit! #t))
+            ((or (string=? w "w") (string=? w "write") (string=? w "save")) (pad:vi-write! #f))
+            ((or (string=? w "wq") (string=? w "x")) (pad:vi-write! #t))
+            ((string=? w "help")
+             (set! *pl-say* "eval runs this page, find-file opens, search finds text, w saves, q quits")
+             "vi-do")
+            ((string=? w "")
+             (if mx
+                 (pad:vi-eval!)
+                 (begin
+                   (set! *pl-say* "eval runs this page, find-file opens, search finds text, w saves, q quits")
+                   "vi-do")))
+            (#t
+             (set! *pl-say* (string-append "no command " w " - eval runs, find-file opens, search finds text"))
+             "vi-do"))))))
 
 (define (pad:vi-colon-start! mx)
   (set! *vi-op* ":")
@@ -299,16 +387,20 @@
   (set! *vi-prompt* (if mx "M-x " ": "))
   (set! *pl-say*
         (if mx
-            "M-x - enter runs this page, q quits, w saves"
+            "M-x - enter runs this page, find-file opens, search finds text"
             ": - eval runs this page, w saves, q quits"))
   "vi-do")
 
 (define (pad:vi-type! b)
-  (if (< (string-length *vi-line*) 48)
+  (if (< (string-length *vi-line*) 160)
       (set! *vi-line* (string-append *vi-line* (list->string (list b))))
       0)
-  (set! *pl-say* (string-append *vi-prompt* *vi-line*))
-  "vi-do")
+  (cond
+    ((string=? *vi-op* "s") (pad:em-search-now!))
+    ((or (string=? *vi-op* "find") (string=? *vi-op* "buf")) (pad:em-hint!))
+    (#t
+     (set! *pl-say* (string-append *vi-prompt* *vi-line*))
+     "vi-do")))
 
 (define (pad:vi-bs!)
   (let ((n (string-length *vi-line*)))
@@ -316,8 +408,12 @@
         (pad:vi-cancel!)
         (begin
           (set! *vi-line* (substring *vi-line* 0 (- n 1)))
-          (set! *pl-say* (string-append *vi-prompt* *vi-line*))
-          "vi-do"))))
+          (cond
+            ((string=? *vi-op* "s") (pad:em-search-now!))
+            ((or (string=? *vi-op* "find") (string=? *vi-op* "buf")) (pad:em-hint!))
+            (#t
+             (set! *pl-say* (string-append *vi-prompt* *vi-line*))
+             "vi-do"))))))
 
 ;; --- line edits (normal mode) ---
 
@@ -530,6 +626,7 @@
           "vi-do"))))
 
 (define (pad:vi-cancel!)
+  (pad:em-abort-point!)
   (set! *vi-op* "")
   (set! *vi-line* "")
   (set! *vi-mx* #f)
@@ -568,7 +665,7 @@
     ((string=? name "ZZ") (pad:vi-write! #t))
     ((string=? name "ZQ") (pad:vi-quit! #t))
     ((string=? name "cx")
-     (set! *pl-say* "ctrl-x - now ctrl-c quits, ctrl-e runs this page")
+     (set! *pl-say* "ctrl-x - now ctrl-c quits, ctrl-e runs this page, ctrl-f finds a file")
      "vi-do")
     ((string=? name "cx-no")
      (set! *pl-say* "ctrl-x and that key do not go together")
@@ -587,13 +684,19 @@
      "vi-do")
     (#t (pad:vi-cancel!))))
 
+(define (pad:vi-prompt?)
+  (or (string=? *vi-op* ":") (string=? *vi-op* "find")
+      (string=? *vi-op* "buf") (string=? *vi-op* "s")))
+
 (define (pad:vi-op-byte b)
   (cond
-    ((= b 27) (pad:vi-cancel!))
-    ((string=? *vi-op* ":")
+    ((pad:vi-prompt?)
      (cond
-       ((or (= b 10) (= b 13)) (pad:vi-colon!))
+       ((= b 7) (pad:em-keyboard-quit!))
+       ((= b 27) (pad:vi-cancel!))
+       ((or (= b 10) (= b 13)) (pad:em-enter!))
        ((or (= b 8) (= b 127)) (pad:vi-bs!))
+       ((and (string=? *vi-op* "s") (= b 19)) (pad:em-search-next!))
        ((and (>= b 32) (<= b 126)) (pad:vi-type! b))
        (#t (pad:vi-type-keep!))))
     ((string=? *vi-op* "d")
@@ -633,17 +736,22 @@
     ((= b 3) "quit")
     ((= b 5) (pad:vi-act! "eval"))
     ((= b 17) "quit")
+    ((= b 6) (pad:em-find-start!))
+    ((= b 2) (pad:em-list!))
+    ((= b 98) (pad:em-buf-start!))
     (#t (pad:vi-act! "cx-no"))))
 
 ;; One idle byte -> a command word, a char code, or a mode word
 ;; (to-insert / to-normal / append / normal-key / vi-do).
 (define (pad:vi-cmd b)
   (cond
+    ((= b 7) (pad:em-keyboard-quit!))
     ((not (string=? *vi-op* "")) (pad:vi-op-byte b))
     (*vi-cx* (pad:vi-cx-byte b))
     ((= b 27) "to-normal")
     ((= b 24) (pad:vi-cx-start!))
     ((= b 3) (pad:vi-act! "c-hint"))
+    ((= b 19) (pad:em-search-start!))
     ((= b 2) "left")
     ((= b 6) "right")
     ((= b 14) "next-line")
@@ -719,8 +827,8 @@
     ((string=? r "pending") "pending")
     (#t
      (if *pi-collect*
-         (set! *pi-out* (cons (pad:play-snap) *pi-out*))
-         (display (pad:play-snap)))
+         (set! *pi-out* (cons (pad:vw-frame (pad:play-snap)) *pi-out*))
+         (display (pad:vw-frame (pad:play-snap))))
      "go")))
 
 (define (pad:vi-took! cmd rest)
@@ -738,8 +846,10 @@
       (let ((b (car xs)) (rest (cdr xs)))
         (cond
           ((and (null? esc) (string=? *vi-op* "")
-                (= b 27) (pair? rest) (= (car rest) 120))
-           (pad:vi-took! (pad:vi-colon-start! #t) (cdr rest)))
+                (= b 27) (pair? rest)
+                (or (= (car rest) 120) (= (car rest) 102)
+                    (= (car rest) 98) (= (car rest) 100)))
+           (pad:vi-took! (pad:em-meta! (car rest)) (cdr rest)))
           ((pair? esc)
            (let* ((step (pad:key-step esc b))
                   (cmd (car step))
@@ -762,7 +872,7 @@
         (begin
           (pad:play-reject! "unknown")
           (if *pi-collect*
-              (set! *pi-out* (cons (pad:play-snap) *pi-out*))
-              (display (pad:play-snap)))
+              (set! *pi-out* (cons (pad:vw-frame (pad:play-snap)) *pi-out*))
+              (display (pad:vw-frame (pad:play-snap))))
           "go")
         (pad:vi-each bs *pl-esc*))))

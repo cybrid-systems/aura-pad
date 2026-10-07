@@ -484,4 +484,9 @@
       (pad:v-rows lines *pl-tape* *pl-marks*)
       "END\n")))
 
-(define (pad:play-emit!) (display (pad:play-snap)) 0)
+;; screen.aura replaces this with a window into a tall buffer. Until
+;; that file is loaded, a frame is sent exactly as play-snap built it
+;; (gap tests and the kid page depend on those bytes).
+(define (pad:vw-frame s) s)
+
+(define (pad:play-emit!) (display (pad:vw-frame (pad:play-snap))) 0)

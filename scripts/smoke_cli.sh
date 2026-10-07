@@ -25,7 +25,8 @@ IMG="ghcr.io/cybrid-systems/dev:v1.0.9"
 rm -rf "$OUT"; mkdir -p "$OUT"
 
 python3 "$ROOT/scripts/paren_check.py" "$ROOT/soft/pad/file.aura" "$ROOT/soft/pad/play.aura" \
-  "$ROOT/soft/pad/vi.aura" "$ROOT/soft/pad/vi_test.aura"
+  "$ROOT/soft/pad/vi.aura" "$ROOT/soft/pad/vi_test.aura" \
+  "$ROOT/soft/pad/screen.aura" "$ROOT/soft/pad/emacs.aura"
 bash "$ROOT/scripts/vi_check.sh"
 
 # 2. install

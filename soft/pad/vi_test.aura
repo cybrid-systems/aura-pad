@@ -17,6 +17,8 @@
 (load (string-append *pad-home* "/soft/pad/who.aura"))
 (load (string-append *pad-home* "/soft/pad/play_in.aura"))
 (load (string-append *pad-home* "/soft/pad/vi.aura"))
+(load (string-append *pad-home* "/soft/pad/screen.aura"))
+(load (string-append *pad-home* "/soft/pad/emacs.aura"))
 
 (define *fail* 0)
 (define *checks* 0)
@@ -37,6 +39,10 @@
   (pad:play-reset! src)
   (set! *vi-on* #t)
   (set! *vi-mode* "normal")
+  (set! *vi-op* "")
+  (set! *vi-cx* #f)
+  (set! *vi-line* "")
+  (set! *em-anchor* #f)
   (set! *vi-base* "t")
   (pad:vi-title!))
 
@@ -305,7 +311,7 @@
 (vt-eq "cxc" (pad:play-step! "IN 24 3") "quit")
 (vt-arm! "ab")
 (vt-eq "cx-go" (pad:play-step! "IN 24") "go")
-(vt-eq "cx-say" *pl-say* "ctrl-x - now ctrl-c quits, ctrl-e runs this page")
+(vt-eq "cx-say" *pl-say* "ctrl-x - now ctrl-c quits, ctrl-e runs this page, ctrl-f finds a file")
 (vt-eq "cx-q" (pad:play-step! "IN 3") "quit")
 (vt-arm! "(+ 4 5)")
 (vt-eq "cxe" (pad:play-step! "IN 24 5") "go")
@@ -320,6 +326,60 @@
 (pad:play-step! "IN 58 119 13")
 (vt-eq "nowrite" *pl-say* "no file to save")
 (vt-eq "nowrite-mode" *vi-mode* "normal")
+
+;; The screen scrolls. Two rows of a four-line page, then the cursor
+;; walks down and the window follows. Put the tall default back after.
+(vt-arm! "a\nb\nc\nd")
+(set! *vw-rows* 2)
+(set! *vw-cols* 20)
+(set! *vw-top* 0)
+(set! *vw-left* 0)
+(let ((s (pad:vw-frame (pad:play-snap))))
+  (vt-eq "win-rows" (if (string-contains? s "ROWS n=2") 1 0) 1)
+  (vt-eq "win-origin" (if (string-contains? s "ORIGIN") 1 0) 0))
+(pad:play-step! "IN 106")
+(pad:play-step! "IN 106")
+(let ((s (pad:vw-frame (pad:play-snap))))
+  (vt-eq "win-ol" (if (string-contains? s "ORIGIN line=1") 1 0) 1)
+  (vt-eq "win-cur" (if (string-contains? s "CURSOR line=1") 1 0) 1))
+(set! *vw-rows* 200)
+(set! *vw-cols* 400)
+(set! *vw-top* 0)
+(set! *vw-left* 0)
+
+;; ctrl-g cancels a half-typed dd
+(vt-arm! "ab\ncd")
+(pad:play-step! "IN 100")
+(vt-eq "cg-arm" (if (string-contains? *pl-say* "press d") 1 0) 1)
+(pad:play-step! "IN 7")
+(vt-eq "cg" (if (string-contains? *pl-say* "quit") 1 0) 1)
+(pad:play-step! "IN 100")
+(vt-eq "cg-text" (pad:play-src) "ab\ncd")
+
+;; alt-f / alt-b / alt-d. One read holds Esc and the letter.
+(vt-arm! "ab cd")
+(pad:play-step! "IN 27 102")
+(vt-at "mf" 0 2)
+(pad:play-step! "IN 27 98")
+(vt-at "mb" 0 0)
+(pad:play-step! "IN 27 100")
+(vt-eq "md" (pad:play-src) " cd")
+
+;; isearch restarts at the anchor; ctrl-g puts the cursor back
+(vt-arm! "hello aura")
+(pad:play-step! "IN 19")
+(pad:play-step! "IN 97")
+(pad:play-step! "IN 117")
+(vt-at "search" 0 6)
+(pad:play-step! "IN 7")
+(vt-at "search-back" 0 0)
+
+;; ctrl-x ctrl-f asks for a file, ctrl-g closes the prompt
+(vt-arm! "ab")
+(pad:play-step! "IN 24 6")
+(vt-eq "ff" (if (string-contains? *pl-say* "Find file") 1 0) 1)
+(pad:play-step! "IN 7")
+(vt-eq "ff-g" (if (string-contains? *pl-say* "quit") 1 0) 1)
 
 ;; PAD_VI off: letters insert, ctrl-b is still jump-back
 (pad:play-reset! "ab\ncd")
@@ -357,6 +417,14 @@
 (pad:play-reset! "(+ 1 2)")
 (vt-eq "fe" (pad:pf-line! "IN 24 5") "go")
 (vt-eq "fe-say" *pl-say* "ran: 3")
+
+;; A partial name in this file's folder opens the matching file.
+(write-file "/tmp/aura-pad-uniq-qq.txt" "qq\n")
+(pad:pf-open! "/tmp/aura-pad-here.txt")
+(pad:em-open-typed! "uniq-qq")
+(vt-eq "fuzzy-src" (pad:play-src) "qq")
+(pad:em-list!)
+(vt-eq "fuzzy-list" (if (string-contains? *pl-say* "uniq-qq") 1 0) 1)
 
 (display "CHECKS ")
 (display (number->string *checks*))

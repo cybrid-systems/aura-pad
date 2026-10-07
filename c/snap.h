@@ -10,6 +10,10 @@ typedef struct {
     char say[PAD_MAX_TEXT];
     char legend[PAD_MAX_TEXT];
     int cur_line, cur_col;
+    /* Soft ORIGIN line= col= when the frame is a window into a longer
+     * buffer. Gutter numbers are origin_line + row + 1. Both stay 0
+     * when Soft sends the whole buffer (no ORIGIN line). */
+    int origin_line, origin_col;
     int nrows;
     char *t[PAD_MAX_ROWS], *h[PAD_MAX_ROWS], *m[PAD_MAX_ROWS];
     /* Optional Soft DIRTY lines=<csv>. dirty_n < 0 means "all rows"

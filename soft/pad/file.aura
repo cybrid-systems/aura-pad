@@ -15,6 +15,8 @@
 ;;                        says how to quit (aura-pad hands ctrl-c to Soft
 ;;                        as a key byte, not as SIGINT).
 ;;   ctrl-x ctrl-e        run the page (pad:vi-eval! in vi.aura).
+;;   ctrl-x ctrl-f        find a file (vi mode). ctrl-x ctrl-b lists
+;;                        buffers. ctrl-x b switches. ctrl-g cancels.
 ;; Every other key goes to pad:play-step! as before.
 ;;
 ;; The pad never writes a file it could not load byte for byte. A file
@@ -34,16 +36,17 @@
 (define *pf-saved* "")    ; page text at open / last save
 (define *pf-cx* #f)       ; ctrl-x pressed, waiting for the second key
 (define *pf-quit* #f)     ; a quit key was refused once (unsaved)
-;; File page: roomier than the 40 x 12 play page, still one screen
-;; (6-char gutter + 72 = 78 columns; 18 rows + title, say, legend).
-(define *pf-max-col* 72)
-(define *pf-max-lines* 18)
+;; File page: the screen scrolls (screen.aura), so the hold is the
+;; whole buffer the pad will edit, not one terminal. Past this, or
+;; with a byte outside printable ASCII, the file stays look-only.
+(define *pf-max-col* 400)
+(define *pf-max-lines* 500)
 ;; protocol lines the file keys arrive as (ctrl-x 24, ctrl-q 17,
 ;; ctrl-s 19, ctrl-c 3; a fast ctrl-x ctrl-s can come in one read)
 ;; "IN 5" is ctrl-e (end of line) and stays a normal key. Only the
 ;; chord ctrl-x ctrl-e runs the page, so the coalesced form is listed
 ;; and a split ctrl-e is noticed because ctrl-x left *pf-cx* set.
-(define *pf-keys* (list "IN 24" "IN 17" "IN 19" "IN 24 19" "IN 24 3" "IN 24 5" "IN 3"))
+(define *pf-keys* (list "IN 24" "IN 17" "IN 19" "IN 24 19" "IN 24 3" "IN 24 5" "IN 24 6" "IN 24 2" "IN 3"))
 (define *pf-help* "ctrl-x ctrl-s saves, ctrl-q quits")
 
 ;; "1 line", "3 lines"
@@ -148,14 +151,18 @@
 
 ;; A quit key. Unsaved changes: say so once; the next quit key quits.
 (define (pad:pf-quit! armed)
-  (if (or armed *pf-ro* (string=? (pad:play-src) *pf-saved*))
-      "quit"
-      (begin
-        (set! *pf-quit* #t)
-        (set! *pl-say* (string-append *pf-name* " is not saved yet - ctrl-x ctrl-s saves,"
-                                      " ctrl-x ctrl-c again quits"))
-        (pad:play-emit!)
-        "go")))
+  (let ((other (pad:em-other-dirty)))
+    (if (or armed *pf-ro*
+            (and (string=? (pad:play-src) *pf-saved*) (string=? other "")))
+        "quit"
+        (begin
+          (set! *pf-quit* #t)
+          (set! *pl-say* (string-append
+                           (if (string=? (pad:play-src) *pf-saved*) other *pf-name*)
+                           " is not saved yet - ctrl-x ctrl-s saves,"
+                           " ctrl-x ctrl-c again quits"))
+          (pad:play-emit!)
+          "go"))))
 
 ;; One protocol line in file mode, when it is a file key, ctrl-x is
 ;; pending or a quit was refused (play.aura checks that with builtins
@@ -180,10 +187,34 @@
        (pad:vi-eval!)
        (pad:play-emit!)
        "go")
+      ;; ctrl-g drops the prefix or the unsaved warning. It is not in
+      ;; *pf-keys*, so a lone ctrl-g still goes to the modeless map.
+      ((string=? line "IN 7")
+       (if *vi-on* (pad:em-keyboard-quit!) (set! *pl-say* *pf-help*))
+       (pad:play-emit!)
+       "go")
+      ((or (and cx (string=? line "IN 6")) (string=? line "IN 24 6"))
+       (if *vi-on*
+           (pad:em-find-start!)
+           (set! *pl-say* "ctrl-x and that key do not go together"))
+       (pad:play-emit!)
+       "go")
+      ((or (and cx (string=? line "IN 2")) (string=? line "IN 24 2"))
+       (if *vi-on*
+           (pad:em-list!)
+           (set! *pl-say* "ctrl-x and that key do not go together"))
+       (pad:play-emit!)
+       "go")
+      ((and cx (string=? line "IN 98"))
+       (if *vi-on*
+           (pad:em-buf-start!)
+           (set! *pl-say* "ctrl-x and that key do not go together"))
+       (pad:play-emit!)
+       "go")
       ((string=? line "IN 24")
        (set! *pf-cx* #t)
        (set! *pf-quit* armed)
-       (set! *pl-say* "ctrl-x - now ctrl-s saves, ctrl-c quits, ctrl-e runs this page")
+       (set! *pl-say* "ctrl-x - now ctrl-s saves, ctrl-c quits, ctrl-e runs this page, ctrl-f finds a file")
        (pad:play-emit!)
        "go")
       (cx

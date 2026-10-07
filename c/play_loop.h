@@ -26,4 +26,8 @@ typedef struct {
  * SIGHUP. */
 int pad_play_loop(pid_t pid, int to, int from, int errfd, const PadPlayOpt *o);
 
+/* Text rows and columns that fit on the tty, after the title / say /
+ * legend lines and the 6-column gutter. 0,0 when stdout is not a tty. */
+void pad_term_cells(int ansi, int *rows, int *cols);
+
 #endif

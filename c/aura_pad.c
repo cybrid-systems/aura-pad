@@ -56,6 +56,7 @@ typedef struct {
     char src[PATH_MAX];       /* aura source/build root for docker */
     int use_sudo;             /* docker socket not writable: sudo -n */
     int docker_mode;
+    int rows, cols;           /* tty text area; 0 = Soft picks a tall default */
 } Launch;
 
 /* snprintf that says whether it fit */
@@ -270,6 +271,16 @@ static void child_env(const Launch *L) {
     setenv("AURA_BIN", L->soft, 1);
     setenv("AURA_PAD_HOME", L->home, 1);
     setenv("PAD_VI", vi_flag(), 1);
+    if (L->rows > 0) {
+        char b[16];
+        snprintf(b, sizeof b, "%d", L->rows);
+        setenv("PAD_ROWS", b, 1);
+    }
+    if (L->cols > 0) {
+        char b[16];
+        snprintf(b, sizeof b, "%d", L->cols);
+        setenv("PAD_COLS", b, 1);
+    }
     if (L->file[0]) setenv("PAD_FILE", L->file, 1);
     else unsetenv("PAD_FILE");
 }
@@ -306,6 +317,16 @@ static int build_argv(const Launch *L, char *argv[], int max, char st[][2 * PATH
     argv[a++] = "-e"; argv[a++] = "AURA_BIN=" BOX_AURA_SRC "/build/aura";
     argv[a++] = "-e"; fmt(st[s], sizeof(st[s]), "AURA_PAD_HOME=%s", L->home); argv[a++] = st[s++];
     argv[a++] = "-e"; fmt(st[s], sizeof(st[s]), "PAD_VI=%s", vi_flag()); argv[a++] = st[s++];
+    if (L->rows > 0) {
+        argv[a++] = "-e";
+        fmt(st[s], sizeof(st[s]), "PAD_ROWS=%d", L->rows);
+        argv[a++] = st[s++];
+    }
+    if (L->cols > 0) {
+        argv[a++] = "-e";
+        fmt(st[s], sizeof(st[s]), "PAD_COLS=%d", L->cols);
+        argv[a++] = st[s++];
+    }
     const char *img = getenv("AURA_PAD_IMAGE");
     argv[a++] = (char *)(img && *img ? img : DOCKER_IMAGE);
     argv[a++] = "dev";
@@ -359,6 +380,9 @@ static void usage(void) {
             "  Arrows, hjkl, and ctrl-b/f/p/n move in either mode.\n"
             "  ctrl-x ctrl-s saves, ctrl-q (or ctrl-x ctrl-c) quits.\n"
             "  dd deletes a line. :eval (or alt-x, then enter) runs the page.\n"
+            "  The screen follows the terminal, and the buffer scrolls.\n"
+            "  ctrl-g cancels. ctrl-x ctrl-f opens a file. alt-f, alt-b, alt-d\n"
+            "  move or delete a word. M-x search finds text.\n"
             "  ctrl-\\ is the emergency exit (nothing is saved).\n"
             "  PAD_VI=0 keeps the old modeless keys.\n"
             "options: --plain|--ansi  --wire1|--wire2  --where (show what would run)\n"
@@ -399,6 +423,8 @@ int main(int argc, char **argv) {
 
     Launch L;
     memset(&L, 0, sizeof(L));
+    /* Soft cannot see the tty (its stdout is a pipe). Pass the text area. */
+    pad_term_cells(o.mode, &L.rows, &L.cols);
     if (!find_home(&L)) {
         fprintf(stderr,
                 "aura-pad: cannot find the pad's Soft files (soft/pad/play.aura).\n"
@@ -435,7 +461,7 @@ int main(int argc, char **argv) {
         return 127;
     }
 
-    char st[16][2 * PATH_MAX + 64];
+    char st[24][2 * PATH_MAX + 64];
     char *cargv[64];
     build_argv(&L, cargv, 64, st);
     if (where) {

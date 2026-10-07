@@ -178,6 +178,15 @@ static int block_line(Block *b, const char *line) {
             b->stage = 11;
             return 1;
         }
+        /* Optional window origin. Stay in stage 4 until ROWS. */
+        if (strncmp(line, "ORIGIN line=", 12) == 0) {
+            int ol = 0, oc = 0;
+            if (sscanf(line, "ORIGIN line=%d col=%d", &ol, &oc) != 2 || ol < 0 || oc < 0)
+                return 0;
+            s->origin_line = ol;
+            s->origin_col = oc;
+            return 1;
+        }
         /* Optional Soft DIRTY lines=0,2,5 — stay in stage 4 until ROWS. */
         if (strncmp(line, "DIRTY lines=", 12) == 0) {
             const char *q = line + 12;
@@ -478,7 +487,7 @@ void pad_blit(FILE *o, const PadSnap *s, int ansi) {
         const char *t = s->t[r], *h = s->h[r], *m = s->m[r];
         size_t n = strlen(t);
         sgr(o, ansi, "2");
-        fprintf(o, "%3d | ", r + 1);
+        fprintf(o, "%3d | ", s->origin_line + r + 1);
         sgr(o, ansi, "0");
         Attr pen = {NULL, 0, 0};
         for (size_t i = 0; i < n; i++)
@@ -534,7 +543,7 @@ static void blit_dirty_stream(FILE *o, const PadSnap *prev, const PadSnap *s, in
         const char *tt = s->t[r], *hh = s->h[r], *mm = s->m[r];
         size_t n = strlen(tt);
         sgr(o, ansi, "2");
-        fprintf(o, "%3d | ", r + 1);
+        fprintf(o, "%3d | ", s->origin_line + r + 1);
         sgr(o, ansi, "0");
         Attr pen = {NULL, 0, 0};
         for (size_t i = 0; i < n; i++)
@@ -577,7 +586,7 @@ static RowView row_view(const PadSnap *s, int r) {
         return v;
     v.t = s->t[r]; v.h = s->h[r]; v.m = s->m[r];
     v.cur = r == s->cur_line ? s->cur_col : -1;
-    v.num = r + 1;
+    v.num = s->origin_line + r + 1;
     return v;
 }
 

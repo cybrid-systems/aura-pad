@@ -42,14 +42,20 @@ first press warns and the next ctrl-x ctrl-c, ctrl-q, or ctrl-c quits.
 **`:e`** (or `:eval` / `:run`) runs the page and shows the result on
 the status line. **Alt-x** then Enter does the same (the terminal must
 send Esc and `x` in one read). **ctrl-x ctrl-e** runs it too. `:w`
-saves, `:q` quits, `:wq` saves and quits. **ctrl-\** is the emergency
+saves, `:q` quits, `:wq` saves and quits. **ctrl-g** cancels a prefix
+or a prompt. **ctrl-x ctrl-f** opens a file (a partial name is enough),
+**ctrl-x ctrl-b** lists buffers, **ctrl-x b** switches to one.
+**Alt-f** / **Alt-b** / **Alt-d** move by a word or delete one (Esc and
+the letter in one read). **M-x search** finds text; ctrl-s finds the
+next match. **M-x find-file** opens a file. **ctrl-\** is the emergency
 exit (nothing is saved).
 `PAD_VI=0` keeps the old modeless map (ctrl-b jumps back, ctrl-p
 copies). The title shows the file name and `[normal]` or `[insert]`.
-Problems are appended to `~/.local/state/aura-pad/aura-pad.log`
+The screen follows the terminal and scrolls, so the whole buffer can
+be read. Problems are appended to `~/.local/state/aura-pad/aura-pad.log`
 (or `$AURA_PAD_LOG`), rotated when the file reaches 256 KiB
 (`$AURA_PAD_LOG_MAX`), keeping two older files. Files the pad cannot
-hold byte for byte (longer than 72 columns, more than 18 lines, tabs or
+hold byte for byte (longer than 400 columns, more than 500 lines, tabs or
 non-ASCII letters) open in look-only mode and are never written.
 
 How it starts: `aura-pad` is a small C program. It finds Aura (`$AURA_BIN`,
@@ -72,7 +78,10 @@ pick the build dir / image). With no aura at all it says how to get one.
 ctrl-p / ctrl-n 都能上下左右移动。`dd` 删行，`x` 删字，`yy` 复制，`p` 粘贴，
 `u` 撤销。`:e` 或 `:eval` 运行当前页（Alt-x 再回车、ctrl-x ctrl-e 也行），
 结果出现在状态行。ctrl-x ctrl-s 保存，ctrl-q 或 ctrl-x ctrl-c 退出
-（没保存时先提示，再按一次才退出）。
+（没保存时先提示，再按一次才退出）。ctrl-g 取消。ctrl-x ctrl-f 按文件名
+打开（写一部分就行），ctrl-x ctrl-b 列出 buffer，ctrl-x b 切换。
+Alt-f / Alt-b / Alt-d 按词移动或删除。M-x search 搜文字，ctrl-s 找下一个。
+画面跟着终端走，长文件可以滚动看完。
 出错看 `~/.local/state/aura-pad/aura-pad.log`（会轮转）。
 
 Requirements: [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md).

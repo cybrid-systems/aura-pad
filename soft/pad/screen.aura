@@ -1,0 +1,145 @@
+;; aura-pad -- show a window of the buffer, not a cut-off page.
+;; The C viewport asks for a size (PAD_ROWS / PAD_COLS at start, then
+;; "WIN rows cols" when the terminal changes). A frame that already
+;; fits is returned unchanged, so a short page stays byte for byte.
+;; A taller or wider buffer is sliced around the cursor. SNAP v2 is a
+;; delta on the whole buffer, so it is never sliced. Wire v2 stays
+;; full-buffer too. Soft reserved: never bind quote.
+;; No while+set! inside a define (aura#4372). No string-split.
+
+(define *vw-rows* 200)
+(define *vw-cols* 400)
+(define *vw-top* 0)
+(define *vw-left* 0)
+
+(define (pad:vw-cap n hi lo)
+  (cond ((> n hi) hi) ((< n lo) lo) (#t n)))
+
+(define (pad:vw-num s)
+  (if (and (string? s) (string->number s)) (string->number s) 0))
+
+(define (pad:vw-boot!)
+  (let ((r (pad:vw-num (getenv "PAD_ROWS")))
+        (c (pad:vw-num (getenv "PAD_COLS"))))
+    (if (> r 2) (set! *vw-rows* (pad:vw-cap r 240 1)) 0)
+    (if (> c 8) (set! *vw-cols* (pad:vw-cap c 400 1)) 0)
+    0))
+
+(define (pad:vw-win! line)
+  (let ((sp1 (string-index line " " 0)))
+    (if (< sp1 0)
+        "go"
+        (let ((sp2 (string-index line " " (+ sp1 1))))
+          (if (< sp2 0)
+              "go"
+              (let ((r (string->number (substring line (+ sp1 1) sp2)))
+                    (c (string->number (substring line (+ sp2 1) (string-length line)))))
+                (if (and (number? r) (> r 2)) (set! *vw-rows* (pad:vw-cap r 240 1)) 0)
+                (if (and (number? c) (> c 8)) (set! *vw-cols* (pad:vw-cap c 400 1)) 0)
+                (pad:play-emit!)
+                "go"))))))
+
+;; Width of the text on a cached "T ...\nH ...\nM ...\n" row.
+(define (pad:vw-pay row)
+  (let ((nl (string-index row "\n" 0)))
+    (if (< nl 2) 0 (- nl 2))))
+
+(define (pad:vw-row-wide i n cols)
+  (if (>= i n)
+      #f
+      (if (> (pad:vw-pay (vector-ref *lc-rowv* i)) cols)
+          #t
+          (pad:vw-row-wide (+ i 1) n cols))))
+
+(define (pad:vw-fits? n col rows cols)
+  (and (<= n rows) (< col cols) (not (pad:vw-row-wide 0 n cols))))
+
+;; Keep the window when the cursor is still inside it. Otherwise move
+;; just enough that the cursor is on the last cell of the window.
+(define (pad:vw-scroll cur top span)
+  (cond
+    ((< cur 0) 0)
+    ((and (>= cur top) (< cur (+ top span))) top)
+    ((< cur top) cur)
+    (#t (+ (- cur span) 1))))
+
+(define (pad:vw-clamp t span total)
+  (let ((m (if (> total span) (- total span) 0)))
+    (cond ((< t 0) 0) ((> t m) m) (#t t))))
+
+(define (pad:vw-cut line left cols)
+  (let ((n (string-length line)))
+    (if (< n 2)
+        line
+        (let* ((pay (- n 2))
+               (a (if (> left pay) pay left))
+               (b0 (+ a cols))
+               (b (if (> b0 pay) pay b0)))
+          (string-append (substring line 0 2)
+                         (substring line (+ 2 a) (+ 2 b)))))))
+
+(define (pad:vw-slice-row row left cols)
+  (let ((a (string-index row "\n" 0)))
+    (if (< a 0)
+        row
+        (let ((b (string-index row "\n" (+ a 1))))
+          (if (< b 0)
+              row
+              (let ((c (string-index row "\n" (+ b 1))))
+                (if (< c 0)
+                    row
+                    (string-append
+                      (pad:vw-cut (substring row 0 a) left cols) "\n"
+                      (pad:vw-cut (substring row (+ a 1) b) left cols) "\n"
+                      (pad:vw-cut (substring row (+ b 1) c) left cols) "\n"))))))))
+
+(define (pad:vw-body i end left cols)
+  (if (>= i end)
+      ""
+      (string-append (pad:vw-slice-row (vector-ref *lc-rowv* i) left cols)
+                     (pad:vw-body (+ i 1) end left cols))))
+
+(define (pad:vw-build n l col rows cols)
+  (let ((top (pad:vw-clamp (pad:vw-scroll l *vw-top* rows) rows n))
+        (left0 (pad:vw-scroll col *vw-left* cols)))
+    (let ((left (if (or (< left0 0) (> left0 col)) (if (< col 0) 0 col) left0))
+          (end0 (+ top rows)))
+      (let ((end (if (> end0 n) n end0)))
+        (set! *vw-top* top)
+        (set! *vw-left* left)
+        (string-append
+          "SNAP v1 pad\n"
+          "TITLE " *pl-title* " keys=" (number->string *pl-keys*)
+          " no=" (number->string *pl-rej*)
+          " " (number->string (+ l 1)) "/" (number->string n) "\n"
+          "CURSOR line=" (number->string (- l top))
+          " col=" (number->string (- col left)) "\n"
+          "SAY " *pl-say* "\n"
+          "LEGEND " *view-legend* "\n"
+          (if (or (> top 0) (> left 0))
+              (string-append "ORIGIN line=" (number->string top)
+                             " col=" (number->string left) "\n")
+              "")
+          "ROWS n=" (number->string (- end top)) "\n"
+          (pad:vw-body top end left cols)
+          "END\n")))))
+
+(define (pad:vw-maybe s)
+  (let* ((n (vector-length *lc-rowv*))
+         (rows (pad:vw-rows-now))
+         (cols (pad:vw-cols-now))
+         (l (cadr *pl-st*))
+         (col (caddr *pl-st*)))
+    (if (or (<= n 0) (pad:vw-fits? n col rows cols))
+        (begin (set! *vw-top* 0) (set! *vw-left* 0) s)
+        (pad:vw-build n l col rows cols))))
+
+(define (pad:vw-rows-now) (pad:vw-cap *vw-rows* 240 1))
+(define (pad:vw-cols-now) (pad:vw-cap *vw-cols* 400 1))
+
+;; Replaces the identity in keys.aura.
+(define (pad:vw-frame s)
+  (if (or *w2-on* (not (string? s)) (< (string-length s) 7)
+          (not (string=? (substring s 0 7) "SNAP v1")))
+      s
+      (pad:vw-maybe s)))

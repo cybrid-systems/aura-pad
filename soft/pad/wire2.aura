@@ -76,7 +76,7 @@
 ;; Full v2 frame of what Soft last framed (no new frame work).
 (define (pad:w2-full-now!)
   (set! *w2-full* #t)
-  (display (pad:w2-frame (cadr *pl-st*) (caddr *pl-st*) (list) *lc-rowv* *lc-body*))
+  (display (pad:vw-frame (pad:w2-frame (cadr *pl-st*) (caddr *pl-st*) (list) *lc-rowv* *lc-body*)))
   "go")
 
 ;; "WIRE 2" / "WIRE 2 FULL" / "WIRE 1" from C. Not keys: *pl-keys* stays.
@@ -89,7 +89,7 @@
      (if *w2-on* (pad:w2-full-now!) "go"))
     ((string=? line "WIRE 1")
      (set! *w2-on* #f)
-     (display (string-append
+     (display (pad:vw-frame (string-append
                 "SNAP v1 pad\nTITLE " *pl-title* " keys=" (number->string *pl-keys*)
                 " no=" (number->string *pl-rej*) "\n"
                 "CURSOR line=" (number->string (cadr *pl-st*))
@@ -97,6 +97,6 @@
                 "SAY " *pl-say* "\n"
                 "LEGEND " *view-legend* "\n"
                 "ROWS n=" (number->string (vector-length *lc-rowv*)) "\n"
-                *lc-body* "END\n"))
+                *lc-body* "END\n")))
      "go")
     (#t "go")))

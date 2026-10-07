@@ -36,6 +36,8 @@
 (load (string-append *pad-home* "/soft/pad/wire2.aura"))
 (load (string-append *pad-home* "/soft/pad/file.aura"))
 (load (string-append *pad-home* "/soft/pad/vi.aura"))
+(load (string-append *pad-home* "/soft/pad/screen.aura"))
+(load (string-append *pad-home* "/soft/pad/emacs.aura"))
 
 ;; PAD_PAGE=big starts on the twelve-row page (scripts/bench_editors.sh)
 (pad:play-reset! (if (equal? (getenv "PAD_PAGE") "big") *lc-big-page* *play-start*))
@@ -67,16 +69,26 @@
     (begin (set! *pi-tp-k* (string->number (getenv "PAD_TEST_PENDING")))
            (set! *pi-pending* pad:pi-test-pending))
     0)
+(pad:vw-boot!)
 (pad:play-emit!)
 (let loop ()
   (let ((line (read-line)))
     (if (string? line)
-        ;; "WIRE ..." (87 = W) is C's wire offer, not a key; file keys
-        ;; (ctrl-x / ctrl-q / ctrl-s, file mode only) go to file.aura
+        ;; "WIN rows cols" (87 73 78 32) is the terminal size, not a key.
+        ;; "WIRE ..." (87 = W) is C's wire offer. File keys (ctrl-x /
+        ;; ctrl-q / ctrl-s, file mode only) go to file.aura, unless a
+        ;; prompt is open (search uses ctrl-s for the next match).
         (if (string=? (cond
+                        ((and (> (string-length line) 3)
+                              (= (string-ref line 0) 87)
+                              (= (string-ref line 1) 73)
+                              (= (string-ref line 2) 78)
+                              (= (string-ref line 3) 32))
+                         (pad:vw-win! line))
                         ((and (> (string-length line) 5) (= (string-ref line 0) 87))
                          (pad:w2-line! line))
-                        ((and *pf-on* (or *pf-cx* *pf-quit* (member line *pf-keys*)))
+                        ((and *pf-on* (string=? *vi-op* "")
+                              (or *pf-cx* *pf-quit* (member line *pf-keys*)))
                          (pad:pf-line! line))
                         (#t (pad:play-step! line)))
                       "quit")

@@ -1,0 +1,405 @@
+;; aura-pad -- a first slice of emacs, on top of the vi map.
+;; Loaded after vi.aura and file.aura. The modeless keymap is untouched:
+;; these commands run only when *vi-on* is true (aura-pad sets PAD_VI=1).
+;;
+;;   M-x find-file / ff     open a file (a partial name is enough)
+;;   M-x search / isearch   find text; ctrl-s finds the next one
+;;   M-x list-buffers       every open buffer
+;;   M-x switch-buffer      jump to one of them
+;;   ctrl-x ctrl-f / ctrl-b / b   the same three, from the ctrl-x prefix
+;;   ctrl-g                 cancel. A search goes back to where it started.
+;;   alt-f / alt-b / alt-d  the next word, the previous word, delete the
+;;                          word. One read must hold Esc and the letter.
+;;
+;; An empty M-x line still runs the page (pad:vi-colon! keeps that).
+;; Soft reserved: never bind quote. No while+set! (aura#4372). No
+;; named let that closes over an outer local (aura#4353).
+
+(define *em-io*
+  (try (begin (require "std/io") #t) (catch (e) #f)))
+
+(define *em-bufs* (list))
+(define *em-cur* "")
+(define *em-from* 0)
+(define *em-hit* #f)
+
+;; --- buffers ----------------------------------------------------------
+;; A record is (path name src line col saved ro nl new). *em-cur* is the
+;; path on screen. Other buffers keep the copy we stashed on the way out.
+
+(define (pad:em-rec)
+  (list *pf-path* *pf-name* (pad:play-src)
+        (cadr *pl-st*) (caddr *pl-st*)
+        *pf-saved* *pf-ro* *pf-nl* *pf-new*))
+
+(define (pad:em-put path rec bufs)
+  (pad:em-put-acc path rec bufs (list)))
+
+(define (pad:em-put-acc path rec bufs acc)
+  (cond
+    ((null? bufs) (reverse (cons rec acc)))
+    ((string=? (car (car bufs)) path)
+     (append (reverse acc) (cons rec (cdr bufs))))
+    (#t (pad:em-put-acc path rec (cdr bufs) (cons (car bufs) acc)))))
+
+(define (pad:em-get path bufs)
+  (cond
+    ((null? bufs) #f)
+    ((string=? (car (car bufs)) path) (car bufs))
+    (#t (pad:em-get path (cdr bufs)))))
+
+(define (pad:em-stash!)
+  (if *pf-on*
+      (begin
+        (set! *em-cur* *pf-path*)
+        (set! *em-bufs* (pad:em-put *pf-path* (pad:em-rec) *em-bufs*)))
+      0))
+
+;; First dirty buffer that is not the one on screen. "" if every other
+;; buffer is saved. Does not read *pf-path*: :q runs before file.aura.
+(define (pad:em-dirty-walk xs)
+  (cond
+    ((null? xs) "")
+    ((and (not (string=? (car (car xs)) *em-cur*))
+          (not (string=? (list-ref (car xs) 2) (list-ref (car xs) 5))))
+     (list-ref (car xs) 1))
+    (#t (pad:em-dirty-walk (cdr xs)))))
+
+(define (pad:em-other-dirty) (pad:em-dirty-walk *em-bufs*))
+
+(define (pad:em-after-open!)
+  (set! *vi-base* *pl-title*)
+  (if *vi-on* (pad:vi-title!) 0)
+  (set! *em-cur* *pf-path*)
+  (set! *em-files* #t)
+  (set! *vw-top* 0)
+  (set! *vw-left* 0)
+  (set! *pl-esc* (list))
+  (pad:em-stash!)
+  "vi-do")
+
+(define (pad:em-load! rec)
+  (set! *play-max-col* *pf-max-col*)
+  (set! *play-max-lines* *pf-max-lines*)
+  (set! *max-col* *pf-max-col*)
+  (set! *max-lines* *pf-max-lines*)
+  (set! *pf-on* #t)
+  (set! *pf-path* (list-ref rec 0))
+  (set! *pf-name* (list-ref rec 1))
+  (set! *pf-saved* (list-ref rec 5))
+  (set! *pf-ro* (list-ref rec 6))
+  (set! *pf-nl* (list-ref rec 7))
+  (set! *pf-new* (list-ref rec 8))
+  (set! *pf-cx* #f)
+  (set! *pf-quit* #f)
+  (set! *pl-st* (pad:es-at (pad:v-lines (list-ref rec 2))
+                           (list-ref rec 3) (list-ref rec 4)))
+  (pad:lc-reset!)
+  (set! *pl-title* (string-append "aura pad: " *pf-name*
+                                  (if *pf-ro* " (look only)" "")))
+  (set! *pl-say* (string-append "opened " *pf-name*))
+  (pad:em-after-open!))
+
+(define (pad:em-open! path)
+  (pad:em-stash!)
+  (let ((old (pad:em-get path *em-bufs*)))
+    (if (and old (not (string=? (list-ref old 2) (list-ref old 5))))
+        (pad:em-load! old)
+        (begin
+          (pad:pf-open! path)
+          (pad:em-after-open!)))))
+
+;; --- file names -------------------------------------------------------
+
+(define (pad:em-low c)
+  (if (and (>= c 65) (<= c 90)) (+ c 32) c))
+
+(define (pad:em-slash-at p i at)
+  (let ((j (string-index p "/" i)))
+    (if (< j 0) at (pad:em-slash-at p (+ j 1) j))))
+
+(define (pad:em-dir)
+  (if (and *pf-on* (> (string-length *pf-path*) 0))
+      (let ((j (pad:em-slash-at *pf-path* 0 -1)))
+        (cond ((< j 0) ".") ((= j 0) "/") (#t (substring *pf-path* 0 j))))
+      (let ((p (getenv "PWD")))
+        (if (and (string? p) (> (string-length p) 0)) p "."))))
+
+(define (pad:em-join dir name)
+  (cond
+    ((string=? name "") dir)
+    ((= (string-ref name 0) 47) name)
+    ((string=? dir "/") (string-append "/" name))
+    (#t (string-append dir "/" name))))
+
+(define (pad:em-sub-rest src q i qi n qn)
+  (cond
+    ((>= qi qn) #t)
+    ((>= i n) #f)
+    ((= (pad:em-low (string-ref src i)) (pad:em-low (string-ref q qi)))
+     (pad:em-sub-rest src q (+ i 1) (+ qi 1) n qn))
+    (#t (pad:em-sub-rest src q (+ i 1) qi n qn))))
+
+(define (pad:em-sub-at src q i n qn)
+  (cond
+    ((or (<= qn 0) (>= i n)) -1)
+    ((and (= (pad:em-low (string-ref src i)) (pad:em-low (string-ref q 0)))
+          (pad:em-sub-rest src q (+ i 1) 1 n qn))
+     i)
+    (#t (pad:em-sub-at src q (+ i 1) n qn))))
+
+(define (pad:em-subseq? name q)
+  (and (> (string-length q) 0)
+       (<= (string-length name) 512)
+       (>= (pad:em-sub-at name q 0 (string-length name) (string-length q)) 0)))
+
+(define (pad:em-prefix? name q)
+  (let ((qn (string-length q)) (nn (string-length name)))
+    (and (> qn 0) (>= nn qn) (string=? (substring name 0 qn) q))))
+
+;; exact, then a starting match, then a substring, then a sparse match.
+(define (pad:em-rank name q)
+  (cond
+    ((string=? name q) 4)
+    ((pad:em-prefix? name q) 3)
+    ((>= (string-index name q 0) 0) 2)
+    ((pad:em-subseq? name q) 1)
+    (#t 0)))
+
+(define (pad:em-better? r name best)
+  (or (not best)
+      (> r (car best))
+      (and (= r (car best))
+           (< (string-length name) (string-length (cadr best))))))
+
+(define (pad:em-best names q best)
+  (if (or (not (pair? names)) (string=? q ""))
+      best
+      (let ((name (car names)))
+        (if (not (string? name))
+            (pad:em-best (cdr names) q best)
+            (let ((r (pad:em-rank name q)))
+              (pad:em-best (cdr names) q
+                (if (or (= r 0) (not (pad:em-better? r name best)))
+                    best
+                    (list r name))))))))
+
+(define (pad:em-isdir? path)
+  (and *em-io* (pair? (directory-list path))))
+
+(define (pad:em-into-dir! path)
+  (let ((p (if (and (> (string-length path) 0)
+                    (= (string-ref path (- (string-length path) 1)) 47))
+               path
+               (string-append path "/"))))
+    (set! *vi-op* "find")
+    (set! *vi-line* p)
+    (set! *vi-prompt* "Find file: ")
+    (set! *vi-mx* #f)
+    (set! *pl-say* (string-append "Find file: " p "  (directory)"))
+    "vi-do"))
+
+(define (pad:em-fuzzy! typed)
+  (let* ((dir (pad:em-dir))
+         (names (if *em-io* (directory-list dir) (list)))
+         (best (pad:em-best (if (pair? names) names (list)) typed #f)))
+    (if (not best)
+        (begin (set! *pl-say* (string-append "no file " typed)) "vi-do")
+        (let ((full (pad:em-join dir (cadr best))))
+          (let ((raw (read-file full)))
+            (cond
+              ((string? raw) (pad:em-open! full))
+              ((pad:em-isdir? full) (pad:em-into-dir! full))
+              (#t (begin (set! *pl-say* (string-append "no file " typed)) "vi-do"))))))))
+
+(define (pad:em-open-typed! typed)
+  (if (string=? typed "")
+      (pad:em-find-start!)
+      (let ((path (pad:em-join (pad:em-dir) typed)))
+        (let ((raw (read-file path)))
+          (cond
+            ((string? raw) (pad:em-open! path))
+            ((pad:em-isdir? path) (pad:em-into-dir! path))
+            (#t (pad:em-fuzzy! typed)))))))
+
+(define (pad:em-names xs acc)
+  (if (null? xs)
+      acc
+      (pad:em-names (cdr xs)
+        (if (string=? acc "")
+            (list-ref (car xs) 1)
+            (string-append acc " " (list-ref (car xs) 1))))))
+
+(define (pad:em-list!)
+  (pad:em-stash!)
+  (let ((names (pad:em-names *em-bufs* "")))
+    (set! *pl-say*
+          (if (string=? names "")
+              "no buffers yet"
+              (pad:vi-cut (string-append "buffers: " names))))
+    "vi-do"))
+
+(define (pad:em-best-buf xs q best)
+  (if (or (null? xs) (string=? q ""))
+      best
+      (let* ((name (list-ref (car xs) 1))
+             (r (pad:em-rank name q)))
+        (pad:em-best-buf (cdr xs) q
+          (if (or (= r 0) (not (pad:em-better? r name best)))
+              best
+              (list r name (car (car xs))))))))
+
+(define (pad:em-switch! typed)
+  (pad:em-stash!)
+  (if (string=? typed "")
+      (pad:em-buf-start!)
+      (let ((best (pad:em-best-buf *em-bufs* typed #f)))
+        (if (not best)
+            (begin (set! *pl-say* (string-append "no buffer " typed)) "vi-do")
+            (pad:em-open! (list-ref best 2))))))
+
+;; --- text search ------------------------------------------------------
+;; Typing always restarts at the anchor, so one more letter cannot jump
+;; to a later, worse hit. ctrl-s moves the anchor to just after this hit.
+
+(define (pad:em-search-start!)
+  (set! *em-anchor* (list (cadr *pl-st*) (caddr *pl-st*)))
+  (set! *em-from* (pad:play-point))
+  (set! *em-hit* #f)
+  (set! *vi-op* "s")
+  (set! *vi-line* "")
+  (set! *vi-mx* #f)
+  (set! *vi-cx* #f)
+  (set! *vi-prompt* "Search: ")
+  (set! *pl-say* "Search: ")
+  "vi-do")
+
+(define (pad:em-hit-at src q from)
+  (let* ((n (if (string? src) (string-length src) 0))
+         (i (if (and (> (string-length q) 0) (>= from 0) (< from n))
+                (string-index src q from)
+                -1)))
+    (if (>= i 0)
+        i
+        (if (or (<= n 0) (> n 1024) (>= from n))
+            -1
+            (pad:em-sub-at src q (if (< from 0) 0 from) n (string-length q))))))
+
+(define (pad:em-search-from! from wrapped)
+  (let ((hit (pad:em-hit-at (pad:play-src) *vi-line* from)))
+    (cond
+      ((>= hit 0)
+       (let ((lc (pad:v-linecol (car *pl-st*) hit)))
+         (set! *em-hit* hit)
+         (set! *pl-st* (list (car *pl-st*) (car lc) (cadr lc)
+                             (list-ref *pl-st* 3) (list-ref *pl-st* 4) (list-ref *pl-st* 5)))
+         (set! *pl-say* (string-append "Search: " *vi-line*))
+         "vi-do"))
+      ((and (not wrapped) (> from 0))
+       (pad:em-search-from! 0 #t))
+      (#t
+       (set! *em-hit* #f)
+       (set! *pl-say* "no match")
+       "vi-do"))))
+
+(define (pad:em-search-now!)
+  (if (string=? *vi-line* "")
+      (pad:em-hint!)
+      (pad:em-search-from! *em-from* #f)))
+
+(define (pad:em-search-next!)
+  (if (string=? *vi-line* "")
+      (pad:em-hint!)
+      (begin
+        (set! *em-from* (if (number? *em-hit*) (+ *em-hit* 1) (+ *em-from* 1)))
+        (pad:em-search-from! *em-from* #f))))
+
+(define (pad:em-enter!)
+  (cond
+    ((string=? *vi-op* "find")
+     (let ((w *vi-line*))
+       (set! *vi-op* "")
+       (set! *vi-line* "")
+       (pad:em-open-typed! w)))
+    ((string=? *vi-op* "buf")
+     (let ((w *vi-line*))
+       (set! *vi-op* "")
+       (set! *vi-line* "")
+       (pad:em-switch! w)))
+    ((string=? *vi-op* "s")
+     (set! *vi-op* "")
+     (set! *vi-line* "")
+     (set! *em-anchor* #f)
+     (if (string=? *pl-say* "no match")
+         "vi-do"
+         (begin (set! *pl-say* "found") "vi-do")))
+    (#t (pad:vi-colon!))))
+
+(define (pad:em-command w rest mx)
+  (cond
+    ((or (string=? w "find-file") (string=? w "ff"))
+     (if (> (string-length rest) 0) (pad:em-open-typed! rest) (pad:em-find-start!)))
+    ((or (string=? w "switch-buffer") (string=? w "buffer"))
+     (if (> (string-length rest) 0) (pad:em-switch! rest) (pad:em-buf-start!)))
+    ((or (string=? w "list-buffers") (string=? w "buffers"))
+     (pad:em-list!))
+    ((or (string=? w "search") (string=? w "isearch"))
+     (if (> (string-length rest) 0)
+         (begin (pad:em-search-start!) (set! *vi-line* rest) (pad:em-search-now!))
+         (pad:em-search-start!)))
+    (#t (if mx #f #f))))
+
+;; --- words ------------------------------------------------------------
+;; A word is a run of letters that are not spaces. alt-f lands just
+;; after it; at the end of a line it continues once onto the next line.
+
+(define (pad:em-fwd-pos L l col crossed)
+  (let* ((n (length L))
+         (ln (list-ref L l))
+         (len (length ln))
+         (i1 (pad:vi-skip-spaces ln col len))
+         (i2 (pad:vi-skip-word ln i1 len)))
+    (cond
+      ((< i2 len) (list l i2))
+      ((and (= i2 i1) (< l (- n 1)) (not crossed))
+       (pad:em-fwd-pos L (+ l 1) 0 #t))
+      ((> i2 col) (list l i2))
+      ((and (< l (- n 1)) (not crossed))
+       (pad:em-fwd-pos L (+ l 1) 0 #t))
+      (#t #f))))
+
+(define (pad:em-fwd!)
+  (let* ((st *pl-st*)
+         (pos (pad:em-fwd-pos (car st) (cadr st) (caddr st) #f)))
+    (if (not pos)
+        (begin (pad:play-reject! "too-far") "vi-do")
+        (begin
+          (set! *pl-st* (list (car st) (car pos) (cadr pos)
+                              (list-ref st 3) (list-ref st 4) (list-ref st 5)))
+          (pad:play-ok! *pl-say*)
+          "vi-do"))))
+
+(define (pad:em-kill-word!)
+  (let* ((st *pl-st*)
+         (L (car st))
+         (l (cadr st))
+         (col (caddr st))
+         (pos (pad:em-fwd-pos L l col #f)))
+    (if (or (not pos) (and (= (car pos) l) (= (cadr pos) col)))
+        (begin (pad:play-reject! "too-far") "vi-do")
+        (let* ((l2 (car pos))
+               (c2 (cadr pos))
+               (kill (pad:region-text L l col l2 c2))
+               (L2 (pad:region-delete L l col l2 c2))
+               (U (pad:vi-undo-push (cons (list L l col) (list-ref st 5)))))
+          (set! *pl-st* (list L2 l col kill (list) U))
+          (pad:play-ok! "deleted a word")
+          "vi-do"))))
+
+(define (pad:em-meta! b)
+  (cond
+    ((= b 120) (pad:vi-colon-start! #t))
+    ((= b 102) (pad:em-fwd!))
+    ((= b 98) (pad:vi-b!))
+    ((= b 100) (pad:em-kill-word!))
+    (#t "to-normal")))

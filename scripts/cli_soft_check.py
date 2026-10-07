@@ -115,18 +115,20 @@ def c_unsaved():
 def c_ro():
     long = b"x" * 80 + b"\n"
     f, d = run("ro_long", long, ["IN 5", "IN 127", "IN 24", "IN 19", "IN 17", "IN 98"])
-    need("ro_long", f[0]["title"].startswith("aura pad: ro_long.txt (look only) keys="), "title %r" % f[0]["title"])
-    need("ro_long", f[0]["rows"] == ["x" * 72], "rows %r" % f[0]["rows"])
-    need("ro_long", any("stays as it was" in x["say"] for x in f), "says %r" % [x["say"] for x in f])
-    need("ro_long", len(f) == 5 and f[-1]["rows"] == ["x" * 71],
-         "edited look-only page: quit refused or keys lost: %d frames, %r" % (len(f), f[-1]["rows"]))
-    need("ro_long", d == long, "look-only file was written")
+    need("ro_long", f[0]["title"].startswith("aura pad: ro_long.txt keys="), "title %r" % f[0]["title"])
+    need("ro_long", "(look only)" not in f[0]["title"] and f[0]["rows"] == ["x" * 80],
+         "rows %r" % f[0]["rows"])
+    need("ro_long", len(f) == 5 and f[-1]["rows"] == ["x" * 79],
+         "80-column line was not editable: %d frames, %r" % (len(f), f[-1]["rows"]))
+    need("ro_long", d == b"x" * 79 + b"\n", "file %r" % d)
     f, d = run("ro_tab", b"a\tb\n", ["IN 17"])
     need("ro_tab", f[0]["rows"] == ["a?b"] and "(look only)" in f[0]["title"], "frame %r" % f[0])
     need("ro_tab", d == b"a\tb\n", "file %r" % d)
     many = b"".join(b"line %d\n" % i for i in range(25))
     f, d = run("ro_lines", many, ["IN 17"])
-    need("ro_lines", len(f[0]["rows"]) == 18 and "(look only)" in f[0]["title"], "rows %d" % len(f[0]["rows"]))
+    need("ro_lines", len(f[0]["rows"]) == 25 and "(look only)" not in f[0]["title"],
+         "rows %d title %r" % (len(f[0]["rows"]), f[0]["title"]))
+    need("ro_lines", d == many, "file changed")
     utf = "héllo\n".encode()
     f, d = run("ro_utf8", utf, ["IN 17"])
     need("ro_utf8", "(look only)" in f[0]["title"] and f[0]["rows"] == ["h??llo"], "frame %r" % f[0])
