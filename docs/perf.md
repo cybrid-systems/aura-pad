@@ -12,6 +12,42 @@ bash scripts/smoke_perf.sh    # pad/perf.aura → PAD_PERF_OK + PAD_M7_PERF_OK,
 bash scripts/smoke_m7.sh      # tests + DIRTY audit + perf → PAD_M7_OK
 ```
 
+## `aura-pad FILE` (one command): keys unchanged
+
+`aura-pad` is a C launcher that execs aura on `soft/pad/play.aura` with
+no bash or stdbuf in between (Soft's `display` already writes each line
+on a pipe). It uses the same `play_loop.c` as `pad_play`. In file mode the
+loop does one more Soft check per key (`*pf-on*` and the save/quit keys).
+
+```bash
+bash scripts/bench_cli.sh     # pp-tip / pp / cli / cli-file, interleaved per round
+```
+
+Same harness as wire v2: the 12-row page, cursor at the end of row 6,
+dev:v1.0.9, 8 shared cores, six rounds of n=60, rows in a rotating
+order. The table shows the median of the six per-run medians, "done" ms
+per key.
+
+| key | before: tip `0900d89` `pad_play` | `pad_play` (this tree) | `aura-pad` (play page) | `aura-pad big.txt` (file mode) |
+|-----|------|------|------|------|
+| insert | 3.29 | 3.23 | 3.28 | 3.34 |
+| cursor | 1.89 | 1.87 | 1.85 | 1.90 |
+
+Per-run ranges overlap: insert runs from 3.04 to 3.51 ms across all
+rows, cursor from 1.72 to 2.05 ms. That is **no measurable change**; file
+mode is at most ~0.05 ms (noise) above the play page.
+
+Startup, from spawn to the first painted frame (`say:`):
+- In the container, `pad_play` + script takes ~400 ms. `aura-pad` takes
+  ~400 ms on the play page and ~370–435 ms in file mode. Most of that is
+  aura loading the Soft files.
+- The launcher itself takes ~10 ms (`--where`). Its first probe was
+  `aura -e 0` (~95 ms). It now runs `aura --help` (~10 ms) when
+  `AURA_PATH` has `std/INDEX.aura`. The full probe runs only when no lib
+  dir is found.
+- With the docker fallback on the box (native aura needs GLIBC 2.44),
+  the first frame takes ~600 ms.
+
 ## Wire v2 (`SNAP v2 pad`): no gain, v1 stays the default
 
 The last lever in the ROADMAP latency table is to skip the SNAP rows C
@@ -323,3 +359,8 @@ wire v2（只发 Soft DIRTY 行，`GEN`/`base=` + body 长度，C 失败关闭�
 第二次：光标 1.86 vs 1.71，插入 3.16 vs 3.24，属于噪声，**没有可测收益**。
 线上字节从每帧 44 行 / 1 044 B 降到 12 行 / 319 B，但瓶颈是 Soft 计算
 （每键 1.2–1.7 ms）。v1 仍是默认，v2 用 `--wire2` 开启（`PAD_WIRE2_OK`）。
+
+`aura-pad FILE`（一条命令，C 启动器直接 exec aura，不经过脚本）：同机交错
+A/B（6 轮、n=60）中，插入 3.28 ms，tip `pad_play` 为 3.29 ms；光标 1.85 vs
+1.89 ms。文件模式 3.34 / 1.90 ms，**按键延迟没有变化**。首帧约 0.4 s；
+box 上走 docker 后备约 0.6 s。
