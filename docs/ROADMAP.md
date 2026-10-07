@@ -190,6 +190,7 @@ Each lever lands with a before/after line in `perf.md`.
 ## M18–M24 — sentence line on the live workspace (designed)
 
 Not shipped. The spec is [`sentence-design.md`](sentence-design.md).
+The filed issues are [`sentence-issues.md`](sentence-issues.md).
 M0–M13 stay as they are. M14–M17 window issues are closed.
 The next work is the 60 issues in that document, one commit each.
 The default binary stays vi until step 21, so today's smoke stays green.
