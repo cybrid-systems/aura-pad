@@ -28,7 +28,8 @@ python3 "$ROOT/scripts/paren_check.py" "$ROOT/soft/pad/file.aura" "$ROOT/soft/pa
   "$ROOT/soft/pad/vi.aura" "$ROOT/soft/pad/vi_test.aura" \
   "$ROOT/soft/pad/screen.aura" "$ROOT/soft/pad/emacs.aura" \
   "$ROOT/soft/pad/win.aura" "$ROOT/soft/pad/win_test.aura" \
-  "$ROOT/soft/pad/layout.aura" "$ROOT/soft/pad/layout_test.aura"
+  "$ROOT/soft/pad/layout.aura" "$ROOT/soft/pad/layout_test.aura" \
+  "$ROOT/soft/pad/preview.aura" "$ROOT/soft/pad/preview_test.aura"
 bash "$ROOT/scripts/vi_check.sh"
 
 # 2. install

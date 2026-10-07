@@ -1,0 +1,270 @@
+;; M16 magic preview. A helper trial is a dedicated side window.
+;; Soft opens it only after the gate and the probe. The selected
+;; window stays on the real page. KEEP only when the trial scores
+;; strictly higher; otherwise DROP and the main page stays.
+;; fiber_live only when both score joins land. Otherwise
+;; host-sequential with the same scores. Not on the key path.
+;; Key latency stays the published M7 number: insert about 3.6 ms
+;; and cursor about 1.3 ms on the twelve-row page (docs/ROADMAP.md).
+;; Soft reserved: never bind quote.
+
+(load (string-append *pad-home* "/soft/pad/rules.aura"))
+
+(define *pv-on* #f)
+(define *pv-text* "")
+(define *pv-main-id* 0)
+(define *pv-hist* (list))
+(define *pv-score* 0)
+(define *pv-goal* "hi\naura")
+
+(define *pv-banned*
+  (list "set!" "eval" "load" "shell" "http" "set-code" "fiber:"))
+(define *pv-unkind*
+  (list "stupid" "dumb" "hate" "idiot" "shut up"))
+(define *pv-forbid*
+  (list "exec" "network" "ffi"))
+
+(define (pad:pv-hit? s words)
+  (cond
+    ((null? words) #f)
+    ((string-contains? s (car words)) #t)
+    (#t (pad:pv-hit? s (cdr words)))))
+
+(define (pad:pv-odd? s i)
+  (if (>= i (string-length s))
+      #f
+      (let ((c (string-ref s i)))
+        (if (and (not (= c 10)) (or (< c 32) (> c 126)))
+            #t
+            (pad:pv-odd? s (+ i 1))))))
+
+(define (pad:pv-shape? s i col lines)
+  (if (>= i (string-length s))
+      (and (> (string-length s) 0) (<= col 40) (< lines 8))
+      (let ((c (string-ref s i)))
+        (cond
+          ((= c 10)
+           (if (> col 40) #f (pad:pv-shape? s (+ i 1) 0 (+ lines 1))))
+          ((or (< c 32) (> c 126)) #f)
+          (#t (pad:pv-shape? s (+ i 1) (+ col 1) lines))))))
+
+(define (pad:pv-room?)
+  (let ((w1 (quotient (* (pad:wn-cols) 70) 100)))
+    (and (>= (pad:wn-rows) 2)
+         (>= w1 8)
+         (>= (- (pad:wn-cols) w1) 8))))
+
+(define (pad:pv-why text)
+  (cond
+    ((not (string? text)) "empty")
+    ((= (string-length text) 0) "empty")
+    ((pad:pv-hit? text *pv-unkind*) "unkind")
+    ((pad:pv-hit? text *pv-forbid*) "not-allowed")
+    ((pad:pv-hit? text *pv-banned*) "banned")
+    ((pad:pv-odd? text 0) "bad-shape")
+    ((not (pad:pv-shape? text 0 0 0)) "too-big")
+    ((not (pad:pv-room?)) "too-small")
+    (#t #f)))
+
+(define (pad:pv-say why)
+  (cond
+    ((or (string=? why "empty") (string=? why "bad-shape"))
+     "the helper had nothing to show")
+    ((string=? why "unkind") "that is not a kind page")
+    ((or (string=? why "banned") (string=? why "not-allowed"))
+     "the helper is not allowed to do that")
+    ((string=? why "too-big") "that page would be too big")
+    ((string=? why "too-small") "that page would be too tiny")
+    ((string=? why "already") "you already have a helper page")
+    ((string=? why "none") "there is no helper page")
+    ((string=? why "too-many") "too many pages on the screen")
+    (#t "the helper had nothing to show")))
+
+(define (pad:pv-reject! why)
+  (set! *pl-say* (pad:pv-say why))
+  (display "REJECT kind=preview reason=")
+  (display why)
+  (display " say=\"")
+  (display *pl-say*)
+  (display "\"")
+  (newline)
+  "reject")
+
+(define (pad:pv-forget store name)
+  (cond
+    ((null? store) (list))
+    ((string=? (car (car store)) name) (pad:pv-forget (cdr store) name))
+    (#t (cons (car store) (pad:pv-forget (cdr store) name)))))
+
+(define (pad:pv-score src)
+  (if (string=? src *pv-goal*)
+      70
+      (- 40 (* 3 (pad:abs (- (string-length src) (string-length *pv-goal*)))))))
+
+(define (pad:pv-world!)
+  (pad:finish-world!)
+  (display "WORLD line=")
+  (display *world-line*)
+  (display " backend=")
+  (display (number->string *race-backend*))
+  (display " joins=")
+  (display (number->string *race-joined*))
+  (display "/")
+  (display (number->string *race-spawned*))
+  (newline)
+  *world-line*)
+
+(define (pad:pv-two a b)
+  (set! *race-backend* 0)
+  (set! *race-spawned* 0)
+  (set! *race-joined* 0)
+  (set! *world-line* "host-sequential")
+  (let ((pair (pad:race-thunks! a b)))
+    (pad:pv-world!)
+    pair))
+
+(define (pad:pv-close!)
+  (if (not *pv-on*)
+      0
+      (let ((leaf (and *wn-tree* (pad:wn-find *wn-tree* *pv-main-id*))))
+        (if leaf (pad:wn-install! leaf) 0)
+        (set! *wn-store* (pad:pv-forget *wn-store* "preview"))
+        (set! *pv-on* #f)
+        (set! *pv-text* "")
+        0)))
+
+(define (pad:pv-open! text)
+  (let ((why (pad:pv-why text)))
+    (if why
+        (pad:pv-reject! why)
+        (if *pv-on*
+            (pad:pv-reject! "already")
+            (begin
+              (pad:wn-buf! "preview" text)
+              (if (pad:wn-many?)
+                  (begin
+                    (set! *wn-store* (pad:pv-forget *wn-store* "preview"))
+                    (pad:pv-reject! "too-many"))
+                  (let ((main (pad:wn-leaf-now)))
+                    (set! *pv-main-id* (car main))
+                    (set! *wn-seq* (+ *wn-seq* 1))
+                    (let ((tree (list "H" main
+                                      (list *wn-seq* "preview" 0 0 0 0 1 1 "helper")
+                                      70)))
+                      (let ((rects (pad:wn-place tree 0 0 (pad:wn-rows) (pad:wn-cols))))
+                        (if (or (pad:wn-tiny? rects) (pad:wn-overlap? rects))
+                            (begin
+                              (set! *wn-store* (pad:pv-forget *wn-store* "preview"))
+                              (pad:pv-reject! "too-small"))
+                            (begin
+                              (set! *wn-tree* tree)
+                              (set! *wn-sel* *pv-main-id*)
+                              (set! *pv-on* #t)
+                              (set! *pv-text* text)
+                              (set! *pv-score* (pad:pv-score (pad:play-src)))
+                              (set! *pl-say*
+                                    "Look, the helper made a new page next to yours!")
+                              (display "PREVIEW who=helper st=1\n")
+                              "open")))))))))))
+
+(define (pad:pv-drop!)
+  (if (not *pv-on*)
+      (pad:pv-reject! "none")
+      (begin
+        (pad:pv-close!)
+        (set! *pl-say* "keeping your page")
+        (display "DROP kind=preview reason=quit-window\n")
+        "drop")))
+
+(define (pad:pv-keep!)
+  (if (not *pv-on*)
+      (pad:pv-reject! "none")
+      (let* ((main (pad:play-src))
+             (trial *pv-text*)
+             (pair (pad:pv-two
+                    (lambda () (pad:pv-score main))
+                    (lambda () (pad:pv-score trial))))
+             (base (car pair))
+             (got (cadr pair)))
+        (display "RACE preview base=")
+        (display (pad:nstr base))
+        (display " trial=")
+        (display (pad:nstr got))
+        (newline)
+        (if (> got base)
+            (begin
+              (set! *pv-hist* (cons (list main base) *pv-hist*))
+              (set! *pl-st* (pad:es-at (pad:v-lines trial) 0 0))
+              (set! *wn-store* (pad:wn-put *wn-store* *wn-live* (car *pl-st*)))
+              (pad:pv-close!)
+              (set! *pv-score* got)
+              (set! *pl-say* "your page kept the new one!")
+              (display "KEEP kind=preview reason=higher-score-stamp score=")
+              (display (pad:nstr got))
+              (newline)
+              "keep")
+            (begin
+              (pad:pv-close!)
+              (set! *pl-say* "keeping your page")
+              (display "DROP kind=preview reason=")
+              (display (if (= got base)
+                           "tie-is-not-better-rollback"
+                           "lower-score-rollback"))
+              (display " score=")
+              (display (pad:nstr got))
+              (newline)
+              "drop")))))
+
+(define (pad:pv-undo!)
+  (if (null? *pv-hist*)
+      (begin
+        (set! *pl-say* "nothing to take back yet")
+        (display "REJECT kind=preview reason=nothing-to-undo say=\"")
+        (display *pl-say*)
+        (display "\"\n")
+        "reject")
+      (let* ((top (car *pv-hist*))
+             (src (car top))
+             (want (cadr top)))
+        (set! *pv-hist* (cdr *pv-hist*))
+        (pad:pv-close!)
+        (set! *pl-st* (pad:es-at (pad:v-lines src) 0 0))
+        (set! *wn-store* (pad:wn-put *wn-store* *wn-live* (car *pl-st*)))
+        (let ((got (pad:pv-score (pad:play-src))))
+          (set! *pv-score* got)
+          (display "UNDO kind=preview to=")
+          (display (pad:nstr got))
+          (display " want=")
+          (display (pad:nstr want))
+          (newline)
+          (if (= got want)
+              (begin
+                (set! *pl-say* "took back the last keep")
+                "undo")
+              (begin
+                (display "PAD_M16_UNDO_FAIL rescore\n")
+                (set! *pl-say* "the picture and the score do not match")
+                "fail"))))))
+
+(define (pad:pv-undo-mismatch!)
+  (if (null? *pv-hist*)
+      "reject"
+      (begin
+        (set! *pv-hist*
+              (cons (list (car (car *pv-hist*)) (+ (cadr (car *pv-hist*)) 1))
+                    (cdr *pv-hist*)))
+        (pad:pv-undo!))))
+
+(define (pad:pv-run! w rest)
+  (cond
+    ((or (string=? w "preview") (string=? w "preview:"))
+     (pad:pv-open! rest) "vi-do")
+    ((string=? w "preview:keep")
+     (pad:pv-keep!) rest "vi-do")
+    ((or (string=? w "preview:drop") (string=? w "preview:quit"))
+     (pad:pv-drop!) rest "vi-do")
+    ((string=? w "preview:undo")
+     (pad:pv-undo!) rest "vi-do")
+    (#t #f)))
+
+(set! *pv-ready* #t)
