@@ -290,6 +290,41 @@ per-call cost is the floor: halving it would halve the key. The cost
 lives in the Soft kernel, not in pad code. It is the same cost #4343
 targeted, so it is tracked on #4350, not filed again.
 
+## Soft `18b48dc`: the filed issues fixed, keys unchanged
+
+`scripts/bench_newaura.sh` (2026-10-07 12:51 CST, nproc 8, aura-build-burn
+running alongside), pty harness of `bench_cli.sh`: `aura-pad --ansi`,
+12-row page, cursor at the end of row 6, 6 interleaved rounds × 60
+key/undo pairs, medians of per-run medians (ms).
+
+| row | tree | Soft | insert | cursor | string first | string done |
+|-----|------|------|--------|--------|--------------|-------------|
+| old | 7dec2e2 | c69e644 | 3.18 | 1.70 | 5.63 | 5.63 |
+| new | 7dec2e2 | 18b48dc | 3.17 | 1.71 | 4.04 | 6.71 |
+| native | this tree | 18b48dc | 3.18 | 1.66 | 4.06 | 6.14 |
+
+- Insert and cursor do not move: the per-call floor (#4350) is the same
+  on `18b48dc` (2000 calls 182 ms at N=0 vs 168 on `c69e644`). Only
+  `e7b236d` cuts it (18 ms), and that tip breaks `set!` on captured
+  locals (R4, `docs/ISSUES.md`).
+- String open/close: with `char-ready?` (#4358 fixed) the early frame is
+  on by default, so the first byte comes 1.6 ms sooner (5.63 → 4.04). The
+  rows below follow in a second frame, so "done" is later (6.71). Calling
+  `char-ready?` directly instead of through `eval` (native row) takes
+  0.57 ms off that second frame (6.71 → 6.14).
+- No relower gain (#4357): pad-as-workspace keys cost the same as file
+  mode, and a hot rebind re-lowers in full (0.3–1.2 s).
+- Fibers: a fiber spawned before `read-line` does not run while main
+  waits, so the settle cannot be hidden on a fiber.
+- Piped stdin: `char-ready?` answers `#t` at every key of a piped
+  stream, so every early frame would skip its settle. The
+  `smoke_aura_perf.sh` stream checks run with `PAD_POLL=0` (real poll
+  off); the skip path stays covered by `PAD_TEST_PENDING` (POLL_SKIP_OK).
+- Full `PAD_LIVE=0` smoke on `18b48dc`: `PAD_SMOKE_OK`, with
+  `PAD_PERF_OK` / `PAD_M7_PERF_OK` / `PAD_PERF_EMACS_OK` /
+  `PAD_AURA_PERF_OK` (DEFER_STREAM 248 / 257 frames, 9 early; POLL_SKIP
+  252 frames).
+
 ## Soft floors (filed upstream)
 
 | limit | evidence | issue |
