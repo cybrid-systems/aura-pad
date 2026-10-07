@@ -86,8 +86,8 @@
 (define (m11:sec-e3)
   ;; 3. Save = serialize-workspace + sidecar; open = deserialize-workspace
   ;;    + sidecar, no set-code: same code, same page, the strip's story,
-  ;;    and ctrl-o recovers who from the stamp whose why == the log reason
-  ;;    (aura#4365: reopened records say author=0).
+  ;;    and ctrl-o gets who from the engine's own provenance (aura#4365 /
+  ;;    aura#4367 fixed: the reopened log keeps its authors).
   (m11:acc-begin!)
   (m11:three-steps!)
   (let* ((d0 *ew-disagree*)
@@ -106,12 +106,14 @@
     (m11:expect-str "E3_STAMP0" (pad:who-tag (pad:who-stamp-of 0)) (string-append "WHO who=helper why=closer gen=" (number->string (caddr (pad:who-stamp-of 0)))))
     (let ((recs (m11:muts)))
       (newline) (display "M11E_4365 records=") (display (number->string (length recs)))
-      (display " author0=") (display (pad:who-bool (m11:all-author0? recs))) (newline))
+      (display " author0=") (display (pad:who-bool (m11:all-author0? recs))) (newline)
+      (m11:expect-true "E3_LOG_KEPT_AUTHORS" (not (m11:all-author0? recs))))
     (let ((w (pad:time-who-ask!)))
       (newline) (display (car w)) (newline)
       (m11:expect-str "E3_WHO0_VERDICT" (caddr w) "agree")
       (m11:expect-true "E3_WHO0_REOPENED" (string-contains? (car w) "who=helper why=closer"))
-      (m11:expect-true "E3_WHO0_SAY" (string-contains? (cadr w) ", from the saved book")))
+      (m11:expect-true "E3_WHO0_SAY" (string-contains? (cadr w) ", from the saved book"))
+      (m11:expect-true "E3_WHO0_NATIVE" (not (string-contains? (car w) "author=0"))))
     (set! *pl-st* (pad:es-at (pad:es-L *pl-st*) 2 0))
     (m11:keys! (list "IN 15"))
     (m11:expect-true "E3_WHO2_SAY" (string-prefix? *pl-say* "a macro wrote add: flip"))
@@ -135,7 +137,7 @@
   (m11:acc-end! "M11E" 3)
   #t)
 
-;; every author= token of the log is author=0 (aura#4365 still open)
+;; every author= token of the log is author=0 (only on Soft before the aura#4365 fix)
 (define (m11:all-author0? toks)
   (cond
     ((null? toks) #t)

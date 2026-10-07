@@ -150,7 +150,7 @@
           (pad:kr-propose! "helper" "tab-size" "(lambda () \"wide\")" "word tabs")
           (m11:rule-out! "G3_WORD_OUT")
           (m11:expect-str "G3_WORD" (car *kr-last*) "DROP")
-          (m11:expect-str "G3_WORD_SAY" *pl-say* "the helper's tab-size does not fit (indent 2), the old rule stays")
+          (m11:expect-str "G3_WORD_SAY" *pl-say* "the helper's tab-size does not fit indent, the old rule stays")
           (m11:expect-str "G3_WORD_KIND" (pad:nth *why-last* 1) "type")
           (m11:expect "G3_WORD_DROPPED" (- *kr-dropped* d0) 1)
           (m11:expect "G3_WORD_TAB" (m11:tab-now) 2)
