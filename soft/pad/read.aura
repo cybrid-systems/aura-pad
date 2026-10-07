@@ -1,0 +1,96 @@
+;; Lazy read stack. play.aura loads this file on the first "KEY check".
+;; An arrow never loads it. Soft reserved: never bind quote.
+;;
+;; This order does not fix aura#4351. play.aura has already loaded the
+;; editor, so std cannot be first among every pad file. A false baseline
+;; or a false pad:q-sane? is a real leak: print GAPS read-leak, set the
+;; status to insane, and do not set-code. Do not describe that failure
+;; as aura#4351 being solved by this load order.
+;;
+;; pad:q-sane? does not exist until query.aura has loaded. Calling it
+;; earlier is unbound and re-runs play.aura (R7), which is not a baseline.
+;; query.aura also freezes *pad-q-gaps* and *pad-q-used* at load, and it
+;; needs std/query first, so query.aura is not loaded to invent the name.
+
+(define *read-based* #f)
+(define *read-base* #f)
+(define *read-join* #f)
+(define *read-done* #f)
+(define *read-q* #f)
+(define *read-canary* "")
+
+(define (pad:read-bool b)
+  (if b "true" "false"))
+
+(define (pad:read-show! s)
+  (display s)
+  (newline)
+  0)
+
+;; The three forms on query.aura line 171. Recorded once, before std.aura,
+;; query.aura, and ws.aura load. This function does not call pad:q-sane?.
+(define (pad:read-sane?)
+  (if (not *read-based*)
+      (begin
+        (set! *read-join* string-join)
+        (set! *read-base*
+              (and (null? (list))
+                   (not (pair? (null? (list 1))))
+                   (not (null? (list 1)))))
+        (set! *read-based* #t)))
+  *read-base*)
+
+(define (pad:read-leak!)
+  (pad:read-show! "GAPS read-leak")
+  (pad:read-show! "READ state=insane")
+  (set! *pl-say* "insane")
+  0)
+
+;; The pad's own string-join (view.aura). Not a stand-in for either probe.
+;; A rebound name is not called: std/string's copy hangs (aura#4372).
+(define (pad:read-canary!)
+  (set! *read-canary*
+        (if (eq? string-join *read-join*)
+            (string-join (list "a" "b") ",")
+            "rebound"))
+  (pad:read-show! (string-append "READ canary=" *read-canary*))
+  (pad:read-show!
+    (string-append "READ set_code=" (number->string *ws-set-code-n*)))
+  (pad:read-show! "READ state=sane")
+  (set! *pl-say* "sane")
+  0)
+
+;; std, then query, then ws, and only then pad:q-sane?.
+(define (pad:read-stack!)
+  (pad:read-show! "READ loads=std")
+  (load (string-append *pad-home* "/soft/pad/std.aura"))
+  (pad:read-show! "READ loads=query")
+  (load (string-append *pad-home* "/soft/pad/query.aura"))
+  (pad:read-show! "READ loads=ws")
+  (load (string-append *pad-home* "/soft/pad/ws.aura"))
+  (set! *read-q* (pad:q-sane?))
+  (pad:read-show! (string-append "READ q-sane=" (pad:read-bool *read-q*)))
+  (if *read-q*
+      (pad:read-canary!)
+      (begin
+        (pad:read-show!
+          (string-append "READ set_code=" (number->string *ws-set-code-n*)))
+        (pad:read-leak!))))
+
+(define (pad:read-load!)
+  (if *read-done*
+      0
+      (begin
+        (pad:read-show!
+          (string-append "READ baseline=" (pad:read-bool (pad:read-sane?))))
+        (if *read-base*
+            (pad:read-stack!)
+            (begin
+              (pad:read-show! "READ q-sane=unbound")
+              (pad:read-show! "READ set_code=0")
+              (pad:read-leak!)))
+        (set! *read-done* #t)
+        (pad:play-emit!))))
+
+(pad:read-show! "READ loaded")
+(set! *read-ready* #t)

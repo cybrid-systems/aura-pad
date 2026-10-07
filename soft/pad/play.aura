@@ -75,6 +75,17 @@
     (begin (set! *pi-tp-k* (string->number (getenv "PAD_TEST_PENDING")))
            (set! *pi-pending* pad:pi-test-pending))
     0)
+;; The read stack stays off arrow keys. The first "KEY check" loads it.
+;; This file's load list does not include the notebook or the query pad.
+(define *read-ready* #f)
+
+(define (pad:play-check!)
+  (if (not *read-ready*)
+      (load (string-append *pad-home* "/soft/pad/read.aura")))
+  (if *read-ready*
+      (pad:read-load!)
+      0)
+  "go")
 (pad:vw-boot!)
 (pad:play-emit!)
 (let loop ()
@@ -96,6 +107,8 @@
                         ((and *pf-on* (string=? *vi-op* "")
                               (or *pf-cx* *pf-quit* (member line *pf-keys*)))
                          (pad:pf-line! line))
+                        ((string=? line "KEY check")
+                         (pad:play-check!))
                         (#t (pad:play-step! line)))
                       "quit")
             0
