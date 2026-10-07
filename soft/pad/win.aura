@@ -1,0 +1,537 @@
+;; aura-pad M14 -- Emacs windows on one frame.
+;;
+;; A buffer is the text. A window is a view (buffer, point, window-start).
+;; The frame is one binary tree for this terminal: "V" is split-window-below,
+;; "H" is split-window-right. Keys go to the selected window. Deleting a
+;; window does not delete its buffer.
+;;
+;; One window (the tree is empty) keeps today's SNAP, byte for byte.
+;; Two or more windows emit WINS / WIN rectangles. C only paints them.
+;; M-x help opens a page that explains the game. Soft reserved: never
+;; bind quote. No while+set! (aura#4372).
+
+(define *wn-tree* #f)
+(define *wn-live* "")
+(define *wn-back* "page")
+(define *wn-store* (list))
+(define *wn-sel* 0)
+(define *wn-seq* 0)
+(define *wn-taught* #f)
+
+(define (pad:wn-many?)
+  (and (pair? *wn-tree*) (string? (car *wn-tree*))))
+
+(define (pad:wn-rows) (pad:vw-rows-now))
+(define (pad:wn-cols) (pad:vw-cols-now))
+
+(define (pad:wn-here)
+  (if (and *pf-on* (string? *pf-name*) (> (string-length *pf-name*) 0))
+      *pf-name*
+      "page"))
+
+(define (pad:wn-put-acc store name lines acc)
+  (cond
+    ((null? store) (reverse (cons (list name lines) acc)))
+    ((string=? (car (car store)) name)
+     (append (reverse acc) (cons (list name lines) (cdr store))))
+    (#t (pad:wn-put-acc (cdr store) name lines (cons (car store) acc)))))
+
+(define (pad:wn-put store name lines)
+  (pad:wn-put-acc store name lines (list)))
+
+(define (pad:wn-got store name)
+  (cond
+    ((null? store) #f)
+    ((string=? (car (car store)) name) (cadr (car store)))
+    (#t (pad:wn-got (cdr store) name))))
+
+(define (pad:wn-em-name name bufs)
+  (cond
+    ((null? bufs) #f)
+    ((string=? (list-ref (car bufs) 1) name)
+     (pad:v-lines (list-ref (car bufs) 2)))
+    (#t (pad:wn-em-name name (cdr bufs)))))
+
+(define (pad:wn-reset!)
+  (set! *wn-tree* #f)
+  (set! *wn-live* "")
+  (set! *wn-store* (list))
+  (set! *wn-sel* 0)
+  (set! *wn-taught* #f)
+  0)
+
+(define (pad:wn-ensure!)
+  (if (string=? *wn-live* "")
+      (begin
+        (set! *wn-live* (pad:wn-here))
+        (set! *wn-store* (pad:wn-put *wn-store* *wn-live* (car *pl-st*))))
+      0))
+
+(define (pad:wn-buf! name src)
+  (pad:wn-ensure!)
+  (set! *wn-store* (pad:wn-put *wn-store* name (pad:v-lines src)))
+  name)
+
+(define (pad:wn-lookup name)
+  (if (or (not (string? name)) (string=? name ""))
+      #f
+      (if (string=? name *wn-live*)
+          (car *pl-st*)
+          (let ((g (pad:wn-got *wn-store* name)))
+            (if g g (pad:wn-em-name name *em-bufs*))))))
+
+(define (pad:wn-lines-of name)
+  (let ((g (pad:wn-lookup name)))
+    (if g g (list (list)))))
+
+(define (pad:wn-rej say)
+  (set! *pl-say* say)
+  "vi-do")
+
+(define (pad:wn-show! name lines line col top left)
+  (if (string=? name *wn-live*)
+      (set! *pl-st* (list (car *pl-st*) line col
+                          (list-ref *pl-st* 3) (list-ref *pl-st* 4) (list-ref *pl-st* 5)))
+      (begin
+        (set! *wn-store* (pad:wn-put *wn-store* *wn-live* (car *pl-st*)))
+        (set! *pl-st* (pad:es-at lines line col))
+        (set! *wn-live* name)
+        (pad:lc-reset!)))
+  (set! *vw-top* top)
+  (set! *vw-left* left)
+  0)
+
+(define (pad:wn-leaf id name line col top left)
+  (list id name line col top left 0 0 "kid"))
+
+(define (pad:wn-leaf-now)
+  (set! *wn-seq* (+ *wn-seq* 1))
+  (set! *wn-sel* *wn-seq*)
+  (pad:wn-leaf *wn-seq* *wn-live* (cadr *pl-st*) (caddr *pl-st*) *vw-top* *vw-left*))
+
+(define (pad:wn-ratio node)
+  (if (and (> (length node) 3) (number? (list-ref node 3)))
+      (list-ref node 3)
+      50))
+
+(define (pad:wn-count node)
+  (if (number? (car node))
+      1
+      (+ (pad:wn-count (cadr node)) (pad:wn-count (caddr node)))))
+
+(define (pad:wn-find node id)
+  (cond
+    ((number? (car node)) (if (= (car node) id) node #f))
+    (#t (let ((a (pad:wn-find (cadr node) id)))
+          (if a a (pad:wn-find (caddr node) id))))))
+
+(define (pad:wn-ids node)
+  (if (number? (car node))
+      (list (car node))
+      (append (pad:wn-ids (cadr node)) (pad:wn-ids (caddr node)))))
+
+(define (pad:wn-repl node id born)
+  (cond
+    ((number? (car node)) (if (= (car node) id) born node))
+    (#t (list (car node)
+              (pad:wn-repl (cadr node) id born)
+              (pad:wn-repl (caddr node) id born)
+              (pad:wn-ratio node)))))
+
+(define (pad:wn-sync node)
+  (if (number? (car node))
+      (if (= (car node) *wn-sel*)
+          (list (car node) *wn-live* (cadr *pl-st*) (caddr *pl-st*)
+                *vw-top* *vw-left*
+                (list-ref node 6) (list-ref node 7) (list-ref node 8))
+          node)
+      (list (car node)
+            (pad:wn-sync (cadr node))
+            (pad:wn-sync (caddr node))
+            (pad:wn-ratio node))))
+
+(define (pad:wn-set-leaf node id name line col top left)
+  (cond
+    ((number? (car node))
+     (if (= (car node) id)
+         (list id name line col top left
+               (list-ref node 6) (list-ref node 7) (list-ref node 8))
+         node))
+    (#t (list (car node)
+              (pad:wn-set-leaf (cadr node) id name line col top left)
+              (pad:wn-set-leaf (caddr node) id name line col top left)
+              (pad:wn-ratio node)))))
+
+(define (pad:wn-put-leaf node leaf)
+  (cond
+    ((number? (car node)) (if (= (car node) (car leaf)) leaf node))
+    (#t (list (car node)
+              (pad:wn-put-leaf (cadr node) leaf)
+              (pad:wn-put-leaf (caddr node) leaf)
+              (pad:wn-ratio node)))))
+
+(define (pad:wn-del node id)
+  (if (number? (car node))
+      (if (= (car node) id) (list "gone") (list "keep" node))
+      (let ((a (pad:wn-del (cadr node) id))
+            (b (pad:wn-del (caddr node) id)))
+        (cond
+          ((string=? (car a) "gone") (list "keep" (cadr b)))
+          ((string=? (car b) "gone") (list "keep" (cadr a)))
+          (#t (list "keep"
+                    (list (car node) (cadr a) (cadr b) (pad:wn-ratio node))))))))
+
+(define (pad:wn-share total ratio)
+  (if (< total 4)
+      1
+      (let ((n (quotient (* total ratio) 100)))
+        (cond ((< n 2) 2) ((> n (- total 2)) (- total 2)) (#t n)))))
+
+(define (pad:wn-place node r c h w)
+  (if (number? (car node))
+      (list (list node r c h w))
+      (if (string=? (car node) "V")
+          (let ((h1 (pad:wn-share h (pad:wn-ratio node))))
+            (append (pad:wn-place (cadr node) r c h1 w)
+                    (pad:wn-place (caddr node) (+ r h1) c (- h h1) w)))
+          (let ((w1 (pad:wn-share w (pad:wn-ratio node))))
+            (append (pad:wn-place (cadr node) r c h w1)
+                    (pad:wn-place (caddr node) r (+ c w1) h (- w w1)))))))
+
+(define (pad:wn-tiny? rects)
+  (cond
+    ((null? rects) #f)
+    ((let ((h (list-ref (car rects) 3)) (w (list-ref (car rects) 4)))
+       (or (< h 2) (< w 8))) #t)
+    (#t (pad:wn-tiny? (cdr rects)))))
+
+(define (pad:wn-hit? a b)
+  (let ((ar (cadr a)) (ac (list-ref a 2)) (ah (list-ref a 3)) (aw (list-ref a 4))
+        (br (cadr b)) (bc (list-ref b 2)) (bh (list-ref b 3)) (bw (list-ref b 4)))
+    (and (< ar (+ br bh)) (< br (+ ar ah))
+         (< ac (+ bc bw)) (< bc (+ ac aw)))))
+
+(define (pad:wn-ov1 a rest)
+  (cond
+    ((null? rest) #f)
+    ((pad:wn-hit? a (car rest)) #t)
+    (#t (pad:wn-ov1 a (cdr rest)))))
+
+(define (pad:wn-overlap? rects)
+  (cond
+    ((or (null? rects) (null? (cdr rects))) #f)
+    ((pad:wn-ov1 (car rects) (cdr rects)) #t)
+    (#t (pad:wn-overlap? (cdr rects)))))
+
+(define (pad:wn-scrolled leaf h w)
+  (let* ((textw (if (> w 1) (- w 1) 1))
+         (n (length (pad:wn-lines-of (cadr leaf))))
+         (top (pad:vw-clamp (pad:vw-scroll (list-ref leaf 2) (list-ref leaf 4) h) h n))
+         (left (pad:vw-scroll (list-ref leaf 3) (list-ref leaf 5) textw)))
+    (list (car leaf) (cadr leaf) (list-ref leaf 2) (list-ref leaf 3)
+          top left (list-ref leaf 6) (list-ref leaf 7) (list-ref leaf 8))))
+
+(define (pad:wn-apply rects tree)
+  (if (null? rects)
+      tree
+      (let* ((rec (car rects))
+             (leaf (pad:wn-scrolled (car rec) (list-ref rec 3) (list-ref rec 4))))
+        (pad:wn-apply (cdr rects) (pad:wn-put-leaf tree leaf)))))
+
+(define (pad:wn-note! rects)
+  (cond
+    ((null? rects) 0)
+    ((= (car (car (car rects))) *wn-sel*)
+     (set! *vw-top* (list-ref (car (car rects)) 4))
+     (set! *vw-left* (list-ref (car (car rects)) 5)))
+    (#t (pad:wn-note! (cdr rects)))))
+
+(define (pad:wn-focus! leaf)
+  (set! *wn-sel* (car leaf))
+  (pad:wn-show! (cadr leaf)
+                (pad:wn-lines-of (cadr leaf))
+                (list-ref leaf 2) (list-ref leaf 3)
+                (list-ref leaf 4) (list-ref leaf 5)))
+
+(define (pad:wn-install! node)
+  (if (number? (car node))
+      (begin (pad:wn-focus! node) (set! *wn-tree* #f))
+      (begin
+        (set! *wn-tree* node)
+        (pad:wn-focus! (pad:wn-find node (car (pad:wn-ids node))))))
+  0)
+
+(define (pad:wn-born leaf kind)
+  (set! *wn-seq* (+ *wn-seq* 1))
+  (list kind leaf
+        (pad:wn-leaf *wn-seq* (cadr leaf)
+                     (list-ref leaf 2) (list-ref leaf 3)
+                     (list-ref leaf 4) (list-ref leaf 5))
+        50))
+
+(define (pad:wn-split! kind)
+  (pad:wn-ensure!)
+  (let ((base (if *wn-tree* (pad:wn-sync *wn-tree*) (pad:wn-leaf-now))))
+    (if (>= (pad:wn-count base) 4)
+        (pad:wn-rej "too many pages on the screen")
+        (let ((leaf (pad:wn-find base *wn-sel*)))
+          (if (not leaf)
+              (pad:wn-rej "that page would be too tiny")
+              (let* ((born (pad:wn-born leaf kind))
+                     (next (pad:wn-repl base *wn-sel* born))
+                     (rects (pad:wn-place next 0 0 (pad:wn-rows) (pad:wn-cols))))
+                (if (or (pad:wn-tiny? rects) (pad:wn-overlap? rects))
+                    (pad:wn-rej (if (pad:wn-overlap? rects)
+                                    "those pages would sit on top of each other"
+                                    "that page would be too tiny"))
+                    (begin
+                      (set! *wn-tree* next)
+                      (set! *pl-say*
+                            (if *wn-taught*
+                                (if (string=? kind "H")
+                                    "another page opened beside this one"
+                                    "another page opened")
+                                "you can open another page next to this one"))
+                      (set! *wn-taught* #t)
+                      "vi-do"))))))))
+
+(define (pad:wn-other!)
+  (if (not (pad:wn-many?))
+      (pad:wn-rej "this is the only page")
+      (let* ((synced (pad:wn-sync *wn-tree*))
+             (nid (pad:wn-after (pad:wn-ids synced) *wn-sel*)))
+        (set! *wn-tree* synced)
+        (pad:wn-focus! (pad:wn-find synced nid))
+        (set! *pl-say* "now this page")
+        "vi-do")))
+
+(define (pad:wn-after ids cur)
+  (pad:wn-after2 ids ids cur))
+
+(define (pad:wn-after2 all ids cur)
+  (cond
+    ((null? ids) (car all))
+    ((and (= (car ids) cur) (pair? (cdr ids))) (cadr ids))
+    ((and (= (car ids) cur)) (car all))
+    (#t (pad:wn-after2 all (cdr ids) cur))))
+
+(define (pad:wn-delete!)
+  (if (not (pad:wn-many?))
+      (pad:wn-rej "this is the only page")
+      (begin
+        (pad:wn-install! (cadr (pad:wn-del (pad:wn-sync *wn-tree*) *wn-sel*)))
+        (set! *pl-say* "closed that page")
+        "vi-do")))
+
+(define (pad:wn-only!)
+  (if (not (pad:wn-many?))
+      (pad:wn-rej "this is the only page")
+      (let ((leaf (pad:wn-find (pad:wn-sync *wn-tree*) *wn-sel*)))
+        (pad:wn-focus! leaf)
+        (set! *wn-tree* #f)
+        (set! *pl-say* "just this page now")
+        "vi-do")))
+
+(define (pad:wn-switch! name)
+  (pad:wn-ensure!)
+  (if (string=? name *wn-live*)
+      (pad:wn-rej "you are already there")
+      (let ((lines (pad:wn-lookup name)))
+        (if (not lines)
+            (pad:wn-rej "there is no pad with that name")
+            (begin
+              (if *wn-tree*
+                  (set! *wn-tree* (pad:wn-set-leaf (pad:wn-sync *wn-tree*)
+                                                   *wn-sel* name 0 0 0 0))
+                  0)
+              (pad:wn-show! name lines 0 0 0 0)
+              (set! *pl-say* (string-append "now page " name))
+              "vi-do")))))
+
+(define (pad:wn-map back)
+  (string-append
+    "Aura pad map\n"
+    "Type M-x, a command, then enter. This page is the whole game.\n"
+    "Your page is named " back ". M-x switch:" back " brings it back.\n"
+    "find-file opens a file. A short name is enough.\n"
+    "search finds text. ctrl-s finds the next. ctrl-g puts you back.\n"
+    "list-buffers names open pages. switch-buffer jumps to one.\n"
+    "split opens another page under this one.\n"
+    "split-horiz opens another page beside this one.\n"
+    "other-window moves to the other page.\n"
+    "delete-window closes this page. The last page stays.\n"
+    "delete-other-windows keeps only this page.\n"
+    "ctrl-x 2 splits under. ctrl-x 3 splits beside.\n"
+    "ctrl-x o moves. ctrl-x 0 closes. ctrl-x 1 keeps one.\n"
+    "Two pages can show one writing, each with its own cursor.\n"))
+
+(define (pad:wn-help! rest)
+  (pad:wn-ensure!)
+  (if (string=? *wn-live* "help")
+      (pad:wn-rej "this page is the map")
+      (begin
+        (set! *wn-back* *wn-live*)
+        (pad:wn-buf! "help" (pad:wn-map *wn-back*))
+        (pad:wn-switch! "help")
+        (set! *pl-say*
+              (pad:vi-cut (string-append "this page is the map. M-x switch:"
+                                         *wn-back* " goes back")))
+        rest
+        "vi-do")))
+
+(define (pad:wn-sw? w)
+  (and (>= (string-length w) 7) (string=? (substring w 0 7) "switch:")))
+
+(define (pad:wn-command w rest)
+  (cond
+    ((or (string=? w "split") (string=? w "split-vert")) (pad:wn-split! "V"))
+    ((string=? w "split-horiz") (pad:wn-split! "H"))
+    ((or (string=? w "other-window") (string=? w "other")) (pad:wn-other!))
+    ((string=? w "delete-window") (pad:wn-delete!))
+    ((string=? w "delete-other-windows") (pad:wn-only!))
+    ((or (string=? w "help") (string=? w "map")) (pad:wn-help! rest))
+    ((string=? w "switch-window") (pad:wn-switch! rest))
+    ((pad:wn-sw? w) (pad:wn-switch! (substring w 7 (string-length w))))
+    (#t #f)))
+
+(define (pad:wn-on-cx! b)
+  (cond
+    ((= b 50) (pad:wn-split! "V"))
+    ((= b 51) (pad:wn-split! "H"))
+    ((= b 111) (pad:wn-other!))
+    ((= b 48) (pad:wn-delete!))
+    ((= b 49) (pad:wn-only!))
+    (#t #f)))
+
+(define (pad:wn-on-line! line)
+  (cond
+    ((string=? line "IN 50") (pad:wn-split! "V"))
+    ((string=? line "IN 51") (pad:wn-split! "H"))
+    ((string=? line "IN 111") (pad:wn-other!))
+    ((string=? line "IN 48") (pad:wn-delete!))
+    ((string=? line "IN 49") (pad:wn-only!))
+    (#t #f)))
+
+(define (pad:wn-vis n)
+  (if (and (number? n) (>= n 32) (<= n 126))
+      (list->string (list n))
+      "?"))
+
+(define (pad:wn-spaces s n)
+  (if (<= n 0) s (pad:wn-spaces (string-append s " ") (- n 1))))
+
+(define (pad:wn-slice codes i left end acc)
+  (cond
+    ((>= i end) acc)
+    ((null? codes) (pad:wn-spaces acc (- end i)))
+    ((< i left) (pad:wn-slice (cdr codes) (+ i 1) left end acc))
+    (#t (pad:wn-slice (cdr codes) (+ i 1) left end
+                      (string-append acc (pad:wn-vis (car codes)))))))
+
+(define (pad:wn-rep ch n)
+  (cond
+    ((<= n 0) "")
+    ((= n 1) ch)
+    (#t (let ((h (pad:wn-rep ch (quotient n 2))))
+          (if (= (modulo n 2) 0)
+              (string-append h h)
+              (string-append h h ch))))))
+
+(define (pad:wn-nth lines i)
+  (cond
+    ((null? lines) (list))
+    ((= i 0) (car lines))
+    (#t (pad:wn-nth (cdr lines) (- i 1)))))
+
+(define (pad:wn-border st)
+  (cond ((= st 1) "*") ((= st 2) "+") (#t "|")))
+
+(define (pad:wn-wh s)
+  (cond
+    ((string=? s "helper") 1)
+    ((string=? s "macro") 2)
+    ((string=? s "law") 3)
+    (#t 0)))
+
+(define (pad:wn-cy line top h)
+  (let ((y (- line top)))
+    (cond ((< y 0) 0) ((>= y h) (- h 1)) (#t y))))
+
+(define (pad:wn-cx col left w)
+  (let ((x (- col left)))
+    (cond ((< x 0) 0) ((> x w) w) (#t x))))
+
+(define (pad:wn-block lines top left h w border i)
+  (if (>= i h)
+      ""
+      (let ((pay (string-append
+                   (pad:wn-slice (pad:wn-nth lines (+ top i)) 0 left (+ left (- w 1)) "")
+                   border))
+            (dots (pad:wn-rep "." w)))
+        (string-append "T " pay "\nH " dots "\nM " dots "\n"
+                       (pad:wn-block lines top left h w border (+ i 1))))))
+
+(define (pad:wn-one rec)
+  (let* ((leaf (car rec))
+         (r (cadr rec))
+         (c (list-ref rec 2))
+         (h (list-ref rec 3))
+         (w (list-ref rec 4))
+         (top (list-ref leaf 4))
+         (left (list-ref leaf 5))
+         (sel (if (= (car leaf) *wn-sel*) 1 0))
+         (cy (if (= sel 1) (pad:wn-cy (list-ref leaf 2) top h) 0))
+         (cx (if (= sel 1) (pad:wn-cx (list-ref leaf 3) left w) 0)))
+    (string-append
+      "WIN r=" (number->string r)
+      " c=" (number->string c)
+      " h=" (number->string h)
+      " w=" (number->string w)
+      " sel=" (number->string sel)
+      " top=" (number->string top)
+      " left=" (number->string left)
+      " cy=" (number->string cy)
+      " cx=" (number->string cx)
+      " st=" (number->string (list-ref leaf 7))
+      " wh=" (number->string (pad:wn-wh (list-ref leaf 8)))
+      "\n"
+      (pad:wn-block (pad:wn-lines-of (cadr leaf)) top left h w
+                    (pad:wn-border (list-ref leaf 7)) 0))))
+
+(define (pad:wn-body rects)
+  (if (null? rects) "" (string-append (pad:wn-one (car rects)) (pad:wn-body (cdr rects)))))
+
+(define (pad:wn-snap)
+  (if (not (pad:wn-many?))
+      (pad:play-snap)
+      (begin
+        (set! *wn-store* (pad:wn-put *wn-store* *wn-live* (car *pl-st*)))
+        (set! *wn-tree* (pad:wn-sync *wn-tree*))
+        (set! *wn-tree* (pad:wn-apply (pad:wn-place *wn-tree* 0 0 (pad:wn-rows) (pad:wn-cols))
+                                      *wn-tree*))
+        (let ((rects (pad:wn-place *wn-tree* 0 0 (pad:wn-rows) (pad:wn-cols))))
+          (pad:wn-note! rects)
+          (string-append
+            "SNAP v1 pad\n"
+            "TITLE " (pad:play-title) "\n"
+            "CURSOR line=0 col=0\n"
+            "SAY " *pl-say* "\n"
+            "LEGEND " *view-legend* "\n"
+            "WINS n=" (number->string (length rects)) "\n"
+            (pad:wn-body rects)
+            "END\n")))))
+
+(define pad:em-command-1 pad:em-command)
+(define (pad:em-command w rest mx)
+  (let ((d (pad:wn-command w rest)))
+    (if d d (pad:em-command-1 w rest mx))))
+
+(define pad:pf-save-1 pad:pf-save!)
+(define (pad:pf-save!)
+  (if (or (string=? *wn-live* "")
+          (not *pf-on*)
+          (string=? *wn-live* *pf-name*))
+      (pad:pf-save-1)
+      (begin
+        (set! *pl-say* "switch to the file page to save")
+        "skip")))

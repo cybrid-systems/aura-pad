@@ -211,6 +211,10 @@
            (set! *pl-say* "ctrl-x and that key do not go together"))
        (pad:play-emit!)
        "go")
+      ;; ctrl-x 2 / 3 / o / 0 / 1 — windows. Lone digits are not file keys.
+      ((and cx *vi-on* (pad:wn-on-line! line))
+       (pad:play-emit!)
+       "go")
       ((string=? line "IN 24")
        (set! *pf-cx* #t)
        (set! *pf-quit* armed)

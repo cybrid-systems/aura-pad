@@ -137,9 +137,15 @@
 (define (pad:vw-rows-now) (pad:vw-cap *vw-rows* 240 1))
 (define (pad:vw-cols-now) (pad:vw-cap *vw-cols* 400 1))
 
+;; win.aura replaces these. One window keeps the frame this file built.
+(define (pad:wn-many?) #f)
+(define (pad:wn-snap) "")
+
 ;; Replaces the identity in keys.aura.
 (define (pad:vw-frame s)
   (if (or *w2-on* (not (string? s)) (< (string-length s) 7)
           (not (string=? (substring s 0 7) "SNAP v1")))
       s
-      (pad:vw-maybe s)))
+      (if (pad:wn-many?)
+          (pad:wn-snap)
+          (pad:vw-maybe s))))

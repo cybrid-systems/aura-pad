@@ -3,7 +3,19 @@
 /* Soft SNAP v1 / v2 pad: reader + blit. C draws; Soft decides. */
 #include <stdio.h>
 
-enum { PAD_MAX_ROWS = 256, PAD_MAX_COLS = 1024, PAD_MAX_TEXT = 512 };
+enum { PAD_MAX_ROWS = 256, PAD_MAX_COLS = 1024, PAD_MAX_TEXT = 512,
+       PAD_MAX_WINS = 8, PAD_MAX_WIN_ROWS = 240 };
+
+/* One rectangle Soft already placed. C copies its cells and does not
+ * choose the split. nwins == 0 on PadSnap means this struct is unused. */
+typedef struct {
+    int row, col, rows, cols;
+    int sel, top, left, cy, cx, st, wh;
+    int nrows;
+    char *t[PAD_MAX_WIN_ROWS];
+    char *hl[PAD_MAX_WIN_ROWS];
+    char *mk[PAD_MAX_WIN_ROWS];
+} PadWin;
 
 typedef struct {
     char title[PAD_MAX_TEXT];
@@ -14,6 +26,10 @@ typedef struct {
      * buffer. Gutter numbers are origin_line + row + 1. Both stay 0
      * when Soft sends the whole buffer (no ORIGIN line). */
     int origin_line, origin_col;
+    /* 0: one picture in t/h/m, as before. >= 2: paint `wins` at the
+     * rectangles Soft sent. */
+    int nwins;
+    PadWin wins[PAD_MAX_WINS];
     int nrows;
     char *t[PAD_MAX_ROWS], *h[PAD_MAX_ROWS], *m[PAD_MAX_ROWS];
     /* Optional Soft DIRTY lines=<csv>. dirty_n < 0 means "all rows"
@@ -51,6 +67,8 @@ int pad_reader_file(PadReader *rd, FILE *fp);
 void pad_reader_free(PadReader *rd);
 
 void pad_snap_free(PadSnap *s);
+/* Copy row bytes so this snap does not share strings with the reader. */
+void pad_snap_own(PadSnap *s);
 /* Draw s. ansi=1 colors + reverse-video cursor; 0 = plain text + caret. */
 void pad_blit(FILE *o, const PadSnap *s, int ansi);
 /* Interactive redraw. No prev or no DIRTY: full pad_blit. On a tty:

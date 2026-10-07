@@ -9,6 +9,9 @@
  *   SNAP v1 pad / TITLE / CURSOR line= col= / SAY / LEGEND /
  *   optional DIRTY lines=<csv> / ROWS n=
  *   then n x (T text, H tape, M marks) with |T| == |H| == |M|, then END.
+ *   Optional, only when Soft is showing more than one rectangle:
+ *   WINS n= / n times (WIN r c h w sel top left cy cx st wh, then h
+ *   triples of T H M). C copies each rectangle. It does not split.
  * Soft may mark dirty rows so the interactive viewport redraws less; on
  * a terminal C also compares Soft's previous and new cells to write only
  * what differs (it never decides what a cell holds). Non-SNAP lines
@@ -58,8 +61,30 @@ void pad_snap_free(PadSnap *s) {
         free(s->h[i]);
         free(s->m[i]);
     }
+    for (int w = 0; w < s->nwins && w < PAD_MAX_WINS; w++) {
+        for (int r = 0; r < s->wins[w].nrows && r < PAD_MAX_WIN_ROWS; r++) {
+            free(s->wins[w].t[r]);
+            free(s->wins[w].hl[r]);
+            free(s->wins[w].mk[r]);
+        }
+    }
     memset(s, 0, sizeof(*s));
     s->dirty_n = -1; /* default: all rows dirty when Soft omits DIRTY */
+}
+
+void pad_snap_own(PadSnap *s) {
+    for (int r = 0; r < s->nrows; r++) {
+        s->t[r] = s->t[r] ? strdup(s->t[r]) : NULL;
+        s->h[r] = s->h[r] ? strdup(s->h[r]) : NULL;
+        s->m[r] = s->m[r] ? strdup(s->m[r]) : NULL;
+    }
+    for (int w = 0; w < s->nwins && w < PAD_MAX_WINS; w++) {
+        for (int r = 0; r < s->wins[w].nrows && r < PAD_MAX_WIN_ROWS; r++) {
+            s->wins[w].t[r] = s->wins[w].t[r] ? strdup(s->wins[w].t[r]) : NULL;
+            s->wins[w].hl[r] = s->wins[w].hl[r] ? strdup(s->wins[w].hl[r]) : NULL;
+            s->wins[w].mk[r] = s->wins[w].mk[r] ? strdup(s->wins[w].mk[r]) : NULL;
+        }
+    }
 }
 
 static char *dup_n(const char *p, size_t n) {
@@ -104,6 +129,7 @@ typedef struct {
     long body;     /* claimed v1 ROWS body length */
     int row;       /* row index of the current R */
     int nsent;
+    int wi;        /* window index while reading WINS */
     unsigned char seen[PAD_MAX_ROWS];
 } Block;
 
@@ -144,6 +170,79 @@ static int row_line(PadSnap *s, int r, int sub, const char *line) {
     return 1;
 }
 
+/* One T/H/M line inside the window currently being read. */
+static int win_row(PadWin *w, int sub, const char *line) {
+    static const char *tags[3] = {"T", "H", "M"};
+    int r = w->nrows;
+    const char *p;
+    if (r < 0 || r >= PAD_MAX_WIN_ROWS)
+        return 0;
+    p = payload(line, tags[sub]);
+    if (!p)
+        return 0;
+    size_t n = strlen(p);
+    if (n > PAD_MAX_COLS)
+        return 0;
+    if (sub == 0)
+        return (w->t[r] = dup_n(p, n)) != NULL;
+    if (!w->t[r] || n != strlen(w->t[r]))
+        return 0;
+    for (size_t i = 0; i < n; i++)
+        if (sub == 1 ? hl_sgr(p[i]) == NULL : !mark_ok(p[i]))
+            return 0;
+    char *d = dup_n(p, n);
+    if (!d)
+        return 0;
+    if (sub == 1)
+        w->hl[r] = d;
+    else
+        w->mk[r] = d;
+    return 1;
+}
+
+static int rects_overlap(const PadWin *a, const PadWin *b) {
+    if (a->row + a->rows <= b->row || b->row + b->rows <= a->row)
+        return 0;
+    if (a->col + a->cols <= b->col || b->col + b->cols <= a->col)
+        return 0;
+    return 1;
+}
+
+/* Soft's rectangles must be a real tiling: one selection, no overlap,
+ * every cell row the length Soft claimed. C drops the frame otherwise. */
+static int wins_ok(const PadSnap *s) {
+    int sel = 0;
+    if (s->nwins < 2 || s->nwins > PAD_MAX_WINS)
+        return 0;
+    for (int i = 0; i < s->nwins; i++) {
+        const PadWin *w = &s->wins[i];
+        if (w->rows < 1 || w->cols < 1 || w->nrows != w->rows)
+            return 0;
+        if (w->row < 0 || w->col < 0)
+            return 0;
+        if (w->row + w->rows > PAD_MAX_ROWS || w->col + w->cols > PAD_MAX_COLS * 2)
+            return 0;
+        if (w->cy < 0 || w->cy >= w->rows || !w->t[w->cy])
+            return 0;
+        if (w->cx < 0 || (size_t)w->cx > strlen(w->t[w->cy]))
+            return 0;
+        if (w->sel)
+            sel++;
+        for (int r = 0; r < w->nrows; r++) {
+            if (!w->t[r] || !w->hl[r] || !w->mk[r])
+                return 0;
+            if (strlen(w->t[r]) != (size_t)w->cols ||
+                strlen(w->hl[r]) != (size_t)w->cols ||
+                strlen(w->mk[r]) != (size_t)w->cols)
+                return 0;
+        }
+        for (int j = 0; j < i; j++)
+            if (rects_overlap(w, &s->wins[j]))
+                return 0;
+    }
+    return sel == 1;
+}
+
 /* 1 = consumed, 0 = block is bad, 2 = block complete. */
 static int block_line(Block *b, const char *line) {
     PadSnap *s = &b->s;
@@ -177,6 +276,18 @@ static int block_line(Block *b, const char *line) {
             s->nrows = b->left; /* slots; unsent ones filled from the base */
             b->stage = 11;
             return 1;
+        }
+        /* More than one rectangle. Stay out of the single-picture path. */
+        {
+            int n = 0;
+            if (sscanf(line, "WINS n=%d", &n) == 1) {
+                if (n < 2 || n > PAD_MAX_WINS)
+                    return 0;
+                s->nwins = n;
+                b->wi = 0;
+                b->stage = 20;
+                return 1;
+            }
         }
         /* Optional window origin. Stay in stage 4 until ROWS. */
         if (strncmp(line, "ORIGIN line=", 12) == 0) {
@@ -226,10 +337,58 @@ static int block_line(Block *b, const char *line) {
     case 6:
         if (strcmp(line, "END") != 0)
             return 0;
+        if (s->nwins > 0)
+            return wins_ok(s) ? 2 : 0;
         if (s->cur_line < 0 || s->cur_line >= s->nrows || s->cur_col < 0 ||
             (size_t)s->cur_col > strlen(s->t[s->cur_line]))
             return 0;
         return 2;
+    case 20: {
+        int r, c, h, w, sel, top, left, cy, cx, st, wh;
+        if (sscanf(line,
+                   "WIN r=%d c=%d h=%d w=%d sel=%d top=%d left=%d cy=%d cx=%d st=%d wh=%d",
+                   &r, &c, &h, &w, &sel, &top, &left, &cy, &cx, &st, &wh) != 11)
+            return 0;
+        if (b->wi < 0 || b->wi >= s->nwins || b->wi >= PAD_MAX_WINS)
+            return 0;
+        if (h < 1 || h > PAD_MAX_WIN_ROWS || w < 1 || w > PAD_MAX_COLS)
+            return 0;
+        if (r < 0 || c < 0 || sel < 0 || sel > 1)
+            return 0;
+        {
+            PadWin *win = &s->wins[b->wi];
+            win->row = r;
+            win->col = c;
+            win->rows = h;
+            win->cols = w;
+            win->sel = sel;
+            win->top = top;
+            win->left = left;
+            win->cy = cy;
+            win->cx = cx;
+            win->st = st;
+            win->wh = wh;
+            win->nrows = 0;
+        }
+        b->sub = 0;
+        b->left = h;
+        b->stage = 21;
+        return 1;
+    }
+    case 21: {
+        PadWin *win = &s->wins[b->wi];
+        if (!win_row(win, b->sub, line))
+            return 0;
+        if (++b->sub == 3) {
+            b->sub = 0;
+            win->nrows++;
+            if (--b->left == 0) {
+                b->wi++;
+                b->stage = b->wi >= s->nwins ? 6 : 20;
+            }
+        }
+        return 1;
+    }
     case 10: { /* GEN g base=b | base=- */
         char tail[16];
         if (sscanf(line, "GEN %d base=%15s", &b->gen, tail) != 2 || b->gen < 0)
@@ -317,6 +476,16 @@ static void block_drop(Block *b) {
         free(s->t[r]);
         free(s->h[r]);
         free(s->m[r]);
+    }
+    if (b->stage == 21 && b->wi >= 0 && b->wi < PAD_MAX_WINS) {
+        PadWin *w = &s->wins[b->wi];
+        int wr = w->nrows;
+        if (wr >= 0 && wr < PAD_MAX_WIN_ROWS) {
+            free(w->t[wr]);
+            free(w->hl[wr]);
+            free(w->mk[wr]);
+            w->t[wr] = w->hl[wr] = w->mk[wr] = NULL;
+        }
     }
     pad_snap_free(s);
     memset(b, 0, sizeof(*b));
@@ -476,7 +645,83 @@ static void draw_legend(FILE *o, int ansi, const char *legend) {
     fputc('\n', o);
 }
 
+/* Style id -> an existing palette letter. Soft chose the id. */
+static char st_hl(int st) {
+    static const char hl[] = {'.', 'P', 'N', 'K', 'T', 'Q', 'M', 'C'};
+    if (st < 0)
+        st = 0;
+    return hl[st & 7];
+}
+
+/* Paint each rectangle where Soft put it. No gutter, no split. */
+static void blit_wins(FILE *o, const PadSnap *s, int ansi) {
+    int H = 0, W = 0, sy = 0, sx = 0;
+    for (int i = 0; i < s->nwins; i++) {
+        const PadWin *w = &s->wins[i];
+        if (w->row + w->rows > H)
+            H = w->row + w->rows;
+        if (w->col + w->cols > W)
+            W = w->col + w->cols;
+        if (w->sel) {
+            sy = w->row + w->cy;
+            sx = w->col + w->cx;
+        }
+    }
+    if (ansi && out_tty(o))
+        fputs("\033[2J\033[H", o);
+    sgr(o, ansi, "1");
+    fprintf(o, "== %s ==", s->title);
+    sgr(o, ansi, "0");
+    fputc('\n', o);
+    for (int y = 0; y < H; y++) {
+        Attr pen = {NULL, 0, 0};
+        for (int x = 0; x < W; x++) {
+            char ch = ' ', hl = '.', mk = '.';
+            int cur = y == sy && x == sx;
+            for (int i = 0; i < s->nwins; i++) {
+                const PadWin *w = &s->wins[i];
+                int ly, lx;
+                if (y < w->row || y >= w->row + w->rows)
+                    continue;
+                if (x < w->col || x >= w->col + w->cols)
+                    continue;
+                ly = y - w->row;
+                lx = x - w->col;
+                if (w->t[ly] && lx < (int)strlen(w->t[ly]))
+                    ch = w->t[ly][lx];
+                if (w->hl[ly] && lx < (int)strlen(w->hl[ly]))
+                    hl = w->hl[ly][lx];
+                if (w->mk[ly] && lx < (int)strlen(w->mk[ly]))
+                    mk = w->mk[ly][lx];
+                if (lx == w->cols - 1)
+                    hl = st_hl(w->st);
+                break;
+            }
+            if (!hl_sgr(hl))
+                hl = '.';
+            draw_cell(o, ansi, &pen, ch, hl, mk, cur);
+        }
+        if (y == sy && sx == W)
+            draw_cell(o, ansi, &pen, ' ', '.', '.', 1);
+        sgr(o, ansi, "0");
+        fputc('\n', o);
+        if (!ansi && y == sy)
+            fprintf(o, "%*s^\n", sx, "");
+    }
+    fputs("  say: ", o);
+    sgr(o, ansi, "1;33");
+    fputs(s->say, o);
+    sgr(o, ansi, "0");
+    fputc('\n', o);
+    draw_legend(o, ansi, s->legend);
+    fflush(o);
+}
+
 void pad_blit(FILE *o, const PadSnap *s, int ansi) {
+    if (s->nwins > 0) {
+        blit_wins(o, s, ansi);
+        return;
+    }
     if (ansi && out_tty(o))
         fputs("\033[2J\033[H", o);
     sgr(o, ansi, "1");
@@ -736,6 +981,10 @@ static void blit_dirty_tty(FILE *o, const PadSnap *prev, const PadSnap *s, int a
 }
 
 void pad_blit_dirty(FILE *o, const PadSnap *prev, const PadSnap *s, int ansi) {
+    if (s->nwins > 0 || (prev && prev->nwins > 0)) {
+        pad_blit(o, s, ansi);
+        return;
+    }
     if (!ansi || !prev || s->dirty_n < 0) {
         pad_blit(o, s, ansi);
         return;

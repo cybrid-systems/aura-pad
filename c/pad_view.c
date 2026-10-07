@@ -32,11 +32,7 @@ static int replay_stream(PadReader *rd, FILE *fp, int full) {
         fflush(stdout);
         pad_snap_free(&prev);
         prev = rd->last;
-        for (int r = 0; r < prev.nrows; r++) {
-            prev.t[r] = prev.t[r] ? strdup(prev.t[r]) : NULL;
-            prev.h[r] = prev.h[r] ? strdup(prev.h[r]) : NULL;
-            prev.m[r] = prev.m[r] ? strdup(prev.m[r]) : NULL;
-        }
+        pad_snap_own(&prev);
         have = 1;
         frames++;
     }

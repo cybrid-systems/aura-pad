@@ -47,7 +47,11 @@ or a prompt. **ctrl-x ctrl-f** opens a file (a partial name is enough),
 **ctrl-x ctrl-b** lists buffers, **ctrl-x b** switches to one.
 **Alt-f** / **Alt-b** / **Alt-d** move by a word or delete one (Esc and
 the letter in one read). **M-x search** finds text; ctrl-s finds the
-next match. **M-x find-file** opens a file. **ctrl-\** is the emergency
+next match. **M-x find-file** opens a file.
+**M-x help** opens a page that is the map: split a page, move to the
+other one, close one. **ctrl-x 2** splits below, **ctrl-x 3** beside,
+**ctrl-x o** moves, **ctrl-x 0** closes this page, **ctrl-x 1** keeps
+one. **ctrl-\** is the emergency
 exit (nothing is saved).
 `PAD_VI=0` keeps the old modeless map (ctrl-b jumps back, ctrl-p
 copies). The title shows the file name and `[normal]` or `[insert]`.
@@ -81,6 +85,8 @@ ctrl-p / ctrl-n 都能上下左右移动。`dd` 删行，`x` 删字，`yy` 复�
 （没保存时先提示，再按一次才退出）。ctrl-g 取消。ctrl-x ctrl-f 按文件名
 打开（写一部分就行），ctrl-x ctrl-b 列出 buffer，ctrl-x b 切换。
 Alt-f / Alt-b / Alt-d 按词移动或删除。M-x search 搜文字，ctrl-s 找下一个。
+M-x help 打开一页说明：ctrl-x 2 在下面分屏，ctrl-x 3 在旁边分屏，
+ctrl-x o 换到另一页，ctrl-x 0 关掉这一页，ctrl-x 1 只留这一页。
 画面跟着终端走，长文件可以滚动看完。
 出错看 `~/.local/state/aura-pad/aura-pad.log`（会轮转）。
 

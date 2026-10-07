@@ -38,6 +38,7 @@
 (load (string-append *pad-home* "/soft/pad/vi.aura"))
 (load (string-append *pad-home* "/soft/pad/screen.aura"))
 (load (string-append *pad-home* "/soft/pad/emacs.aura"))
+(load (string-append *pad-home* "/soft/pad/win.aura"))
 
 ;; PAD_PAGE=big starts on the twelve-row page (scripts/bench_editors.sh)
 (pad:play-reset! (if (equal? (getenv "PAD_PAGE") "big") *lc-big-page* *play-start*))

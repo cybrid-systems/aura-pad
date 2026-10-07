@@ -65,6 +65,8 @@
 (define (pad:em-search-next!) (pad:em-search-now!))
 (define (pad:em-enter!) (pad:vi-colon!))
 (define (pad:em-command w rest mx) #f)
+(define (pad:wn-on-cx! b) #f)
+(define (pad:wn-on-line! line) #f)
 (define (pad:em-abort-point!)
   (if (pair? *em-anchor*)
       (set! *pl-st* (list (car *pl-st*) (car *em-anchor*) (cadr *em-anchor*)
@@ -367,16 +369,16 @@
             ((or (string=? w "w") (string=? w "write") (string=? w "save")) (pad:vi-write! #f))
             ((or (string=? w "wq") (string=? w "x")) (pad:vi-write! #t))
             ((string=? w "help")
-             (set! *pl-say* "eval runs this page, find-file opens, search finds text, w saves, q quits")
+             (set! *pl-say* "M-x help opens the map: split, search, find-file")
              "vi-do")
             ((string=? w "")
              (if mx
                  (pad:vi-eval!)
                  (begin
-                   (set! *pl-say* "eval runs this page, find-file opens, search finds text, w saves, q quits")
+                   (set! *pl-say* "eval runs this page, M-x help opens the map, w saves, q quits")
                    "vi-do")))
             (#t
-             (set! *pl-say* (string-append "no command " w " - eval runs, find-file opens, search finds text"))
+             (set! *pl-say* (string-append "no command " w " - M-x help opens the map"))
              "vi-do"))))))
 
 (define (pad:vi-colon-start! mx)
@@ -387,8 +389,8 @@
   (set! *vi-prompt* (if mx "M-x " ": "))
   (set! *pl-say*
         (if mx
-            "M-x - enter runs this page, find-file opens, search finds text"
-            ": - eval runs this page, w saves, q quits"))
+            "M-x - help opens the map, enter runs this page, find-file opens, search finds text"
+            ": - eval runs this page, w saves, q quits, M-x help opens the map"))
   "vi-do")
 
 (define (pad:vi-type! b)
@@ -732,14 +734,17 @@
 
 (define (pad:vi-cx-byte b)
   (set! *vi-cx* #f)
-  (cond
+  (let ((w (pad:wn-on-cx! b)))
+    (if w
+        w
+        (cond
     ((= b 3) "quit")
     ((= b 5) (pad:vi-act! "eval"))
     ((= b 17) "quit")
     ((= b 6) (pad:em-find-start!))
     ((= b 2) (pad:em-list!))
     ((= b 98) (pad:em-buf-start!))
-    (#t (pad:vi-act! "cx-no"))))
+    (#t (pad:vi-act! "cx-no"))))))
 
 ;; One idle byte -> a command word, a char code, or a mode word
 ;; (to-insert / to-normal / append / normal-key / vi-do).

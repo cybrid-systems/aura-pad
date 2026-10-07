@@ -310,11 +310,7 @@ int pad_play_loop(pid_t pid, int to, int from, int errfd, const PadPlayOpt *o) {
                          * them on the next block; keep our own copies of the
                          * rows for the next diff. */
                         prev = rd.last;
-                        for (int r = 0; r < prev.nrows; r++) {
-                            prev.t[r] = prev.t[r] ? strdup(prev.t[r]) : NULL;
-                            prev.h[r] = prev.h[r] ? strdup(prev.h[r]) : NULL;
-                            prev.m[r] = prev.m[r] ? strdup(prev.m[r]) : NULL;
-                        }
+                        pad_snap_own(&prev);
                         have_prev = 1;
                     }
                 }
