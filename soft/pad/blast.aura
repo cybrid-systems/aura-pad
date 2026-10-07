@@ -13,11 +13,10 @@
 ;; a name right after "(" that is not a define head). The engine checks
 ;; that answer:
 ;;   query:calls name        -> the engine's call sites of name; their
-;;                              number must equal the Soft count. After a
-;;                              rebind the engine keeps the replaced body's
-;;                              sites too (aura#4364), so then the engine
-;;                              must have added exactly the call sites the
-;;                              new bodies hold (taken before and after)
+;;                              number must equal the Soft count (the
+;;                              engine drops a replaced body's sites since
+;;                              a541ba9, aura#4364 fixed: no before/after
+;;                              delta)
 ;;   query:dirty-subtree     -> per page define (query:defines name): the
 ;;                              defines whose dirty count grew must be
 ;;                              changed names, and every changed name must
@@ -70,25 +69,14 @@
             (rest (pad:blast-def-rows L toks (cdr names))))
         (if (null? ds) rest (cons (car (pad:v-linecol L (car ds))) rest)))))
 
-;; ((name soft engine engine-before new-body-sites) ...)
-;; e0s = engine counts before the transaction (pad:blast-eng-before)
-(define (pad:blast-counts toks names e0s ops)
+;; ((name soft engine) ...)
+(define (pad:blast-counts toks names)
   (if (null? names)
       (list)
       (cons (list (car names)
                   (length (pad:blast-sites toks (car names) #f #f (list)))
-                  (pad:blast-eng-calls (car names))
-                  (if (null? e0s) -1 (car e0s))
-                  (pad:blast-new-sites ops (car names)))
-            (pad:blast-counts toks (cdr names) (if (null? e0s) e0s (cdr e0s)) ops))))
-;; call sites of name inside the proposal's new bodies
-(define (pad:blast-new-sites ops name)
-  (if (null? ops)
-      0
-      (+ (length (pad:blast-sites (pad:hl-tokens (cadr (car ops))) name #f #f (list)))
-         (pad:blast-new-sites (cdr ops) name))))
-(define (pad:blast-eng-before names)
-  (if (null? names) (list) (cons (pad:blast-eng-calls (car names)) (pad:blast-eng-before (cdr names)))))
+                  (pad:blast-eng-calls (car names)))
+            (pad:blast-counts toks (cdr names)))))
 (define (pad:blast-eng-calls name)
   (try
     (let ((r (query:calls name)))
@@ -129,12 +117,9 @@
     ((null? xs) #t)
     ((member (car xs) ys) (pad:blast-subset? (cdr xs) ys))
     (#t #f)))
-;; same count, or (aura#4364) the engine added exactly the new sites
+;; the engine's call-site count is the Soft count
 (define (pad:blast-count-ok? c)
-  (let ((soft (cadr c)) (eng (caddr c)) (e0 (pad:nth c 3)) (new (pad:nth c 4)))
-    (and (>= eng 0)
-         (or (= soft eng)
-             (and (>= e0 0) (= (- eng e0) new))))))
+  (and (>= (caddr c) 0) (= (cadr c) (caddr c))))
 (define (pad:blast-counts-ok? cs)
   (cond
     ((null? cs) #t)
@@ -154,10 +139,10 @@
   (if (null? rows) (list) (cons (pad:blast-row-name L (car rows)) (pad:blast-row-names L (cdr rows)))))
 
 ;; The card: (names use-rows use-names counts grown dirty-now verdict)
-;; L1 = the page the KEEP would give; before = (dirty counts, engine
-;; call counts) taken before the transaction (pad:blast-before).
+;; L1 = the page the KEEP would give; before = (dirty counts) taken
+;; before the transaction (pad:blast-before).
 (define (pad:blast-before names)
-  (list (pad:blast-dirty-now) (pad:blast-eng-before names)))
+  (list (pad:blast-dirty-now)))
 (define (pad:blast-card ops L1 before)
   (set! *blast-cards* (+ *blast-cards* 1))
   (let* ((names (pad:robot-names ops))
@@ -166,7 +151,7 @@
          (uses (pad:blast-minus (pad:blast-sorted (pad:blast-rows L1 (pad:blast-all-points toks names)) (list))
                                 defs))
          (d0 (car before))
-         (counts (pad:blast-counts toks names (cadr before) ops))
+         (counts (pad:blast-counts toks names))
          (d1 (pad:blast-dirty-now))
          (grown (pad:blast-grown d1 d0))
          (dirty (pad:blast-dirty-names d1))
@@ -207,15 +192,13 @@
                            (if (> more 0) (string-append " and " (number->string more) " more") ""))))
       ". enter keeps, ctrl-z says no")))
 
-;; sites=name:soft/engine:+engine-added (engine total is stale after a
-;; rebind, aura#4364)
-;; BLAST names=hello.bye uses=6.7.11 sites=hello:3/4:+1.bye:2/2:+0 grown=hello.bye dirty=hello.bye verdict=agree
+;; sites=name:soft/engine
+;; BLAST names=hello.bye uses=6.7.11 sites=hello:3/3.bye:2/2 grown=hello.bye dirty=hello.bye verdict=agree
 (define (pad:blast-counts-str cs)
   (if (null? cs)
       ""
       (string-append (car (car cs)) ":" (number->string (cadr (car cs))) "/"
                      (number->string (caddr (car cs)))
-                     ":+" (number->string (- (caddr (car cs)) (pad:nth (car cs) 3)))
                      (if (null? (cdr cs)) "" ".")
                      (pad:blast-counts-str (cdr cs)))))
 (define (pad:blast-line card)

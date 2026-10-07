@@ -23,8 +23,8 @@
 ;; NO (AURA_MUTATE_TYPE_GATE=hard: (lambda () "wide") where indent adds
 ;; (tab-size)) heals the snapshot and says why.aura's kid reason.
 ;; The engine checks Soft's "used by" count with query:calls (taken
-;; before the transaction, aura#4364); a mismatch prints
-;; M11_RULES_DISAGREE.
+;; before the transaction; the count is right after a rebind too since
+;; aura#4364 was fixed); a mismatch prints M11_RULES_DISAGREE.
 ;; Rules act on the notebook face (pad:kr-line!) only, at human speed:
 ;; tab types (tab-size) spaces, the say line is cut to (say-max) letters.
 ;; Nothing here is on the pad's own key path (play.aura).
