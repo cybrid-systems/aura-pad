@@ -8,6 +8,49 @@ friendly reasons. The better score is stamped KEEP; the other is DROP.
 From M6 a thin C viewport draws the pad: Soft owns the editor and the
 HL/marks/kid words, C only blits Soft's `SNAP v1 pad` blocks.
 
+## Install & run
+
+Build and install once, then start the pad with one command, like
+`vi` or `emacs` (no script in between):
+
+```sh
+bash scripts/build_c.sh --install          # -> ~/.local (or: --install /opt/aura-pad, PREFIX=...)
+export PATH="$HOME/.local/bin:$PATH"       # if ~/.local/bin is not on PATH yet
+aura-pad hello.txt                         # opens hello.txt; a new page if it does not exist
+aura-pad                                   # no FILE: the play page, as before
+```
+
+The same install with CMake:
+`cmake -S c -B out/cmake && cmake --build out/cmake && cmake --install out/cmake`
+(default prefix `~/.local`; `-DCMAKE_INSTALL_PREFIX=...` to change it).
+It installs one binary, `bin/aura-pad`, and the pad's Soft files in
+`share/aura-pad/soft/pad/`.
+
+Keys: type to write, arrows to move. **ctrl-x ctrl-s** saves (a lone
+ctrl-s is still M9's "check", so saving uses the emacs pair).
+**ctrl-q** (or ctrl-x ctrl-c) quits; with unsaved changes the first
+press warns and the second quits. **ctrl-\** is the emergency exit
+(nothing is saved). The title shows the file name. Files the pad cannot
+hold byte for byte (longer than 72 columns, more than 18 lines, tabs or
+non-ASCII letters) open in look-only mode and are never written.
+
+How it starts: `aura-pad` is a small C program. It finds Aura (`$AURA_BIN`,
+`aura` on `PATH`, then the usual build dirs), sets `AURA_PATH` (from
+`$AURA_PATH`, `$AURA_HOME/lib`, or `lib/` next to the aura build),
+`AURA_PIPELINE_STRICT=0` and `AURA_SANDBOX=off`, and execs aura on
+`soft/pad/play.aura` directly. Soft reads and writes FILE
+(`read-file` / `write-file`); C only forwards keys and draws. The Soft
+files come from `$AURA_PAD_HOME`, else the installed share dir, else the
+source tree next to the binary. `aura-pad --where` shows what would run.
+Only when no aura runs natively (e.g. a build for a newer glibc) and
+docker is installed does it run that aura build inside the
+`ghcr.io/cybrid-systems/dev:v1.0.9` image, saying so in one line
+(`AURA_PAD_NO_DOCKER=1` turns this off; `AURA_SRC` / `AURA_PAD_IMAGE`
+pick the build dir / image). With no aura at all it says how to get one.
+
+中文：先装一次（`bash scripts/build_c.sh --install`），以后像 vi / emacs
+一样一条命令打开文件：`aura-pad hello.txt`。ctrl-x ctrl-s 保存，ctrl-q 退出。
+
 Requirements: [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md).
 Design: [`docs/DESIGN.md`](docs/DESIGN.md).
 Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md).
