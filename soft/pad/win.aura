@@ -370,9 +370,12 @@
 (define (pad:wn-map back)
   (string-append
     "Aura pad map\n"
-    "Type M-x, a command, then enter. This page is the whole game.\n"
+    "Type M-x, then a command. Space completes the word. Enter runs it.\n"
     "Your page is named " back ". M-x switch:" back " brings it back.\n"
     "find-file opens a file. A short name is enough.\n"
+    "ask QUESTION chats about this page. The answer opens on the chat page.\n"
+    "chat opens that page. rewrite HOW changes this page. u puts yours back.\n"
+    "The chat uses DeepSeek v4.1 flash.\n"
     "search finds text. ctrl-s finds the next. ctrl-r finds the previous. ctrl-g puts you back.\n"
     "gd jumps to where this name is born. space c d does that too.\n"
     "gD and space c D find every use. The line says 2/3 and the line. space c N goes back.\n"

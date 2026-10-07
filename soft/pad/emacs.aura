@@ -8,12 +8,16 @@
 ;;   M-x switch-buffer      jump to one of them
 ;;   ctrl-x ctrl-f / ctrl-b / b   the same three, from the ctrl-x prefix
 ;;   ctrl-g                 cancel. A search goes back to where it started.
+;;   M-x ask / chat / rewrite   talk to DeepSeek v4.1 flash (ai.aura)
 ;;   ctrl-r                 the previous match (n is the next one).
 ;;   alt-f / alt-b / alt-d  the next word, the previous word, delete the
 ;;                          word. One read must hold Esc and the letter.
 ;;   alt-< / alt->          top and bottom. One read holds Esc and the mark.
 ;;
 ;; An empty M-x line still runs the page (pad:vi-colon! keeps that).
+;; Space on the first word completes it (pad:em-complete-space!). A
+;; space after that word is the argument. Short aliases (ff, q, w) are
+;; not in the completion table; enter still accepts them.
 ;; Soft reserved: never bind quote. No while+set! (aura#4372). No
 ;; named let that closes over an outer local (aura#4353).
 
@@ -340,6 +344,147 @@
            (begin (set! *pl-say* "found") "vi-do"))))
     (#t (pad:vi-colon!))))
 
+;; --- M-x space completion ---------------------------------------------
+;; Emacs minibuffer-complete-word, one step, on the first word only.
+;; One match becomes that name plus a space. Several matches grow to
+;; the letters they share, and the status line lists them. A word that
+;; is already a whole command (layout, and also layout:story) takes a
+;; real space on the next press, so the rest can be an argument.
+;; Nothing that starts that way leaves the letters and says no command.
+
+(define *em-cmds*
+  (list
+   "ask"
+   "chat"
+   "delete-other-windows"
+   "delete-window"
+   "eval"
+   "find-file"
+   "flip"
+   "gptel"
+   "gptel-rewrite"
+   "gptel-send"
+   "help"
+   "layout"
+   "layout:beside"
+   "layout:book"
+   "layout:story"
+   "layout:undo"
+   "list-buffers"
+   "map"
+   "other-window"
+   "preview"
+   "preview:drop"
+   "preview:keep"
+   "preview:undo"
+   "quit"
+   "rewrite"
+   "run"
+   "save"
+   "search"
+   "split"
+   "split-horiz"
+   "story"
+   "story:cheer"
+   "story:grow"
+   "story:mood"
+   "story:shrink"
+   "story:undo"
+   "switch-buffer"
+   "switch-window"
+   "write"))
+
+(define (pad:em-hit? name pre)
+  (let ((pn (string-length pre)) (nn (string-length name)))
+    (and (> pn 0) (>= nn pn) (string=? (substring name 0 pn) pre))))
+
+(define (pad:em-hits names pre acc)
+  (if (null? names)
+      (reverse acc)
+      (pad:em-hits (cdr names) pre
+                   (if (pad:em-hit? (car names) pre)
+                       (cons (car names) acc)
+                       acc))))
+
+(define (pad:em-share a b i)
+  (let ((n (string-length a)) (m (string-length b)))
+    (if (or (>= i n) (>= i m) (not (= (string-ref a i) (string-ref b i))))
+        i
+        (pad:em-share a b (+ i 1)))))
+
+(define (pad:em-lcp names n)
+  (if (or (null? names) (null? (cdr names)))
+      n
+      (let ((k (pad:em-share (car names) (cadr names) 0)))
+        (pad:em-lcp (cdr names) (if (< k n) k n)))))
+
+(define (pad:em-names-join xs acc)
+  (cond
+    ((null? xs) acc)
+    ((string=? acc "") (pad:em-names-join (cdr xs) (car xs)))
+    (#t (pad:em-names-join (cdr xs) (string-append acc " " (car xs))))))
+
+(define (pad:em-has? names s)
+  (cond
+    ((null? names) #f)
+    ((string=? (car names) s) #t)
+    (#t (pad:em-has? (cdr names) s))))
+
+(define (pad:em-say-choices line hits)
+  (pad:vi-cut (string-append *vi-prompt* line "  (" (pad:em-names-join hits "") ")")))
+
+(define (pad:em-complete-space!)
+  (let ((line *vi-line*))
+    (cond
+      ((>= (string-index line " " 0) 0)
+       (set! *vi-line* (if (< (string-length line) 160)
+                           (string-append line " ")
+                           line))
+       (set! *pl-say* (string-append *vi-prompt* *vi-line*))
+       "vi-do")
+      ((string=? line "")
+       (set! *pl-say* (pad:em-say-choices "" *em-cmds*))
+       "vi-do")
+      (#t
+       (let ((hits (pad:em-hits *em-cmds* line (list))))
+         (cond
+           ((null? hits)
+            (set! *pl-say* (string-append "no command " line))
+            "vi-do")
+           ((null? (cdr hits))
+            (set! *vi-line* (string-append (car hits) " "))
+            (set! *pl-say* (string-append *vi-prompt* *vi-line*))
+            "vi-do")
+           (#t
+            (let* ((k (pad:em-lcp hits (string-length (car hits))))
+                   (grown (substring (car hits) 0 k)))
+              (cond
+                ((and (pad:em-has? hits line) (string=? grown line))
+                 (set! *vi-line* (string-append line " "))
+                 (set! *pl-say* (pad:em-say-choices *vi-line* hits))
+                 "vi-do")
+                ((> k (string-length line))
+                 (set! *vi-line* grown)
+                 (set! *pl-say* (pad:em-say-choices grown hits))
+                 "vi-do")
+                (#t
+                 (set! *pl-say* (pad:em-say-choices line hits))
+                 "vi-do"))))))))))
+
+;; ai.aura loads on the first chat command, not on a normal key.
+(define *ai-ready* #f)
+
+(define (pad:ai-word? w)
+  (or (string=? w "ask") (string=? w "chat") (string=? w "rewrite")
+      (string=? w "gptel") (string=? w "gptel-send") (string=? w "gptel-rewrite")))
+
+(define (pad:ai-dispatch! w rest)
+  (if (not *ai-ready*)
+      (load (string-append *pad-home* "/soft/pad/ai.aura")))
+  (if *ai-ready*
+      (pad:ai-run! w rest)
+      (begin (set! *pl-say* "the chat is not here yet") "vi-do")))
+
 (define (pad:em-command w rest mx)
   (cond
     ((or (string=? w "find-file") (string=? w "ff"))
@@ -352,6 +497,7 @@
      (if (> (string-length rest) 0)
          (begin (pad:em-search-start!) (set! *vi-line* rest) (pad:em-search-now!))
          (pad:em-search-start!)))
+    ((pad:ai-word? w) (pad:ai-dispatch! w rest))
     (#t (if mx #f #f))))
 
 ;; --- words ------------------------------------------------------------

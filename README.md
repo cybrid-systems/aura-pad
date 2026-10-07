@@ -53,6 +53,13 @@ under the cursor; **n** and **N** walk forward and back. **/** searches,
 and **ctrl-r** finds the previous match. **ctrl-a** and **ctrl-e** go to
 the ends of the line. **M-x search** finds text; ctrl-s finds the
 next match. **M-x find-file** opens a file.
+In **M-x**, space completes the command word (`fi` then space becomes
+`find-file `). A space after that word is the argument. See
+[`docs/tutorial.md`](docs/tutorial.md).
+**M-x ask** then some words chats about this page. The answer opens on
+the chat page. **M-x chat** opens that page. **M-x rewrite** then how
+you want it changed replaces the page, and **u** puts yours back. The
+chat is DeepSeek v4.1 flash.
 **M-x help** opens a page that is the map: split a page, move to the
 other one, close one. **ctrl-x 2** splits below, **ctrl-x 3** beside,
 **ctrl-x o** moves, **ctrl-x 0** closes this page, **ctrl-x 1** keeps
@@ -101,6 +108,10 @@ Alt-f / Alt-b / Alt-d 按词移动或删除。gd 跳到名字诞生的地方。
 gD 和空格 c D 找出每一处使用，状态行写出第几个和行号，并落到下一处。
 空格 c N 回到上一处。* 搜光标上的词，n 和 N 前后走。/ 搜索，ctrl-r 找上一处。
 ctrl-a 和 ctrl-e 到行首行尾。M-x search 搜文字，ctrl-s 找下一个。
+M-x ask 再写几个字，就和这一页聊天，回答开在 chat 页。M-x chat 打开那一页。
+M-x rewrite 再写想怎么改，会换掉这一页，u 把你的页换回来。聊天用的是 DeepSeek v4.1 flash。
+在 M-x 里按空格会补全命令词（打 `fi` 再按空格变成 `find-file `）。
+词后面的空格是参数。跟着做见 [`docs/tutorial.md`](docs/tutorial.md)。
 M-x help 打开一页说明：ctrl-x 2 在下面分屏，ctrl-x 3 在旁边分屏，
 ctrl-x o 换到另一页，ctrl-x 0 关掉这一页，ctrl-x 1 只留这一页。
 M-x layout 让三种画面比赛（故事占满、旁边一页帮手、或者叠成一本），
@@ -112,6 +123,7 @@ flip 翻到下一页。story:undo 把旧画面换回来。
 画面跟着终端走，长文件可以滚动看完。
 出错看 `~/.local/state/aura-pad/aura-pad.log`（会轮转）。
 
+Tutorial: [`docs/tutorial.md`](docs/tutorial.md).
 Requirements: [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md).
 Design: [`docs/DESIGN.md`](docs/DESIGN.md).
 Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md).

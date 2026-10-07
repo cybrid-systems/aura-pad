@@ -1,0 +1,23 @@
+;; What set-code does, and what it does not. Run:
+;;   AURA_PATH=<aura>/lib AURA_PIPELINE_STRICT=0 AURA_SANDBOX=off \
+;;     aura docs/examples/try-set-code.aura
+;; Soft reserved: never bind quote.
+(define (show tag v)
+  (display tag)
+  (display " ")
+  (display v)
+  (newline))
+
+(show "SET" (set-code "(define (hello x) (+ x 1))\n(define (main) (hello 3))\n#t\n"))
+(show "EVAL" (eval-current))
+(show "MAIN" (main))
+(show "CODE" (query:code))
+
+;; eval binds a name in Soft. It does not replace the workspace.
+(eval "(define (side) 7)")
+(show "SIDE" (side))
+(show "CODE2" (query:code))
+
+;; A page that does not parse comes back as a pair. The old program stays.
+(show "BAD" (set-code "(((("))
+(show "STILL" (main))

@@ -78,6 +78,14 @@
 (define (pad:em-search-next!) (pad:em-search-now!))
 (define (pad:em-enter!) (pad:vi-colon!))
 (define (pad:em-command w rest mx) #f)
+;; emacs.aura replaces this. Before that file loads, space in M-x is
+;; just a space, so :q still works with vi.aura alone.
+(define (pad:em-complete-space!)
+  (if (< (string-length *vi-line*) 160)
+      (set! *vi-line* (string-append *vi-line* " "))
+      0)
+  (set! *pl-say* (string-append *vi-prompt* *vi-line*))
+  "vi-do")
 (define (pad:wn-on-cx! b) #f)
 (define (pad:wn-on-line! line) #f)
 (define (pad:em-abort-point!)
@@ -403,20 +411,25 @@
   (set! *vi-prompt* (if mx "M-x " ": "))
   (set! *pl-say*
         (if mx
-            "M-x - help opens the map, enter runs this page, find-file opens, search finds text, layout races pages, preview asks the helper, story grows the book"
+            "M-x - space completes the word, enter runs it. help opens the map, find-file opens, ask chats"
             ": - eval runs this page, w saves, q quits, M-x help opens the map"))
   "vi-do")
 
 (define (pad:vi-type! b)
-  (if (< (string-length *vi-line*) 160)
-      (set! *vi-line* (string-append *vi-line* (list->string (list b))))
-      0)
-  (cond
-    ((string=? *vi-op* "s") (pad:em-search-now!))
-    ((or (string=? *vi-op* "find") (string=? *vi-op* "buf")) (pad:em-hint!))
-    (#t
-     (set! *pl-say* (string-append *vi-prompt* *vi-line*))
-     "vi-do")))
+  ;; M-x space completes the command word. A space after that word, and
+  ;; a space in the colon prompt, stay ordinary characters.
+  (if (and (= b 32) *vi-mx* (string=? *vi-op* ":"))
+      (pad:em-complete-space!)
+      (begin
+        (if (< (string-length *vi-line*) 160)
+            (set! *vi-line* (string-append *vi-line* (list->string (list b))))
+            0)
+        (cond
+          ((string=? *vi-op* "s") (pad:em-search-now!))
+          ((or (string=? *vi-op* "find") (string=? *vi-op* "buf")) (pad:em-hint!))
+          (#t
+           (set! *pl-say* (string-append *vi-prompt* *vi-line*))
+           "vi-do")))))
 
 (define (pad:vi-bs!)
   (let ((n (string-length *vi-line*)))

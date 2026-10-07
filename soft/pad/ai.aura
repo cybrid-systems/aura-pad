@@ -1,0 +1,321 @@
+;; aura-pad chat, in the shape of gptel.
+;; Loaded on the first M-x ask / chat / rewrite. A normal key never
+;; loads this file. The model is DeepSeek-V4.1-Flash (API id
+;; deepseek-flash). The key is read from $HOME/code/keys/deepseek, or
+;; from DEEPSEEK_API_KEY when that file is missing. It is never written
+;; into a page, a SAY line, or the log.
+;;
+;;   M-x ask QUESTION     gptel-send. The page is the context. The
+;;                        answer opens on the chat page.
+;;   M-x chat             gptel. Open that page.
+;;   M-x rewrite HOW      gptel-rewrite. Replace this page. u puts the
+;;                        old page back.
+;;   M-x gptel / gptel-send / gptel-rewrite   the same three.
+;;
+;; *ai-fake* is a string only in tests. A real call uses http-post.
+;; Soft reserved: never bind quote. No while+set! (aura#4372).
+
+(define *ai-ready* #t)
+(define *ai-fake* #f)
+(define *ai-hist* (list))
+(define *ai-http* #f)
+(define *ai-model* "deepseek-flash")
+(define *ai-url* "https://api.deepseek.com/chat/completions")
+
+(define (pad:ai-clip s n)
+  (if (and (string? s) (> (string-length s) n))
+      (substring s 0 n)
+      (if (string? s) s "")))
+
+(define (pad:ai-trim-end s)
+  (let ((n (string-length s)))
+    (if (= n 0)
+        ""
+        (let ((c (string-ref s (- n 1))))
+          (if (or (= c 10) (= c 13) (= c 32))
+              (pad:ai-trim-end (substring s 0 (- n 1)))
+              s)))))
+
+(define (pad:ai-one s)
+  (let ((i (if (string? s) (string-index s "\n" 0) -1)))
+    (pad:ai-trim-end (if (< i 0) (if (string? s) s "") (substring s 0 i)))))
+
+;; The page draws bytes 32..126. Keep newlines. Drop anything else.
+;; Walk 64 bytes per call so a long reply does not grow the stack.
+(define (pad:ai-vis c)
+  (cond
+    ((and (>= c 32) (<= c 126)) (list->string (list c)))
+    ((= c 10) "\n")
+    ((= c 9) " ")
+    (#t "")))
+
+(define (pad:ai-chunk s i end acc)
+  (if (>= i end)
+      acc
+      (pad:ai-chunk s (+ i 1) end
+                    (string-append acc (pad:ai-vis (string-ref s i))))))
+
+(define (pad:ai-blocks s i n)
+  (if (>= i n)
+      ""
+      (let ((j (if (> (+ i 64) n) n (+ i 64))))
+        (string-append (pad:ai-chunk s i j "") (pad:ai-blocks s j n)))))
+
+(define (pad:ai-plain-s s)
+  (if (string? s)
+      (pad:ai-blocks s 0 (string-length (pad:ai-clip s 2000)))
+      ""))
+
+(define (pad:ai-unfence-end s)
+  (let ((n (string-length s)))
+    (cond
+      ((and (>= n 4) (string=? (substring s (- n 4) n) "```\n"))
+       (substring s 0 (- n 4)))
+      ((and (>= n 3) (string=? (substring s (- n 3) n) "```"))
+       (pad:ai-trim-end (substring s 0 (- n 3))))
+      (#t s))))
+
+(define (pad:ai-unfence s)
+  (if (and (>= (string-length s) 3) (string=? (substring s 0 3) "```"))
+      (let ((i (string-index s "\n" 0)))
+        (if (< i 0) s (pad:ai-unfence-end (substring s (+ i 1) (string-length s)))))
+      s))
+
+(define (pad:ai-drop xs n)
+  (if (or (<= n 0) (null? xs)) xs (pad:ai-drop (cdr xs) (- n 1))))
+
+(define (pad:ai-keep xs n)
+  (let ((k (length xs)))
+    (if (<= k n) xs (pad:ai-drop xs (- k n)))))
+
+(define (pad:ai-shown t)
+  (if (>= (length t) 3) (list-ref t 2) (list-ref t 1)))
+
+(define (pad:ai-who role)
+  (if (string=? role "user") "you" "chat"))
+
+(define (pad:ai-render-acc xs acc)
+  (if (null? xs)
+      acc
+      (let ((block (string-append (pad:ai-who (car (car xs))) ": "
+                                  (pad:ai-shown (car xs)) "\n")))
+        (pad:ai-render-acc (cdr xs)
+          (if (string=? acc "")
+              block
+              (string-append acc "\n" block))))))
+
+(define (pad:ai-render)
+  (if (null? *ai-hist*)
+      "Ask with M-x ask and your words.\n"
+      (pad:ai-render-acc *ai-hist* "")))
+
+(define (pad:ai-msg-list xs)
+  (if (null? xs)
+      (list)
+      (cons (hash "role" (car (car xs)) "content" (list-ref (car xs) 1))
+            (pad:ai-msg-list (cdr xs)))))
+
+(define (pad:ai-messages sys hist user)
+  (append (list (hash "role" "system" "content" sys))
+          (pad:ai-msg-list hist)
+          (list (hash "role" "user" "content" user))))
+
+(define (pad:ai-win?)
+  (try (if (string? *wn-live*) #t #f) (catch (e) #f)))
+
+(define (pad:ai-ro?)
+  (try (if *pf-ro* #t #f) (catch (e) #f)))
+
+(define (pad:ai-live)
+  (if (pad:ai-win?)
+      (begin
+        (pad:wn-ensure!)
+        *wn-live*)
+      ""))
+
+(define (pad:ai-set-text! src)
+  (let* ((st *pl-st*)
+         (L2 (pad:v-lines src))
+         (U (pad:push-undo (list-ref st 5) (list (car st) (cadr st) (caddr st)))))
+    (set! *pl-st* (list L2 0 0 (list-ref st 3) (list) U))
+    (pad:lc-reset!)
+    0))
+
+(define (pad:ai-show! say)
+  (let* ((text (pad:ai-render))
+         (lines (pad:v-lines text)))
+    (cond
+      ((pad:ai-win?)
+       (pad:wn-ensure!)
+       (if (string=? *wn-live* "chat")
+           (begin
+             (set! *pl-st* (list lines 0 0
+                                 (list-ref *pl-st* 3) (list) (list-ref *pl-st* 5)))
+             (pad:lc-reset!))
+           (pad:wn-show! "chat" lines 0 0 0 0)))
+      (#t (pad:ai-set-text! text)))
+    (set! *pl-say* (pad:vi-cut say))
+    "vi-do"))
+
+;; *ai-key* is a string only in tests. A real call reads the key file.
+(define *ai-key* #f)
+
+(define (pad:ai-key)
+  (if (string? *ai-key*)
+      *ai-key*
+      (let* ((home (getenv "HOME"))
+             (path (if (and (string? home) (> (string-length home) 0))
+                       (string-append home "/code/keys/deepseek")
+                       ""))
+             (raw (if (string=? path "") #f (read-file path))))
+        (if (and (string? raw) (> (string-length (pad:ai-one raw)) 0))
+            (pad:ai-one raw)
+            (let ((env (getenv "DEEPSEEK_API_KEY")))
+              (if (and (string? env) (> (string-length (pad:ai-one env)) 0))
+                  (pad:ai-one env)
+                  ""))))))
+
+(define (pad:ai-model)
+  (let ((env (getenv "PAD_AI_MODEL")))
+    (if (and (string? env) (> (string-length env) 0)) env *ai-model*)))
+
+(define (pad:ai-install-http!)
+  (if *ai-http*
+      #t
+      (begin
+        (try (require "std/net") (catch (e) 0))
+        (set! *ai-http*
+              (try (if (procedure? http-post) #t #f) (catch (e) #f)))
+        *ai-http*)))
+
+(define (pad:ai-pick raw)
+  (if (not (string? raw))
+      (list "no" "the chat cannot reach out yet")
+      (if (= (string-length raw) 0)
+          (list "no" "the chat cannot reach out yet")
+          (try
+            (let ((data (json-parse raw)))
+              (if (not (hash? data))
+                  (list "no" "the chat could not answer")
+                  (let ((err (hash-ref data "error")))
+                    (if (hash? err)
+                        (list "no" "the chat could not answer")
+                        (let ((choices (hash-ref data "choices")))
+                          (if (not (pair? choices))
+                              (list "no" "the chat had nothing to say")
+                              (let* ((msg (hash-ref (car choices) "message"))
+                                     (content (if (hash? msg) (hash-ref msg "content") #f)))
+                                (if (and (string? content) (> (string-length content) 0))
+                                    (list "ok" content)
+                                    (list "no" "the chat had nothing to say")))))))))
+            (catch (e) (list "no" "the chat could not answer"))))))
+
+(define (pad:ai-body sys hist user)
+  (hash "model" (pad:ai-model)
+        "messages" (pad:ai-messages sys hist user)
+        "thinking" (hash "type" "disabled")
+        "reasoning_effort" "none"
+        "temperature" 0.3
+        "max_tokens" 512))
+
+(define (pad:ai-http! sys hist user)
+  (let ((key (pad:ai-key)))
+    (if (string=? key "")
+        (list "no" "the chat has no key yet")
+        (if (not (pad:ai-install-http!))
+            (list "no" "the chat cannot reach out yet")
+            (let* ((body (json-encode (pad:ai-body sys hist user)))
+                   (raw (try (http-post *ai-url* body key) (catch (e) ""))))
+              (pad:ai-pick raw))))))
+
+(define (pad:ai-complete sys hist user)
+  (if (string? *ai-fake*)
+      (list "ok" *ai-fake*)
+      (pad:ai-http! sys hist user)))
+
+(define (pad:ai-remember! user-text shown answer)
+  (set! *ai-hist*
+        (pad:ai-keep
+         (append *ai-hist*
+                 (list (list "user" user-text shown)
+                       (list "assistant" answer answer)))
+         8))
+  0)
+
+(define *ai-sys-ask*
+  "You help a child in aura-pad. The page shows only plain English letters, digits, and punctuation. Answer in a few short sentences of plain English.")
+
+(define *ai-sys-rewrite*
+  "You help a child rewrite a page in aura-pad. The page shows only plain English letters, digits, and punctuation. Return only the new page text. No explanation and no fence.")
+
+(define (pad:ai-page)
+  (if (string=? (pad:ai-live) "chat")
+      ""
+      (pad:ai-clip (pad:play-src) 1500)))
+
+(define (pad:ai-ask! q)
+  (let ((page (pad:ai-page)))
+    (if (and (string=? q "") (string=? page ""))
+        (begin (set! *pl-say* "tell the chat what to ask") "vi-do")
+        (let* ((shown (if (string=? q "") "explain this page" q))
+               (user (if (string=? page "")
+                         shown
+                         (string-append shown "\n\nThe page says:\n" page)))
+               (back (pad:ai-live))
+               (r (pad:ai-complete *ai-sys-ask* *ai-hist* user)))
+          (if (not (string=? (car r) "ok"))
+              (begin (set! *pl-say* (cadr r)) "vi-do")
+              (let ((ans (pad:ai-plain-s (cadr r))))
+                (if (string=? ans "")
+                    (begin (set! *pl-say* "the chat had nothing to say") "vi-do")
+                    (begin
+                      (pad:ai-remember! user shown ans)
+                      (pad:ai-show!
+                       (if (or (string=? back "") (string=? back "chat"))
+                           "the chat answered"
+                           (string-append "the chat answered. M-x switch:"
+                                          back " goes back")))))))))))
+
+(define (pad:ai-chat!)
+  (pad:ai-show!
+   (if (null? *ai-hist*)
+       "this page is the chat. M-x ask, then your words"
+       "this page is the chat")))
+
+(define (pad:ai-rewrite! how)
+  (let ((page (pad:play-src)))
+    (cond
+      ((string=? (pad:ai-live) "chat")
+       (set! *pl-say* "switch to your page to rewrite it")
+       "vi-do")
+      ((pad:ai-ro?)
+       (set! *pl-say* "this page is look only")
+       "vi-do")
+      ((string=? how "")
+       (set! *pl-say* "tell the chat how to change this page")
+       "vi-do")
+      ((string=? page "")
+       (set! *pl-say* "the page is empty")
+       "vi-do")
+      (#t
+       (let* ((user (string-append "Change the page this way: " how
+                                   "\n\n" (pad:ai-clip page 1500)))
+              (r (pad:ai-complete *ai-sys-rewrite* (list) user)))
+         (if (not (string=? (car r) "ok"))
+             (begin (set! *pl-say* (cadr r)) "vi-do")
+             (let ((ans (pad:ai-unfence (pad:ai-plain-s (cadr r)))))
+               (if (string=? ans "")
+                   (begin (set! *pl-say* "the chat had nothing to say") "vi-do")
+                   (begin
+                     (pad:ai-set-text! ans)
+                     (set! *pl-say* "the chat rewrote this page. press u to put yours back")
+                     "vi-do")))))))))
+
+(define (pad:ai-run! w rest)
+  (cond
+    ((or (string=? w "ask") (string=? w "gptel-send")) (pad:ai-ask! rest))
+    ((string=? w "gptel")
+     (if (string=? rest "") (pad:ai-chat!) (pad:ai-ask! rest)))
+    ((or (string=? w "chat")) (pad:ai-chat!))
+    ((or (string=? w "rewrite") (string=? w "gptel-rewrite")) (pad:ai-rewrite! rest))
+    (#t #f)))
