@@ -15,6 +15,8 @@
 ;; require rebound string-join, put the pad copy back and do not call
 ;; the rebound one (std/string's join hangs, aura#4372).
 (load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(set! *pad-def-lookup* pad:define-lookup)
 (if (not (eq? string-join *read-join*))
     (set! string-join *read-join*)
     0)

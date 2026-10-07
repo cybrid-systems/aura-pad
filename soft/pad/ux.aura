@@ -29,3 +29,109 @@
         (set! *pl-say* "not checked yet")
         0)
       0))
+
+;; Page the empty sentence checks. A test may set these. The editor
+;; buffer is used when the test did not.
+(define *ux-lines* (list))
+(define *ux-point* 0)
+
+(define (pad:ux-nth xs i)
+  (if (= i 0) (car xs) (pad:ux-nth (cdr xs) (- i 1))))
+
+(define (pad:ux-page)
+  (if (pair? *ux-lines*)
+      *ux-lines*
+      (try (pad:es-L *pl-st*) (catch (e) (list)))))
+
+;; Empty sentence is check. Any other sentence waits for its own step.
+(define (pad:say-intent line)
+  (if (string=? line "")
+      (list "check" "")
+      (list "later" line)))
+
+(define (pad:ux-find name rows)
+  (cond
+    ((null? rows) #f)
+    ((string=? name (car (car rows))) (car rows))
+    (#t (pad:ux-find name (cdr rows)))))
+
+(define (pad:ux-on-line line rows)
+  (cond
+    ((null? rows) #f)
+    ((= line (pad:ux-nth (car rows) 2)) (car rows))
+    (#t (pad:ux-on-line line (cdr rows)))))
+
+(define (pad:ux-hit? p pts)
+  (cond
+    ((null? pts) #f)
+    ((and (number? (car pts)) (= p (car pts))) #t)
+    (#t (pad:ux-hit? p (cdr pts)))))
+
+;; True when point sits on the birth token, not only on its first column.
+(define (pad:ux-at-def? p name L row)
+  (let ((tok (pad:sym-tok-at (pad:v-src L) p)))
+    (and tok
+         (string=? (pad:ux-nth tok 3) name)
+         (pad:ux-hit? (cadr tok) (pad:ux-nth row 5)))))
+
+;; Cache only. Does not call define-lookup and does not set-code.
+(define (pad:ux-say-of row at-def)
+  (let ((name (car row))
+        (line (number->string (pad:ux-nth row 2)))
+        (uses (number->string (pad:ux-nth row 4))))
+    (if at-def
+        (string-append name " born line " line ", used " uses)
+        (string-append name " used here, born line " line))))
+
+(define (pad:ux-say-at)
+  (let ((rows *read-mean*)
+        (L (pad:ux-page))
+        (p *ux-point*))
+    (if (null? rows)
+        *pl-say*
+        (let ((name (pad:sym-at (pad:v-src L) p))
+              (line (+ (car (pad:v-linecol L p)) 1)))
+          (let ((row (if (string=? name "")
+                         (pad:ux-on-line line rows)
+                         (let ((hit (pad:ux-find name rows)))
+                           (if hit hit (pad:ux-on-line line rows))))))
+            (if (not row)
+                *pl-say*
+                (begin
+                  (set! *pl-say*
+                        (pad:ux-say-of row (if (string=? name "")
+                                               #t
+                                               (pad:ux-at-def? p name L row))))
+                  *pl-say*)))))))
+
+(define (pad:ux-arrow! d)
+  (set! *ux-point* (+ *ux-point* d))
+  (if (< *ux-point* 0) (set! *ux-point* 0) 0)
+  (pad:ux-say-at)
+  0)
+
+(define (pad:ux-check!)
+  (if (not *read-ready*)
+      (load (string-append *pad-home* "/soft/pad/read.aura"))
+      0)
+  (if *read-ready*
+      (begin
+        (if (not *read-done*) (pad:read-load!) 0)
+        (pad:read-check! (pad:ux-page)))
+      0))
+
+;; Empty sentence Enter. Arrows stay on pad:ux-arrow! / pad:ux-say-at.
+(define (pad:say-run!)
+  (if (not (pad:ux-on?))
+      0
+      (let ((intent (car (pad:say-intent *ux-line*))))
+        (if (string=? intent "check")
+            (begin
+              (pad:ux-check!)
+              (if (string=? *read-status* "checked")
+                  (pad:ux-say-at)
+                  (set! *pl-say* "aura could not read this page, keep typing"))
+              *pl-say*)
+            (begin
+              (set! *pl-say* "aura cannot change this page yet")
+              *pl-say*)))))

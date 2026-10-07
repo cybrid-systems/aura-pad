@@ -12,6 +12,8 @@
 (load (string-append *pad-home* "/soft/pad/read.aura"))
 (pad:read-load!)
 (load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(set! *pad-def-lookup* pad:define-lookup)
 (if (not (eq? string-join *read-join*))
     (set! string-join *read-join*)
     0)

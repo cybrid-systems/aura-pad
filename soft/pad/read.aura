@@ -23,6 +23,9 @@
 (define *read-status* "none")
 (define *read-missing* "none")
 (define *read-extra* "none")
+;; (name id line col uses points). line is 1-based. uses may be 0.
+;; Filled in the child, copied to the root after the switch.
+(define *read-mean* (list))
 
 (define (pad:read-bool b)
   (if b "true" "false"))
@@ -201,25 +204,83 @@
                             (pad:read-log-diff! miss extra)
                             0)))))))))
 
+;; query:ref-counts is the parent count. On this commit a define inside
+;; begin reports 1 even when nothing calls it. The sentence's used count
+;; is query:calls, so an alias can say used 0.
+(define (pad:read-mean-refs id)
+  (if (< id 0)
+      0
+      (let ((u (pad:q-ref-counts id)))
+        (if (number? u) u 0))))
+
+(define (pad:read-calls name)
+  (try
+    (let ((r (query:calls name)))
+      (cond
+        ((pad:eng-err? r) -1)
+        ((null? r) 0)
+        ((pair? r) (length r))
+        (#t -1)))
+    (catch (e)
+      (if (pad:unbound-msg? e) "gap-calls" -1))))
+
+;; One cache row: (name id line col calls points refs).
+;; "gap" means define-lookup is unbound. "gap-calls" means query:calls is.
+;; points come from pad:defs-for while this child is still current.
+(define (pad:read-mean-row name toks src L)
+  (let ((look (pad:read-lookup name)))
+    (if (string? look)
+        "gap"
+        (let ((calls (pad:read-calls name)))
+          (if (string? calls)
+              calls
+              (let ((id (if (and (pair? look) (pair? (car look))
+                                 (number? (car (car look))))
+                            (car (car look))
+                            -1))
+                    (pts (pad:read-plain (pad:defs-for toks src name))))
+                (let ((lc (if (and (pair? pts) (number? (car pts)))
+                              (pad:v-linecol L (car pts))
+                              (list 0 0))))
+                  (list name id (+ (car lc) 1) (cadr lc)
+                        calls pts (pad:read-mean-refs id)))))))))
+
+(define (pad:read-mean! names toks src L)
+  (if (null? names)
+      (list)
+      (let ((row (pad:read-mean-row (car names) toks src L)))
+        (if (string? row)
+            row
+            (let ((rest (pad:read-mean! (cdr names) toks src L)))
+              (if (string? rest) rest (cons row rest)))))))
+
 (define (pad:read-gather! c L n0 e0 code0 t0)
   (let ((look (pad:read-lookup "hello")))
     (if (string? look)
         (begin
           (pad:read-back! c n0 e0 #t)
           (pad:read-note! "GAPS define-lookup"))
-        (if (not (pair? look))
-            (begin
-              (pad:read-back! c n0 e0 #t)
-              (pad:read-note! "READ miss hello"))
-            (let ((cache (list look
-                               (pad:read-plain (pad:q-defines))
-                               (pad:read-plain (pad:q-defuse "hello"))
-                               (pad:read-plain (pad:q-node-types))
-                               (pad:read-refs look)))
-                  (diff (pad:read-diff L)))
-              (pad:read-back! c n0 e0 #t)
-              (set! *read-cache* cache)
-              (pad:read-finish! code0 t0 (car diff) (cadr diff)))))))
+        (let* ((src (pad:v-src L))
+               (toks (pad:hl-tokens src))
+               (cache (list look
+                            (pad:read-plain (pad:q-defines))
+                            (pad:read-plain (pad:q-defuse "hello"))
+                            (pad:read-plain (pad:q-node-types))
+                            (pad:read-refs look)))
+               (diff (pad:read-diff L))
+               (mean (pad:read-mean! (pad:ws-soft-defs toks) toks src L)))
+          (if (string? mean)
+              (begin
+                (pad:read-back! c n0 e0 #t)
+                (pad:read-note!
+                  (if (string=? mean "gap-calls")
+                      "GAPS query:calls"
+                      "GAPS define-lookup")))
+              (begin
+                (pad:read-back! c n0 e0 #t)
+                (set! *read-cache* cache)
+                (set! *read-mean* mean)
+                (pad:read-finish! code0 t0 (car diff) (cadr diff))))))))
 
 (define (pad:read-switched! c L n0 e0 code0 t0)
   (try (workspace :switch c) (catch (e) #f))

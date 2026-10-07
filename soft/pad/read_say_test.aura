@@ -1,0 +1,81 @@
+;; Step 8. Empty sentence Enter shows the cached birth line.
+;; used 0 is a real sentence. Arrows do not set-code.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+(define *pl-say* "")
+(define *read-ready* #f)
+(define *read-frame* #f)
+(define *pad-def-lookup* #f)
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+(load (string-append *pad-home* "/soft/pad/read.aura"))
+(pad:read-load!)
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(set! *pad-def-lookup* pad:define-lookup)
+(if (not (eq? string-join *read-join*))
+    (set! string-join *read-join*)
+    0)
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define (field-of name rows i)
+  (cond
+    ((null? rows) -1)
+    ((string=? name (car (car rows))) (pad:ux-nth (car rows) i))
+    (#t (field-of name (cdr rows) i))))
+
+(define (run-page tag src)
+  (set! *ux-line* "")
+  (set! *ux-lines* (pad:v-lines src))
+  (set! *ux-point* 8)
+  (let ((n0 *ws-set-code-n*)
+        (src0 (pad:v-src *ux-lines*)))
+    (say (string-append "PAGE " tag))
+    (pad:say-run!)
+    (say (string-append "CHECK " tag "_status=" *read-status*))
+    (say (string-append "CHECK " tag "_say=" *pl-say*))
+    (say (string-append "CHECK " tag "_set="
+                        (number->string (- *ws-set-code-n* n0))))
+    (say (string-append "CHECK " tag "_src="
+                        (if (string=? (pad:v-src *ux-lines*) src0) "same" "changed")))
+    (let ((n1 *ws-set-code-n*)
+          (say1 *pl-say*))
+      (pad:ux-arrow! 1)
+      (pad:ux-arrow! 1)
+      (pad:ux-arrow! 1)
+      (pad:ux-arrow! 1)
+      (say (string-append "CHECK " tag "_arrows="
+                          (number->string (- *ws-set-code-n* n1))))
+      (say (string-append "CHECK " tag "_kept="
+                          (if (string=? *pl-say* say1) "yes" "no"))))
+    0))
+
+(if (not (pad:ux-on?))
+    (begin
+      (set! *ux-line* "")
+      (set! *ux-lines*
+            (pad:v-lines "(define (hello x) (+ x 1))\n(define (main) (hello 3))"))
+      (set! *ux-point* 8)
+      (let ((n0 *ws-set-code-n*)
+            (say0 *pl-say*))
+        (pad:say-run!)
+        (say (string-append "CHECK off_set="
+                            (number->string (- *ws-set-code-n* n0))))
+        (say (if (string=? *pl-say* say0) "CHECK off_say=same" "CHECK off_say=changed"))))
+    (begin
+      (say "CHECK flag=on")
+      (run-page "hello"
+                "(define (hello x) (+ x 1))\n(define (main) (hello 3))")
+      (say (string-append "CHECK hello_uses="
+                          (number->string (field-of "hello" *read-mean* 4))))
+      (say (string-append "CHECK hello_refs="
+                          (number->string (field-of "hello" *read-mean* 6))))
+      (run-page "alias" "(define tcp-connect tcp-connect)")
+      (say (string-append "CHECK alias_uses="
+                          (number->string (field-of "tcp-connect" *read-mean* 4))))))
