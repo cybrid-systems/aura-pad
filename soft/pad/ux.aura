@@ -1,7 +1,31 @@
-;; Sentence-line flag. This file only answers whether the flag is on.
-;; The line, the keys, and the workspace come in later steps.
+;; Sentence line. The flag chooses the frame. Typing the line is later.
 ;; Soft reserved: never bind quote.
 
 (define (pad:ux-on?)
   (let ((v (getenv "PAD_SENTENCE")))
     (and (string? v) (string=? v "1"))))
+
+;; Words typed on the sentence line. Empty until a later step reads keys.
+(define *ux-line* "")
+
+(define (pad:ux-ends? name suf)
+  (let ((n (string-length name))
+        (m (string-length suf)))
+    (and (>= n m)
+         (string=? (substring name (- n m) n) suf))))
+
+(define (pad:ux-kind name)
+  (if (or (pad:ux-ends? name ".story") (pad:ux-ends? name ".txt"))
+      "story"
+      "aura"))
+
+;; File frame only. No file keeps today's legend and SAY.
+(define (pad:ux-chrome!)
+  (if (and (pad:ux-on?) *pf-on*)
+      (begin
+        (set! *pl-title*
+              (string-append *pf-name* "  " (pad:ux-kind *pf-name*) "  new"))
+        (set! *view-legend* (string-append "> " *ux-line*))
+        (set! *pl-say* "not checked yet")
+        0)
+      0))
