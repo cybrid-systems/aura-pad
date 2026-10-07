@@ -374,6 +374,8 @@
     "Your page is named " back ". M-x switch:" back " brings it back.\n"
     "find-file opens a file. A short name is enough.\n"
     "search finds text. ctrl-s finds the next. ctrl-g puts you back.\n"
+    "gd jumps to where this name is born. space c d does that too.\n"
+    "gD and space c D find every use and land on the next one.\n"
     "list-buffers names open pages. switch-buffer jumps to one.\n"
     "split opens another page under this one.\n"
     "split-horiz opens another page beside this one.\n"

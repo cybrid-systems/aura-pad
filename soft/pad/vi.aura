@@ -7,7 +7,9 @@
 ;;   x / X delete a letter, dd deletes the line, D deletes to the end
 ;;   of the line (it does not join), yy copies the line, p pastes.
 ;;   u takes the last edit back. 0 / $ go to the ends of the line,
-;;   gg / G to the top and the bottom. w / b move by words.
+;;   gg / G to the top and the bottom. gd jumps to where a name is born.
+;;   gD and space c D find every use and land on the next one.
+;;   w / b move by words.
 ;;   I / A / o / O open insert at the start, the end, below, above.
 ;;   r replaces the letter under the cursor.
 ;;   : opens a command line: e / eval / run runs the page, w saves,
@@ -690,6 +692,40 @@
   (or (string=? *vi-op* ":") (string=? *vi-op* "find")
       (string=? *vi-op* "buf") (string=? *vi-op* "s")))
 
+;; Next reference start after pt, or -1 to wrap to the first.
+(define (pad:vi-next-ref refs pt)
+  (cond
+    ((null? refs) -1)
+    ((> (car refs) pt) (car refs))
+    (#t (pad:vi-next-ref (cdr refs) pt))))
+
+(define (pad:vi-jump! cmd)
+  (pad:play-jump! cmd)
+  "vi-do")
+
+;; Doom SPC c D / gD: every use of the name under the cursor. The count
+;; stays on the status line. The cursor lands on the next use, then wraps.
+(define (pad:vi-refs!)
+  (let* ((src (pad:play-src))
+         (pt (pad:play-point))
+         (toks (pad:lc-toks (pad:es-L *pl-st*)))
+         (name (pad:sym-at-in toks pt))
+         (r (pad:find-refs-cmd-in (pad:js src pt *pl-stack*) toks)))
+    (if (not (string=? (car r) "ok"))
+        (pad:play-reject! (car r))
+        (let* ((refs (list-ref r 3))
+               (n (length refs))
+               (nxt (pad:vi-next-ref refs pt))
+               (dest (if (< nxt 0) (car refs) nxt)))
+          (if (= dest pt)
+              0
+              (begin
+                (set! *pl-stack* (cons pt *pl-stack*))
+                (pad:play-move-to! dest)))
+          (pad:play-ok!
+           (string-append name " is used " (number->string n) " times"))))
+    "vi-do"))
+
 (define (pad:vi-op-byte b)
   (cond
     ((pad:vi-prompt?)
@@ -709,7 +745,22 @@
      (if (= b 121) (pad:vi-act! "yy") (pad:vi-act! "y-hint")))
     ((string=? *vi-op* "g")
      (set! *vi-op* "")
-     (if (= b 103) "bob" (pad:vi-redo! b)))
+     (cond
+       ((= b 103) "bob")
+       ((= b 100) (pad:vi-jump! "goto-def"))
+       ((= b 68) (pad:vi-refs!))
+       (#t (pad:vi-redo! b))))
+    ((string=? *vi-op* "spc")
+     (set! *vi-op* "")
+     (if (= b 99)
+         (pad:vi-pend! "spc-c" "D finds every use")
+         (pad:vi-redo! b)))
+    ((string=? *vi-op* "spc-c")
+     (set! *vi-op* "")
+     (cond
+       ((= b 68) (pad:vi-refs!))
+       ((= b 100) (pad:vi-jump! "goto-def"))
+       (#t (pad:vi-redo! b))))
     ((string=? *vi-op* "r")
      (set! *vi-op* "")
      (if (and (>= b 32) (<= b 126))
@@ -780,7 +831,8 @@
     ((= b 117) "undo")
     ((= b 48) "home")
     ((= b 36) "end")
-    ((= b 103) (pad:vi-pend! "g" "g - press g again to go to the top"))
+    ((= b 103) (pad:vi-pend! "g" "g - g to the top, d jumps to the name"))
+    ((= b 32) (pad:vi-pend! "spc" "space c D finds every use"))
     ((= b 71) "eob")
     ((= b 73) (pad:vi-act! "I"))
     ((= b 65) (pad:vi-act! "A"))
