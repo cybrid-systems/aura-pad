@@ -56,7 +56,10 @@ alone, a helper beside it, or a stacked book) and keeps the one that
 fits. **M-x layout:undo** puts the old picture back.
 **M-x preview** then some words asks the helper for a page beside
 yours. Unkind or not-allowed words make no page. **preview:keep**
-keeps a better page, **preview:drop** puts it away. **ctrl-\** is the emergency
+keeps a better page, **preview:drop** puts it away.
+**M-x story:grow** makes this page a little bigger. **story:cheer**
+opens a celebration page when the story is ready. **flip** turns to
+the next page. **story:undo** puts the old picture back. **ctrl-\** is the emergency
 exit (nothing is saved).
 `PAD_VI=0` keeps the old modeless map (ctrl-b jumps back, ctrl-p
 copies). The title shows the file name and `[normal]` or `[insert]`.
@@ -96,6 +99,8 @@ M-x layout 让三种画面比赛（故事占满、旁边一页帮手、或者叠
 留下更合适的那张。M-x layout:undo 把旧画面换回来。
 M-x preview 再写几个字，帮手会在旁边开一页；不友善或不允许的话不会开页。
 preview:keep 留下更好的那页，preview:drop 把它收起来。
+M-x story:grow 让这一页稍微变大。story:cheer 在故事写好时打开庆祝页。
+flip 翻到下一页。story:undo 把旧画面换回来。
 画面跟着终端走，长文件可以滚动看完。
 出错看 `~/.local/state/aura-pad/aura-pad.log`（会轮转）。
 

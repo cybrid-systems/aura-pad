@@ -1,0 +1,227 @@
+;; M17 living storybook. Soft resizes a window by editing the ratio on
+;; the binary tree, paints a mood style, and may open a celebration
+;; page. That open is an M15 layout race: focus-story against a
+;; four-page book. Only a strictly higher score is kept. A tie or a
+;; worse score is dropped. Extreme sizes reject and do not push undo.
+;; Celebration pages are ordinary windows, so flip (other-window) can
+;; land on them.
+;;
+;; Not on the key path. play.aura does not load this file. The first
+;; story: or flip command does. Key latency stays the published M7
+;; number: insert about 3.6 ms and cursor about 1.3 ms on the
+;; twelve-row page (docs/ROADMAP.md).
+;; Soft reserved: never bind quote.
+
+(load (string-append *pad-home* "/soft/pad/layout.aura"))
+
+(define *sb-goal* "hi\naura")
+(define *sb-cheered* #f)
+
+(define (pad:sb-dist)
+  (let ((s (pad:play-src)))
+    (if (string=? s *sb-goal*)
+        0
+        (let ((n (pad:abs (- (string-length s) 7))))
+          (if (= n 0) 1 n)))))
+
+(define (pad:sb-rej say why)
+  (set! *pl-say* say)
+  (display "REJECT kind=story reason=")
+  (display why)
+  (display " say=\"")
+  (display say)
+  (display "\"\n")
+  "reject")
+
+(define (pad:sb-has? node id)
+  (if (number? (car node))
+      (= (car node) id)
+      (or (pad:sb-has? (cadr node) id) (pad:sb-has? (caddr node) id))))
+
+(define (pad:sb-root-ratio delta)
+  (let ((r (pad:wn-ratio *wn-tree*)))
+    (if (pad:sb-has? (cadr *wn-tree*) *wn-sel*)
+        (+ r delta)
+        (- r delta))))
+
+(define (pad:sb-resize! delta)
+  (if (not (pad:wn-many?))
+      (pad:sb-rej "this is the only page" "only")
+      (let ((ratio (pad:sb-root-ratio delta)))
+        (let ((total (if (string=? (car *wn-tree*) "V")
+                         (pad:wn-rows) (pad:wn-cols)))
+              (mn (if (string=? (car *wn-tree*) "V") 2 8)))
+          (let ((raw (quotient (* total ratio) 100)))
+            (if (or (< ratio 1) (> ratio 99)
+                    (< raw mn) (< (- total raw) mn))
+                (pad:sb-rej
+                 (if (or (< ratio 1) (< raw mn))
+                     "that page would be too tiny"
+                     "that page would be too big")
+                 (if (or (< ratio 1) (< raw mn)) "too-small" "too-big"))
+                (let ((tree (list (car *wn-tree*) (cadr *wn-tree*)
+                                  (caddr *wn-tree*) ratio)))
+                  (let ((rects (pad:wn-place tree 0 0
+                                             (pad:wn-rows) (pad:wn-cols))))
+                    (if (or (pad:wn-tiny? rects) (pad:wn-overlap? rects))
+                        (pad:sb-rej "that page would be too tiny" "too-small")
+                        (begin
+                          (set! *wn-tree* tree)
+                          (set! *pl-say*
+                                (if (> delta 0)
+                                    "this page is growing!"
+                                    "this page got a little smaller"))
+                          (display "GROW ratio=")
+                          (display (pad:nstr ratio))
+                          (newline)
+                          "grow"))))))))))
+
+(define (pad:sb-paint-node node id st)
+  (if (number? (car node))
+      (if (= (car node) id)
+          (list (car node) (cadr node)
+                (list-ref node 2) (list-ref node 3)
+                (list-ref node 4) (list-ref node 5)
+                (list-ref node 6) st (list-ref node 8))
+          node)
+      (list (car node)
+            (pad:sb-paint-node (cadr node) id st)
+            (pad:sb-paint-node (caddr node) id st)
+            (pad:wn-ratio node))))
+
+(define (pad:sb-paint! st)
+  (if (pad:wn-many?)
+      (set! *wn-tree* (pad:sb-paint-node *wn-tree* *wn-sel* st))
+      0))
+
+(define (pad:sb-grow!)
+  (pad:sb-resize! 10))
+
+(define (pad:sb-shrink!)
+  (pad:sb-resize! -10))
+
+(define (pad:sb-mood!)
+  (let ((d (pad:sb-dist)))
+    (if (and (> d 0) (<= d 3))
+        (begin
+          (pad:sb-paint! 1)
+          (set! *pl-say* "almost there!")
+          "mood")
+        (pad:sb-rej "keep writing, you are not there yet" "not-close"))))
+
+(define (pad:sb-cfg line col top left)
+  (list "cheer-book"
+        (list "V"
+              (list "story" line col top left)
+              (list "V"
+                    (list "page2" 0 0 0 0)
+                    (list "V"
+                          (list "page3" 0 0 0 0)
+                          (list "cheer" 0 0 0 0))))))
+
+(define (pad:sb-body line col top left)
+  (string-append
+   "(lambda () (list \"cheer-book\" (list \"V\" (list \"story\" "
+   (pad:nstr line) " " (pad:nstr col) " " (pad:nstr top) " " (pad:nstr left)
+   ") (list \"V\" (list \"page2\" 0 0 0 0) (list \"V\" (list \"page3\" 0 0 0 0) (list \"cheer\" 0 0 0 0))))))"))
+
+(define (pad:sb-cheer!)
+  (if (not (= (pad:sb-dist) 0))
+      (pad:sb-rej "keep writing, you are not there yet" "not-close")
+      (begin
+        (pad:ly-seed!)
+        (pad:ly-pages!)
+        (pad:wn-buf! "cheer" "yay")
+        (set! *ly-need* 4)
+        (set! *ly-goal* (list 0 0 0 0))
+        (set! *ly-rej* 0)
+        (let* ((line (cadr *pl-st*))
+               (col (caddr *pl-st*))
+               (top *vw-top*)
+               (left *vw-left*)
+               (cfg (pad:sb-cfg line col top left))
+               (why (pad:ly-why cfg))
+               (base-cfg (pad:ly-now)))
+          (set! *ly-score* (pad:ly-score base-cfg))
+          (if why
+              (pad:ly-reject-out! why)
+              (let ((pair (pad:ly-two
+                           (lambda () (pad:ly-score base-cfg))
+                           (lambda () (pad:ly-score cfg)))))
+                (let ((base (car pair)) (trial (cadr pair)))
+                  (display "RACE story base=")
+                  (display (pad:nstr base))
+                  (display " trial=")
+                  (display (pad:nstr trial))
+                  (newline)
+                  (if (> trial base)
+                      (begin
+                        (pad:ly-keep! (pad:sb-body line col top left) cfg trial)
+                        (pad:sb-paint! 2)
+                        (set! *sb-cheered* #t)
+                        (set! *pl-say* "celebration page opened")
+                        "keep")
+                      (pad:ly-drop!
+                       (if (= trial base)
+                           "tie-is-not-better-rollback"
+                           "lower-score-rollback")
+                       trial #f)))))))))
+
+(define (pad:sb-step!)
+  (let ((d (pad:sb-dist))
+        (n (string-length (pad:play-src))))
+    (if (and (> d 0) (<= d 3)) (pad:sb-mood!) 0)
+    (if (and (pad:wn-many?) (< n 4))
+        (pad:sb-shrink!)
+        (if (pad:wn-many?) (pad:sb-grow!) 0))
+    (if (= d 0) (pad:sb-cheer!) 0)
+    "step"))
+
+(define (pad:sb-undo!)
+  (let ((r (pad:ly-undo!)))
+    (if (string=? r "fail")
+        (display "PAD_M17_UNDO_FAIL rescore\n")
+        0)
+    r))
+
+(define (pad:sb-undo-mismatch!)
+  (let ((r (pad:ly-undo-mismatch!)))
+    (if (string=? r "fail")
+        (display "PAD_M17_UNDO_FAIL rescore\n")
+        0)
+    r))
+
+(define (pad:sb-arm! src)
+  (pad:wn-reset!)
+  (pad:play-reset! src)
+  (set! *vi-on* #t)
+  (set! *vw-rows* 16)
+  (set! *vw-cols* 40)
+  (set! *wn-live* "story")
+  (set! *wn-store* (list (list "story" (car *pl-st*))))
+  (set! *ly-hist* (list))
+  (set! *ly-need* 1)
+  (set! *ly-rej* 0)
+  (set! *ly-score* 0)
+  (set! *sb-cheered* #f)
+  0)
+
+(define (pad:sb-run! w rest)
+  (cond
+    ((or (string=? w "story") (string=? w "story:") (string=? w "story:step"))
+     (pad:sb-step!) rest "vi-do")
+    ((string=? w "story:grow")
+     (pad:sb-grow!) rest "vi-do")
+    ((string=? w "story:shrink")
+     (pad:sb-shrink!) rest "vi-do")
+    ((string=? w "story:mood")
+     (pad:sb-mood!) rest "vi-do")
+    ((or (string=? w "story:cheer") (string=? w "story:chapter"))
+     (pad:sb-cheer!) rest "vi-do")
+    ((string=? w "story:undo")
+     (pad:sb-undo!) rest "vi-do")
+    ((string=? w "flip")
+     (pad:wn-other!) rest "vi-do")
+    (#t #f)))
+
+(set! *sb-ready* #t)

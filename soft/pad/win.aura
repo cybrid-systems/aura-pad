@@ -393,7 +393,15 @@
     "Unkind or not-allowed words make no page.\n"
     "The line says Look, the helper made a new page next to yours!\n"
     "preview:keep keeps it when it is better. preview:drop puts it away.\n"
-    "preview:undo takes a keep back. Keys stay on your page.\n"))
+    "preview:undo takes a keep back. Keys stay on your page.\n"
+    "story:grow makes this page a little bigger.\n"
+    "story:shrink makes a short page a little smaller.\n"
+    "The line says this page is growing!\n"
+    "story:mood says almost there! when you are close.\n"
+    "story:cheer opens a celebration page when the story is ready.\n"
+    "The line says celebration page opened.\n"
+    "flip turns to the next page of the book.\n"
+    "story:undo puts the old picture back.\n"))
 
 (define (pad:wn-help! rest)
   (pad:wn-ensure!)
@@ -438,6 +446,20 @@
       (load (string-append *pad-home* "/soft/pad/preview.aura")))
   (if *pv-ready* (pad:pv-run! w rest) #f))
 
+;; The storybook policy stays off the key path. The first story: or
+;; flip command loads story.aura. A normal key never does.
+(define *sb-ready* #f)
+
+(define (pad:sb-word? w)
+  (or (string=? w "flip")
+      (and (string? w) (>= (string-length w) 5)
+           (string=? (substring w 0 5) "story"))))
+
+(define (pad:wn-story! w rest)
+  (if (not *sb-ready*)
+      (load (string-append *pad-home* "/soft/pad/story.aura")))
+  (if *sb-ready* (pad:sb-run! w rest) #f))
+
 (define (pad:wn-command w rest)
   (cond
     ((or (string=? w "split") (string=? w "split-vert")) (pad:wn-split! "V"))
@@ -450,6 +472,7 @@
     ((pad:wn-sw? w) (pad:wn-switch! (substring w 7 (string-length w))))
     ((pad:ly-word? w) (pad:wn-layout! w rest))
     ((pad:pv-word? w) (pad:wn-preview! w rest))
+    ((pad:sb-word? w) (pad:wn-story! w rest))
     (#t #f)))
 
 (define (pad:wn-on-cx! b)
