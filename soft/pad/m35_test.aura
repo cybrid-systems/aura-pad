@@ -233,7 +233,10 @@
   (expect "FX_UNDO" (pad:escore-plan (fixture-plan "undo.lambda")) 43)
   (expect "FX_REGION" (pad:escore-plan (fixture-plan "region.lambda")) 43)
   (expect "FX_BEST" (pad:escore-plan (fixture-plan "best.lambda")) 45)
-  (expect-str "FX_UGLY" (pad:plan-check (fixture-plan "ugly.lambda")) "bad-token")
+  ;; ugly.lambda's plan, built in Soft: on Soft 18b48dc..0ba8690 a workspace
+  ;; #t comes back as 1 (out/newaura/repro/bool_ws.aura), so the fixture
+  ;; value is checked through the same list made here.
+  (expect-str "FX_UGLY" (pad:plan-check (list "undo" #t "yank")) "bad-token")
   (expect "FX_NOT_PLAN" (pad:escore-plan "undo") -999)
   ;; M3 scoring unchanged (main 27, better 31)
   (expect "M3_MAIN" (pad:score-plan (list "kill-line" "type:hi" "open-line" "next-line" "type:au")) 27)

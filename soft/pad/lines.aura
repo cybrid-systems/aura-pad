@@ -191,6 +191,18 @@
 
 (define (pad:plan-ok? p) (string=? (pad:plan-check p) "ok"))
 
+;; Plan check of an engine probe value plus the same body run by Soft.
+;; On Soft 18b48dc..0ba8690 a workspace #t comes back as 1
+;; (out/newaura/repro/bool_ws.aura, aura#4357 comment), so the engine
+;; value alone can pass a body that returns #t. The body already passed
+;; the word gate; a Soft eval that raises leaves the engine answer.
+(define (pad:plan-check-body eng body)
+  (let ((w (pad:plan-check eng)))
+    (if (not (string=? w "ok"))
+        w
+        (let ((sv (try (list ((eval body))) (catch (e) #f))))
+          (if (pair? sv) (pad:plan-check (car sv)) w)))))
+
 (define (pad:cmd-str c)
   (cond
     ((number? c) (string-append "char-" (number->string c)))
