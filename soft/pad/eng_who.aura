@@ -246,3 +246,26 @@
   (let ((rs (pad:who-pen-step! who name lam why)))
     (pad:ew-set! "kid")
     rs))
+
+;; Sentence who. The file child from a KEEP is still alive. Ask that
+;; flat, then return to the editor. A define the pen did not rebind
+;; has mutation id 0.
+(define (pad:ew-held)
+  (let ((id (try *tx-held* (catch (err) #f))))
+    (if (number? id) id #f)))
+
+(define (pad:ew-here)
+  (let ((id (try (workspace :current) (catch (err) #f))))
+    (if (number? id) id -1)))
+
+(define (pad:ew-say-name name)
+  (let ((c (pad:ew-held)))
+    (if (not (number? c))
+        "nobody has changed this yet"
+        (begin
+          (try (workspace :switch c) (catch (err) #f))
+          (let ((e (if (= (pad:ew-here) c) (pad:ew-prov name) #f)))
+            (try (workspace :switch 0) (catch (err) #f))
+            (if (or (not e) (string=? (cadr e) "nobody"))
+                "nobody has changed this yet"
+                (pad:ew-say "agree" #f e)))))))

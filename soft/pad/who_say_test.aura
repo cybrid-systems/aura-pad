@@ -1,0 +1,64 @@
+;; Step 29. who answers from query:node-provenance after one apply.
+;; A define the pen did not rebind stays nobody.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define page
+  (string-append ";; keep this\n\n"
+    (string-append "(define (hello x)\n  (+ x 1))\n"
+      "(define (main) (hello 3))\n")))
+
+(set! *ux-lines* (pad:v-lines page))
+(define *read-proj* page)
+(set! *ux-line* "apply keep-hello")
+(say (string-append "CHECK say=" (pad:say-run!)))
+
+(define out (pad:v-src *ux-lines*))
+(define hello-at (string-index out "(define hello" 0))
+(define main-at (string-index out "(define (main)" 0))
+(say (string-append "CHECK hello-at=" (number->string hello-at)))
+(say (string-append "CHECK main-at=" (number->string main-at)))
+
+(set! *ux-point* 0)
+(set! *ux-line* "who")
+(say (string-append "CHECK fresh=" (pad:say-run!)))
+
+(set! *ux-point* hello-at)
+(say (string-append "CHECK hello-name=" (pad:ux-who-name)))
+(set! *ux-line* "who")
+(say (string-append "CHECK who=" (pad:say-run!)))
+
+(set! *ux-point* main-at)
+(say (string-append "CHECK main-name=" (pad:ux-who-name)))
+(set! *ux-line* "who")
+(say (string-append "CHECK main=" (pad:say-run!)))
+
+(set! *ux-point* hello-at)
+(set! *ux-line* "who")
+(say (string-append "CHECK again=" (pad:say-run!)))
+
+(say (if (string=? (pad:v-src *ux-lines*) out)
+         "CHECK page=same"
+         "CHECK page=moved"))
+(say "WHO_SAY_UNIT_OK")

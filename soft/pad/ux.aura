@@ -80,6 +80,7 @@
        (list "open" (substring line 5 n)))
       ((and (> n 6) (string=? (substring line 0 6) "apply "))
        (list "apply" (substring line 6 n)))
+      ((string=? line "who") (list "who" ""))
       (#t (list "later" line)))))
 
 ;; Directory of the open file, with the trailing slash.
@@ -289,6 +290,50 @@
       #t
       (pad:ux-load-tx!)))
 
+;; Define that starts on the cursor line, or "".
+(define (pad:ux-def-walk toks prev prev2 line page)
+  (if (null? toks)
+      ""
+      (let ((t (car toks)))
+        (let ((txt (pad:ux-nth t 3)))
+          (let ((hit (and (or (string=? (car t) "S")
+                              (string=? (car t) "Q")
+                              (string=? (car t) "M"))
+                          (or (and prev (string=? (car prev) "K")
+                                   (string=? (pad:ux-nth prev 3) "define"))
+                              (and prev (string=? (car prev) "P")
+                                   (string=? (pad:ux-nth prev 3) "(")
+                                   prev2 (string=? (car prev2) "K")
+                                   (string=? (pad:ux-nth prev2 3) "define"))))))
+            (if (and hit (= (car (pad:v-linecol page (cadr t))) line))
+                txt
+                (pad:ux-def-walk (cdr toks) t prev line page)))))))
+
+(define (pad:ux-who-name)
+  (let ((page (pad:ux-page)))
+    (if (not (pair? page))
+        ""
+        (pad:ux-def-walk (pad:hl-tokens (pad:v-src page)) #f #f
+                         (car (pad:v-linecol page *ux-point*)) page))))
+
+;; Switching back re-evals this file's defines, which clears the page.
+;; Put the page and the cursor back after the engine answers.
+(define (pad:ux-who!)
+  (set! *ux-line* "")
+  (let ((name (pad:ux-who-name)))
+    (let ((lines *ux-lines*))
+      (let ((point *ux-point*))
+        (let ((focus *ux-focus*))
+          (let ((say (if (or (string=? name "")
+                             (not (try pad:ew-say-name (catch (err) #f))))
+                         "nobody has changed this yet"
+                         (pad:ew-say-name name))))
+            (set! *ux-lines* lines)
+            (set! *ux-point* point)
+            (set! *ux-focus* focus)
+            (set! *pl-say* say)
+            say))))))
+
 ;; apply NAME reads a fixture in the repo. It does not open the network
 ;; and it does not call M-x.
 (define (pad:ux-apply! name)
@@ -327,6 +372,7 @@
             ((string=? intent "open") (pad:ux-file-open! (cadr hit)))
             ((string=? intent "quit") (pad:ux-file-quit!))
             ((string=? intent "apply") (pad:ux-apply! (cadr hit)))
+            ((string=? intent "who") (pad:ux-who!))
             (#t
              (begin
                (set! *pl-say* "aura cannot change this page yet")

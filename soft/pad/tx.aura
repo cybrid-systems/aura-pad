@@ -263,6 +263,27 @@
   (if (number? c) (try (workspace:delete c) (catch (e) #f)) 0)
   0)
 
+;; The KEEP child stays so a later who can read its provenance.
+;; The next KEEP drops the previous one.
+(define *tx-held* #f)
+
+(define (pad:tx-hold! c)
+  (try (workspace :switch 0) (catch (e) #f))
+  (let ((old *tx-held*))
+    (set! *tx-held* c)
+    (if (and (number? old) (not (= old c)))
+        (try (workspace:delete old) (catch (e) #f))
+        0))
+  0)
+
+;; A child shares the parent flat until the first mutate. Renaming a
+;; missing symbol clones that flat and changes nothing. The typed batch
+;; then stamps its author on the clone. A clone taken inside the batch
+;; records author 0.
+(define (pad:tx-own!)
+  (try (mutate:rename-symbol "no-such-pad" "still-no") (catch (e) #f))
+  0)
+
 (define (pad:tx-page)
   (let ((u (try *ux-lines* (catch (e) #f))))
     (if (pair? u)
@@ -304,6 +325,7 @@
                 (list "DROP" "aura cannot change this page yet"))
               (begin
                 (pad:tx-show! (string-append "APPLY child=" (number->string c)))
+                (pad:tx-own!)
                 (let ((wrote (try (set-code (string-append src "\n#t\n"))
                                   (catch (e) #f))))
                   (if (not (eq? wrote #t))
@@ -363,15 +385,19 @@
                                                                 "APPLY typed-mutate-atomic="
                                                                 (if (eq? ok #t) "ok" "no")))
                                                             (pad:tx-fp! "kid")
-                                                            (pad:tx-leave! c)
                                                             (if (not (eq? ok #t))
-                                                                (list "DROP"
-                                                                  "aura cannot change this page yet")
+                                                                (begin
+                                                                  (pad:tx-leave! c)
+                                                                  (list "DROP"
+                                                                    "aura cannot change this page yet"))
                                                                 (let ((out (pad:proj-splice!
                                                                              src name lam)))
                                                                   (if (string=? out src)
-                                                                      (list "DROP" "no-row")
                                                                       (begin
+                                                                        (pad:tx-leave! c)
+                                                                        (list "DROP" "no-row"))
+                                                                      (begin
+                                                                        (pad:tx-hold! c)
                                                                         (pad:tx-install! out)
                                                                         (pad:tx-show! "APPLY splice")
                                                                         (list "KEEP"
