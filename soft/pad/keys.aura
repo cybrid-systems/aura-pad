@@ -39,6 +39,8 @@
 (define *pl-framed* 0)
 
 (define (pad:play-reset! src)
+  (set! *utf-hi* #f)
+  (pad:utf-note-str! src 0 (string-length src))
   (set! *max-col* *play-max-col*)
   (set! *max-lines* *play-max-lines*)
   (set! *pl-st* (pad:es-at (pad:v-lines src) 0 0))
@@ -109,7 +111,7 @@
 (define (pad:play-gate c st)
   (if (number? c)
       (cond
-        ((not (and (>= c 32) (<= c 126))) "not-print")
+        ((not (pad:ux-scalar? c)) "not-print")
         ((>= (length (pad:nth (pad:es-L st) (pad:es-l st))) *max-col*)
          "need-space")
         (#t "ok"))
@@ -139,6 +141,7 @@
   (let ((reason (pad:play-gate c *pl-st*)))
     (if (string=? reason "ok")
         (begin
+          (if (and (number? c) (> c 126)) (set! *utf-hi* #t) 0)
           (set! *pl-st* (pad:eapply c *pl-st*))
           (pad:play-ok! *pl-say*))
         (pad:play-reject! reason))))
@@ -203,23 +206,29 @@
     (cond
       ((number? c)
        (cond
-         ((not (and (>= c 32) (<= c 126))) (pad:play-reject! "not-print"))
-         ((>= len *max-col*) (pad:play-reject! "need-space"))
-         (#t
-          (let* ((ln2 (append (if (<= col 0) (list) (reverse (drop (reverse ln) (- len col))))
-                              (cons c (if (<= col 0) ln (drop ln col)))))
-                 (L2 (append (reverse (drop (reverse L) (- n l)))
-                             (cons ln2 (drop L (+ l 1)))))
-                 (U (cons (list L l col) (list-ref st 5)))
-                 (un (length U)))
-            (set! *pl-st*
-                  (list L2 l (+ col 1) (list-ref st 3) (list)
-                        (cond
-                          ((<= *undo-max* 0) (list))
-                          ((> un *undo-max*) (reverse (drop (reverse U) (- un *undo-max*))))
-                          (#t U))))
-            (set! *pl-keys* (+ *pl-keys* 1))
-            "ok"))))
+         ;; Gate first, then the column cap, matching pad:play-gate.
+         ;; ASCII 32-126 does not call pad:ux-scalar?. A higher scalar
+         ;; takes the same insert and marks the page for folding.
+         ((or (and (>= c 32) (<= c 126)) (pad:ux-scalar? c))
+          (if (>= len *max-col*)
+              (pad:play-reject! "need-space")
+              (begin
+                (if (> c 126) (set! *utf-hi* #t) 0)
+                (let* ((ln2 (append (if (<= col 0) (list) (reverse (drop (reverse ln) (- len col))))
+                                    (cons c (if (<= col 0) ln (drop ln col)))))
+                       (L2 (append (reverse (drop (reverse L) (- n l)))
+                                   (cons ln2 (drop L (+ l 1)))))
+                       (U (cons (list L l col) (list-ref st 5)))
+                       (un (length U)))
+                  (set! *pl-st*
+                        (list L2 l (+ col 1) (list-ref st 3) (list)
+                              (cond
+                                ((<= *undo-max* 0) (list))
+                                ((> un *undo-max*) (reverse (drop (reverse U) (- un *undo-max*))))
+                                (#t U))))
+                  (set! *pl-keys* (+ *pl-keys* 1))
+                  "ok"))))
+         (#t (pad:play-reject! "not-print"))))
       ((string=? c "left")
        (if (and (= l 0) (= col 0))
            (pad:play-reject! "too-far")

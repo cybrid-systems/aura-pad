@@ -17,6 +17,9 @@
 (define *pad-home*
   (let ((h (getenv "AURA_PAD_HOME")))
     (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+(if (try *utf-on* (catch (e) #f))
+    0
+    (load (string-append *pad-home* "/soft/pad/utf.aura")))
 (load (string-append *pad-home* "/soft/pad/buffer.aura"))
 (load (string-append *pad-home* "/soft/pad/lines.aura"))
 (load (string-append *pad-home* "/soft/pad/edit.aura"))

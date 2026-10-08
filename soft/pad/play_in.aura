@@ -245,7 +245,7 @@
                                (list-ref t 3)
                                (pi-nm (cdr ts) cc))))))))
          (cur (and name (string=? name *lc-name*)))
-         (ins (and sync (number? c) (>= c 32) (<= c 126) (< len *max-col*)))
+         (ins (and sync (number? c) (pad:ux-scalar? c) (or (<= c 126) (> c 255)) (< len *max-col*)))
          (del (and sync (not ins) (string? c) (string=? c "back") (> col 0)))
          (r (cond
               (cur
@@ -266,7 +266,8 @@
                                   (cons ln2 (drop L (+ l 1)))))
                       (U (cons (list L l col) (list-ref st 5)))
                       (un (length U))
-                      (col2 (if ins (+ col 1) (- col 1))))
+                      (col2 (if ins (+ col 1) (- col 1)))
+                      (noted (if (and ins (> c 126)) (set! *utf-hi* #t) 0)))
                  (set! *pl-st*
                        (list L2 l col2 (list-ref st 3) (list)
                              (cond
@@ -292,14 +293,16 @@
                                        ;; end-of-row edit (most typing): the
                                        ;; entry pad:lc-scan would return, built
                                        ;; from the cached one; #f = scan
-                                       (let* ((s2 (list->string ln2))
+                                       (let* ((s2 (if (or *utf-hi* (> c 126))
+                                                      (list->string (map pad:utf-fold ln2))
+                                                      (list->string ln2)))
                                               (tp0 (list-ref oe 3))
                                               (sy0 (list-ref oe 7))
                                               (k1 (if t1 (car t1) ""))
                                               (nm1 (and t1 (member k1 *pi-symk*)))
                                               (at-end (and t1 (= (caddr t1) len)))
                                               (n2 (if ins (+ len 1) (- len 1)))
-                                              (k (if ins (vector-ref *lc-cls* c) 0))
+                                              (k (if ins (vector-ref *lc-cls* (pad:utf-fold c)) 0))
                                               (pc (if (and ins (> len 0)) (string-ref s2 (- len 1)) 32))
                                               (pk (if (< pc 128) (vector-ref *lc-cls* pc) 0))
                                               ;; how the last token changes:
@@ -372,7 +375,9 @@
                                                     (if (and x2 (member (car t2) *pi-symk*)) 1 0)
                                                     (if (and x3 (member (car t3) *pi-symk*)) 1 0)))
                                              (r (if (pair? acc0) (caddr (car acc0)) 0)))
-                                        (pad:lc-scan (list->string ln2) ln2 r acc0
+                                        (pad:lc-scan (if (or *utf-hi* (> c 126))
+                                                         (list->string (map pad:utf-fold ln2))
+                                                         (list->string ln2)) ln2 r acc0
                                                      (if (> r 0) (list (substring (list-ref oe 3) 0 r)) (list))
                                                      (drop (list-ref oe 7) mr)
                                                      (list-ref oe 9)))))

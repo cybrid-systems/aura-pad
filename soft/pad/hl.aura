@@ -114,6 +114,13 @@
                     (loop ni
                           (cons (list k a b (substring s a b)) acc)))))))))
 
+;; Fill [j, b) with ch. A nested named let cannot see the outer loop
+;; (aura#4353), so this stays a top-level recursion.
+(define (pad:hl-fill j b ch xs)
+  (if (>= j b)
+      xs
+      (pad:hl-fill (+ j 1) b ch (cons ch xs))))
+
 ;; Color tape: one scan, char list -> list->string (no string-append).
 (define (pad:hl-color s)
   (let ((n (string-length s)))
@@ -126,10 +133,7 @@
                  (b (caddr t))
                  (ni (car (cdr (cdr (cdr t)))))
                  (ch (if k (string-ref k 0) #\.)))
-            (let fill ((j a) (xs acc))
-              (if (>= j b)
-                  (loop ni xs)
-                  (fill (+ j 1) (cons ch xs)))))))))
+            (loop ni (pad:hl-fill a b ch acc)))))))
 
 ;; Color tape from toks (gaps = '.'). SNAP packer: one tokenize, reuse.
 (define (pad:hl-color-from-tokens s toks)
@@ -141,10 +145,7 @@
          (let* ((t (car ts))
                 (b (caddr t))
                 (ch (string-ref (car t) 0)))
-           (let fill ((j i) (xs acc))
-             (if (>= j b)
-                 (loop b (cdr ts) xs)
-                 (fill (+ j 1) (cons ch xs))))))
+           (loop b (cdr ts) (pad:hl-fill i b ch acc))))
         (#t (loop (+ i 1) ts (cons #\. acc)))))))
 
 ;; (color toks) — one tokenize for snap / marks / jump.

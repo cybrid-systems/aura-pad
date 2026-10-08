@@ -52,8 +52,8 @@ if "pad:play-cmd!" not in edit:
 if "pad:ws-load!" in ux or "string-split" in ux:
     sys.exit("ux_keys: sentence keys load the notebook or split strings")
 cmd = keys.split("(define (pad:play-cmd! c)", 1)[1].split("\n(define ", 1)[0]
-if "(not (and (>= c 32) (<= c 126)))" not in cmd:
-    sys.exit("ux_keys: pad:play-cmd! no longer keeps the 32-126 gate")
+if "(pad:ux-scalar? c)" not in cmd or "(>= c 32)" not in cmd:
+    sys.exit("ux_keys: pad:play-cmd! no longer gates on a text scalar")
 PY
 
 run_play() {

@@ -9,6 +9,12 @@
 ;; mark helper. Optional DIRTY line=<csv> when the caller knows which
 ;; rows changed (C may redraw only those; full rows still sent).
 ;; Soft reserved: never bind quote.
+(if (try *utf-on* (catch (e) #f))
+    0
+    (load (string-append
+            (let ((h (getenv "AURA_PAD_HOME")))
+              (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad"))
+            "/soft/pad/utf.aura")))
 ;;
 ;; std/string builds string-join and string-contains? with while + set!
 ;; inside a define. On this Aura the predicate keeps seeing the old
@@ -52,9 +58,9 @@
 ;; Editor lines (lists of char codes) <-> source string.
 (define (pad:v-codes s) (map char->integer (string->list s)))
 (define (pad:v-lines src) (map pad:v-codes (pad:v-split src)))
+;; Disk, dirty check, and set-code. ASCII 0-126 is unchanged. No fold.
 (define (pad:v-src L)
-  (string-join (map (lambda (ln) (list->string (map integer->char ln))) L)
-               "\n"))
+  (pad:utf-encode L))
 
 ;; Char offset of (line, col) in the joined source.
 (define (pad:v-point L l col)
@@ -122,7 +128,7 @@
   (pad:snap-text-dirty title L l col say (list)))
 
 (define (pad:snap-text-dirty title L l col say dirty)
-  (let* ((src (pad:v-src L))
+  (let* ((src (pad:utf-fold-src L))
          (b (pad:hl-bundle src))
          (tape (car b))
          (toks (cadr b))

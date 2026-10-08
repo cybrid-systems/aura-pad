@@ -252,7 +252,9 @@
 ;; (emacs_test checks it).
 (define (pad:lc-entry2 codes str0 ins)
   (set! *lc-retok* (+ *lc-retok* 1))
-  (let ((s (if str0 str0 (list->string codes))))
+  (let ((s (if str0 str0 (if *utf-hi*
+                              (list->string (map pad:utf-fold codes))
+                              (list->string codes)))))
     (if (and ins (< (string-index s "\"" 0) 0))
         (let ((n (string-length s)))
           (if (= n 0)
@@ -634,7 +636,9 @@
          (h1 (set! *lc-pre* #f))
          (old (vector-ref *lc-recv* l))
          (oe (car old))
-         (news (list->string codes))
+         (news (if *utf-hi*
+                   (list->string (map pad:utf-fold codes))
+                   (list->string codes)))
          (olds (list-ref oe 1))
          ;; unchanged prefix [0,p): guess p = col - 1 (typing, backspace,
          ;; kill-line all change text at or after it) and verify with

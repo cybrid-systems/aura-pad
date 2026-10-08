@@ -21,11 +21,19 @@
 ;;
 ;; The pad never writes a file it could not load byte for byte. A file
 ;; with more than *pf-max-lines* lines, a line longer than *pf-max-col*,
-;; or a byte outside printable ASCII (tab, CR, UTF-8, ...) opens to look
-;; at only: rows cut to fit, odd bytes shown as "?", saving off.
+;; a byte sequence that is not UTF-8, or a scalar that is not text
+;; (tab, CR, DEL, C1) opens to look at only: rows cut to fit, odd bytes
+;; shown as "?", saving off. A valid scalar above 126 stays editable.
 ;; A missing file is a new page; the first save creates it.
 ;; No named let captures an outer local (aura#4353); no top-level named
 ;; let (aura#4352). Soft reserved: never bind quote.
+
+(if (try *utf-on* (catch (e) #f))
+    0
+    (load (string-append
+            (let ((h (getenv "AURA_PAD_HOME")))
+              (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad"))
+            "/soft/pad/utf.aura")))
 
 (define *pf-on* #f)       ; a file is open (PAD_FILE)
 (define *pf-path* "")     ; absolute path from C
@@ -87,12 +95,12 @@
          (s1 (if big (substring s0 0 cap) s0))
          (nl (or new (and (> n0 0) (not big) (= (string-ref s0 (- n0 1)) 10))))
          (s (if (and nl (> (string-length s1) 0)) (substring s1 0 (- (string-length s1) 1)) s1))
-         (L0 (map pad:v-codes (pad:pf-split s)))
-         (flat (apply append L0))
-         (lo (if (null? flat) 32 (apply min flat)))
-         (hi (if (null? flat) 32 (apply max flat)))
+         (dec (pad:utf-decode s))
+         (bad (not dec))
+         (L0 (if dec dec (map pad:v-codes (pad:pf-split s))))
          (wide (apply max (cons 0 (map length L0))))
-         (ro (or big (> (length L0) *pf-max-lines*) (> wide *pf-max-col*) (< lo 32) (> hi 126)))
+         (odd (if dec (not (pad:utf-page-ok? dec)) #f))
+         (ro (or bad odd big (> (length L0) *pf-max-lines*) (> wide *pf-max-col*)))
          (L (if ro
                 (map pad:pf-cut (if (> (length L0) *pf-max-lines*)
                                     (reverse (drop (reverse L0) (- (length L0) *pf-max-lines*)))
@@ -103,6 +111,7 @@
     (set! *play-max-lines* *pf-max-lines*)
     (pad:play-reset! "")
     (set! *pl-st* (pad:es-at L 0 0))
+    (pad:utf-note-page! L)
     (set! *pf-on* #t)
     (set! *pf-path* path)
     (set! *pf-name* name)
@@ -116,6 +125,7 @@
     (set! *pl-say*
           (cond
             (new (string-append "new page " name " - " *pf-help*))
+            (bad (string-append name " is bad-utf8, so the pad only looks - ctrl-q quits"))
             (ro (string-append name " is too big or has letters the pad cannot show,"
                                " so the pad only looks - ctrl-q quits"))
             (#t (string-append "opened " name " (" (pad:pf-lines (length L)) ") - " *pf-help*))))

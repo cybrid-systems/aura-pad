@@ -9,6 +9,7 @@
 ;; until Tab. "line" is the sentence. Arrows move the page either way.
 (define *ux-line* "")
 (define *ux-focus* "page")
+(define *ux-utf* (list))
 
 (define (pad:ux-ends? name suf)
   (let ((n (string-length name))
@@ -28,7 +29,7 @@
         (set! *pl-title*
               (string-append *pf-name* "  " (pad:ux-kind *pf-name*) "  new"))
         (set! *view-legend* (string-append "> " *ux-line*))
-        (set! *pl-say* "not checked yet")
+        (if *pf-ro* 0 (set! *pl-say* "not checked yet"))
         0)
       0))
 
@@ -233,7 +234,20 @@
           0)
       0))
 
-;; Page text goes through pad:play-cmd!. The 32-126 gate stays there.
+;; Page text goes through pad:play-cmd!. A scalar above 126 is one cell.
+(define (pad:ux-mark-say! n)
+  (set! *pl-say* (string-append "this mark is " (pad:utf-encode (list (list n)))))
+  #t)
+
+(define (pad:ux-mark-here!)
+  (let* ((st *pl-st*)
+         (ln (list-ref (car st) (cadr st)))
+         (col (caddr st))
+         (n (if (< col (length ln)) (list-ref ln col) 0)))
+    (if (and (< col (length ln)) (> n 126))
+        (pad:ux-mark-say! n)
+        #f)))
+
 (define (pad:ux-edit! cmd)
   (let ((say *pl-say*)
         (r (pad:play-cmd! cmd)))
@@ -241,6 +255,9 @@
     (if (and (string? r) (string=? r "ok"))
         (pad:ux-note-edit!)
         (if (not *read-ready*) (set! *pl-say* say) 0))
+    (if (and (string? r) (string=? r "ok") (number? cmd) (> cmd 126))
+        (pad:ux-mark-say! cmd)
+        0)
     (pad:ux-draw!)
     (if (and (string? r) (string=? r "quit")) "quit" "go")))
 
@@ -248,9 +265,11 @@
   (let ((say *pl-say*)
         (r (pad:play-cmd! cmd)))
     (set! *ux-point* (pad:play-point))
-    (if *read-ready*
-        (if (string=? *read-status* "checked") (pad:ux-say-at) 0)
-        (if (and (string? r) (string=? r "ok")) 0 (set! *pl-say* say)))
+    (if (and (string? r) (string=? r "ok") (pad:ux-mark-here!))
+        0
+        (if *read-ready*
+            (if (string=? *read-status* "checked") (pad:ux-say-at) 0)
+            (if (and (string? r) (string=? r "ok")) 0 (set! *pl-say* say))))
     (pad:ux-draw!)
     "go"))
 
@@ -338,6 +357,71 @@
                       r
                       (pad:ux-feed! rest (list))))))))))
 
+;; Bytes 128-255 accumulate until one scalar is complete. A lead stays
+;; here and is not passed to pad:play-cmd!. pad:key-step is unchanged.
+(define (pad:ux-high? bs)
+  (cond
+    ((null? bs) #f)
+    ((>= (car bs) 128) #t)
+    (#t (pad:ux-high? (cdr bs)))))
+
+(define (pad:ux-drop-last xs)
+  (reverse (cdr (reverse xs))))
+
+(define (pad:ux-utf-put! n)
+  (if (pad:ux-scalar? n)
+      (if (string=? *ux-focus* "line")
+          (pad:ux-add! (pad:utf-fold n))
+          (pad:ux-edit! n))
+      (begin
+        (set! *pl-say* "not-print")
+        (pad:ux-draw!)
+        "go")))
+
+(define (pad:ux-utf-go! bs)
+  (cond
+    ((null? bs) "go")
+    ((and (null? *ux-utf*) (not (pad:ux-high? bs)))
+     (pad:ux-feed! bs (list)))
+    ((and (pair? *ux-utf*) (not (pad:ux-high? bs)))
+     (set! *ux-utf* (list))
+     (set! *pl-say* "bad utf8")
+     (pad:ux-draw!)
+     (pad:ux-feed! bs (list)))
+    (#t (pad:ux-utf-push! (car bs) (cdr bs)))))
+
+(define (pad:ux-utf-bad! b rest)
+  (let ((prev (pad:ux-drop-last *ux-utf*)))
+    (set! *ux-utf* (list))
+    (set! *pl-say* "bad utf8")
+    (pad:ux-draw!)
+    (cond
+      ((null? prev) (pad:ux-utf-go! rest))
+      ((< b 128) (pad:ux-utf-go! (cons b rest)))
+      ((> (pad:utf-len b) 0)
+       (set! *ux-utf* (list b))
+       (pad:ux-utf-go! rest))
+      (#t (pad:ux-utf-go! rest)))))
+
+(define (pad:ux-utf-push! b rest)
+  (if (and (null? *ux-utf*) (< b 128))
+      (let ((r (pad:ux-feed! (list b) (list))))
+        (if (and (string? r) (string=? r "quit"))
+            "quit"
+            (pad:ux-utf-go! rest)))
+      (begin
+        (set! *ux-utf* (append *ux-utf* (list b)))
+        (let ((hit (pad:utf-classify *ux-utf*)))
+          (cond
+            ((string=? (car hit) "wait") (pad:ux-utf-go! rest))
+            ((string=? (car hit) "ok")
+             (set! *ux-utf* (list))
+             (let ((r (pad:ux-utf-put! (cadr hit))))
+               (if (and (string? r) (string=? r "quit"))
+                   "quit"
+                   (pad:ux-utf-go! rest))))
+            (#t (pad:ux-utf-bad! b rest)))))))
+
 ;; Scripted hjkl move the page. They are not letters on the sentence.
 (define (pad:ux-word! w)
   (cond
@@ -362,7 +446,10 @@
      (let ((bs (pad:pi-parse line)))
        (if (not bs)
            (begin (pad:play-reject! "unknown") (pad:ux-draw!))
-           (if (and (null? *pl-esc*) (null? (cdr bs)) (= (car bs) 27))
-               (pad:ux-esc!)
-               (pad:ux-feed! bs *pl-esc*)))))
+           (if (and (null? *pl-esc*)
+                    (or (pair? *ux-utf*) (pad:ux-high? bs)))
+               (pad:ux-utf-go! bs)
+               (if (and (null? *pl-esc*) (null? (cdr bs)) (= (car bs) 27))
+                   (pad:ux-esc!)
+                   (pad:ux-feed! bs *pl-esc*))))))
     (#t (pad:play-step! line))))

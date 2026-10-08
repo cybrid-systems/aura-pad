@@ -1,0 +1,123 @@
+;; Step 5. The frame the person sees and the oracle use the same cells.
+;; ASCII stays byte-identical. No set-code.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/lc.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/file.aura"))
+
+(define (utf:say s)
+  (display s)
+  (newline)
+  0)
+
+(define (utf:thm? ln)
+  (and (>= (string-length ln) 2)
+       (= (string-ref ln 1) 32)
+       (or (= (string-ref ln 0) 84)
+           (= (string-ref ln 0) 72)
+           (= (string-ref ln 0) 77))))
+
+(define (utf:thm-acc xs acc)
+  (if (null? xs)
+      acc
+      (utf:thm-acc (cdr xs)
+        (if (utf:thm? (car xs))
+            (string-append acc (car xs) "\n")
+            acc))))
+
+(define (utf:thm s)
+  (utf:thm-acc (pad:v-split s) ""))
+
+(define (utf:strip s)
+  (let ((n (string-length s)))
+    (if (and (> n 0) (= (string-ref s (- n 1)) 10))
+        (substring s 0 (- n 1))
+        s)))
+
+(define (utf:open! label path)
+  (let ((r (pad:pf-open! path)))
+    (utf:say (string-append label
+                            " open=" r
+                            " ro=" (if *pf-ro* "true" "false")
+                            " say=" *pl-say*))))
+
+(define *utf-good* (getenv "PAD_FILE"))
+(utf:open! "GOOD" *utf-good*)
+
+(define *utf-frame* (pad:play-snap))
+(define *utf-oracle*
+  (pad:snap-text "t" (car *pl-st*) (cadr *pl-st*) (caddr *pl-st*) "s"))
+(define *utf-fr* (utf:thm *utf-frame*))
+(define *utf-or* (utf:thm *utf-oracle*))
+(utf:say "FRAME")
+(display *utf-fr*)
+(utf:say "ORACLE")
+(display *utf-or*)
+(utf:say (string-append "SAME " (if (string=? *utf-fr* *utf-or*) "true" "false")))
+
+(define *utf-raw* (utf:strip (read-file *utf-good*)))
+(define *utf-dec* (pad:utf-decode *utf-raw*))
+(utf:say (string-append "ROUND "
+                        (if (and *utf-dec* (string=? (pad:utf-encode *utf-dec*) *utf-raw*))
+                            "true" "false")))
+(utf:say (string-append "VSRC "
+                        (number->string (string-ref (pad:v-src (list (list 8212))) 0))))
+(utf:say (string-append "TAPE "
+                        (number->string (string-ref (pad:line-text (list 8212)) 0))))
+(utf:say (string-append "FOLD-ARROW "
+                        (number->string (pad:utf-fold 8594))))
+
+(define (utf:bit name n)
+  (utf:say (string-append "SCALAR " name " " (if (pad:ux-scalar? n) "true" "false"))))
+
+(utf:bit "226" 226)
+(utf:bit "8212" 8212)
+(utf:bit "10" 10)
+(utf:bit "13" 13)
+(utf:bit "127" 127)
+(utf:bit "128" 128)
+(utf:bit "159" 159)
+(utf:bit "55296" 55296)
+(utf:bit "1114112" 1114112)
+
+(utf:open! "BAD" (getenv "PAD_UTF_BAD"))
+(utf:open! "TAB" (getenv "PAD_UTF_TAB"))
+
+(pad:play-reset! "(define (x) x)")
+
+(define (utf:gate n)
+  (utf:say (string-append "GATE " (number->string n) " " (pad:play-gate n *pl-st*))))
+
+(define (utf:cmd n)
+  (utf:say (string-append "CMD " (number->string n) " " (pad:play-cmd! n))))
+
+(utf:gate 226)
+(utf:gate 8212)
+(utf:gate 10)
+(utf:gate 13)
+(utf:gate 127)
+(utf:gate 128)
+(utf:gate 159)
+(utf:gate 55296)
+(utf:gate 1114112)
+(utf:cmd 10)
+(utf:cmd 13)
+(utf:cmd 127)
+(utf:cmd 128)
+(utf:cmd 159)
+(utf:cmd 55296)
+(utf:cmd 1114112)
+(utf:cmd 226)
+(utf:cmd 8212)
+(utf:say (string-append "KEY226 " (car (pad:key-step (list) 226))))
+(utf:say "UTF8_UNIT_OK")

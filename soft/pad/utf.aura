@@ -1,0 +1,240 @@
+;; UTF-8 for the page. Scalars stay in the projection. Bytes are only
+;; for the disk and for one display cell. Recursion and arithmetic.
+;; Every loop argument is a parameter. Soft reserved: never bind quote.
+;;
+;; pad:utf-encode writes the file and the child source. It does not fold.
+;; pad:utf-fold and pad:utf-fold-src are the cells a person sees.
+;; ASCII 0-126 is the same byte on both paths.
+
+(define (pad:ux-scalar? n)
+  (and (number? n)
+       (or (and (>= n 32) (<= n 126))
+           (and (>= n 160) (<= n 1114111)
+                (not (and (>= n 55296) (<= n 57343)))))))
+
+;; One cell. 0-126 stays. The table is the design's display fold.
+(define (pad:utf-fold n)
+  (cond
+    ((<= n 126) n)
+    ((= n 8212) 45)
+    ((= n 8211) 45)
+    ((= n 9472) 45)
+    ((= n 8594) 62)
+    ((= n 8805) 62)
+    ((= n 8592) 60)
+    ((= n 8593) 94)
+    ((= n 8595) 118)
+    ((= n 183) 46)
+    ((= n 8230) 46)
+    ((= n 9552) 61)
+    (#t 63)))
+
+(define (pad:utf-cont? b)
+  (and (>= b 128) (<= b 191)))
+
+;; 0 means the byte cannot start a scalar.
+(define (pad:utf-len b0)
+  (cond
+    ((<= b0 127) 1)
+    ((and (>= b0 194) (<= b0 223)) 2)
+    ((and (>= b0 224) (<= b0 239)) 3)
+    ((and (>= b0 240) (<= b0 244)) 4)
+    (#t 0)))
+
+(define (pad:utf-second-ok? b0 b1)
+  (cond
+    ((= b0 224) (and (>= b1 160) (<= b1 191)))
+    ((= b0 237) (and (>= b1 128) (<= b1 159)))
+    ((= b0 240) (and (>= b1 144) (<= b1 191)))
+    ((= b0 244) (and (>= b1 128) (<= b1 143)))
+    (#t (pad:utf-cont? b1))))
+
+(define (pad:utf-at bs i)
+  (list-ref bs i))
+
+(define (pad:utf-prefix-ok? bs)
+  (let ((b0 (car bs)) (n (length bs)))
+    (cond
+      ((= n 1) (> (pad:utf-len b0) 0))
+      ((= n 2) (and (> (pad:utf-len b0) 1) (pad:utf-second-ok? b0 (pad:utf-at bs 1))))
+      ((= n 3) (and (> (pad:utf-len b0) 2)
+                    (pad:utf-second-ok? b0 (pad:utf-at bs 1))
+                    (pad:utf-cont? (pad:utf-at bs 2))))
+      ((= n 4) (and (= (pad:utf-len b0) 4)
+                    (pad:utf-second-ok? b0 (pad:utf-at bs 1))
+                    (pad:utf-cont? (pad:utf-at bs 2))
+                    (pad:utf-cont? (pad:utf-at bs 3))))
+      (#t #f))))
+
+(define (pad:utf-scalar bs)
+  (let ((n (length bs)) (b0 (pad:utf-at bs 0)))
+    (cond
+      ((= n 1) b0)
+      ((= n 2) (+ (* (- b0 192) 64) (- (pad:utf-at bs 1) 128)))
+      ((= n 3) (+ (* (- b0 224) 4096)
+                  (+ (* (- (pad:utf-at bs 1) 128) 64)
+                     (- (pad:utf-at bs 2) 128))))
+      (#t (+ (* (- b0 240) 262144)
+             (+ (* (- (pad:utf-at bs 1) 128) 4096)
+                (+ (* (- (pad:utf-at bs 2) 128) 64)
+                   (- (pad:utf-at bs 3) 128))))))))
+
+;; ("wait") while a lead is still short, ("ok" scalar) when one scalar
+;; is complete, ("bad") for an illegal byte.
+(define (pad:utf-classify bs)
+  (if (or (null? bs) (not (pad:utf-prefix-ok? bs)))
+      (list "bad")
+      (let ((k (pad:utf-len (car bs))))
+        (if (< (length bs) k)
+            (list "wait")
+            (if (= (length bs) k)
+                (list "ok" (pad:utf-scalar bs))
+                (list "bad"))))))
+
+(define (pad:utf-take-bytes s i k acc)
+  (if (= k 0)
+      (reverse acc)
+      (pad:utf-take-bytes s (+ i 1) (- k 1) (cons (string-ref s i) acc))))
+
+;; One scalar at a byte index, or #f. Result is (scalar next-index).
+(define (pad:utf-one s i n)
+  (if (>= i n)
+      #f
+      (let ((k (pad:utf-len (string-ref s i))))
+        (if (or (= k 0) (> (+ i k) n))
+            #f
+            (let ((hit (pad:utf-classify (pad:utf-take-bytes s i k (list)))))
+              (if (string=? (car hit) "ok")
+                  (list (cadr hit) (+ i k))
+                  #f))))))
+
+(define (pad:utf-dec-line s i n acc)
+  (if (>= i n)
+      (list (reverse acc) i)
+      (if (= (string-ref s i) 10)
+          (list (reverse acc) i)
+          (let ((one (pad:utf-one s i n)))
+            (if one
+                (pad:utf-dec-line s (cadr one) n (cons (car one) acc))
+                #f)))))
+
+(define (pad:utf-dec-lines s i n acc)
+  (if (>= i n)
+      (reverse acc)
+      (let ((row (pad:utf-dec-line s i n (list))))
+        (if (not row)
+            #f
+            (let ((j (cadr row)))
+              (if (>= j n)
+                  (reverse (cons (car row) acc))
+                  (if (= (+ j 1) n)
+                      (reverse (cons (list) (cons (car row) acc)))
+                      (pad:utf-dec-lines s (+ j 1) n (cons (car row) acc)))))))))
+
+;; Body -> lines of scalars, or #f. A newline is a line break, not a scalar.
+(define (pad:utf-decode s)
+  (if (= (string-length s) 0)
+      (list (list))
+      (pad:utf-dec-lines s 0 (string-length s) (list))))
+
+(define (pad:utf-line-ok? ln)
+  (if (null? ln)
+      #t
+      (if (pad:ux-scalar? (car ln))
+          (pad:utf-line-ok? (cdr ln))
+          #f)))
+
+(define (pad:utf-page-ok? L)
+  (if (null? L)
+      #t
+      (if (pad:utf-line-ok? (car L))
+          (pad:utf-page-ok? (cdr L))
+          #f)))
+
+;; Scalar -> UTF-8 byte codes, each 0-255. Never a cell above 255.
+(define (pad:utf-bytes n)
+  (cond
+    ((or (< n 0) (> n 1114111)) (list 63))
+    ((<= n 127) (list n))
+    ((<= n 2047)
+     (list (+ 192 (quotient n 64))
+           (+ 128 (modulo n 64))))
+    ((<= n 65535)
+     (list (+ 224 (quotient n 4096))
+           (+ 128 (modulo (quotient n 64) 64))
+           (+ 128 (modulo n 64))))
+    (#t
+     (list (+ 240 (quotient n 262144))
+           (+ 128 (modulo (quotient n 4096) 64))
+           (+ 128 (modulo (quotient n 64) 64))
+           (+ 128 (modulo n 64))))))
+
+(define (pad:utf-cons-bytes bs acc)
+  (if (null? bs)
+      acc
+      (pad:utf-cons-bytes (cdr bs) (cons (car bs) acc))))
+
+(define (pad:utf-line-bytes ln acc)
+  (if (null? ln)
+      (reverse acc)
+      (pad:utf-line-bytes (cdr ln) (pad:utf-cons-bytes (pad:utf-bytes (car ln)) acc))))
+
+(define (pad:utf-line-str ln)
+  (list->string (pad:utf-line-bytes ln (list))))
+
+(define (pad:utf-encode-acc L first acc)
+  (if (null? L)
+      acc
+      (pad:utf-encode-acc (cdr L) #f
+        (if first
+            (pad:utf-line-str (car L))
+            (string-append acc "\n" (pad:utf-line-str (car L)))))))
+
+(define (pad:utf-encode L)
+  (pad:utf-encode-acc L #t ""))
+
+;; True after a scalar above 126 is on the page. ASCII frames then skip
+;; the fold and keep the old list->string cost. A reset clears it.
+(define *utf-hi* #f)
+
+(define (pad:utf-note! n)
+  (if (and (number? n) (> n 126))
+      (set! *utf-hi* #t)
+      0))
+
+(define (pad:utf-note-str! s i n)
+  (if (or *utf-hi* (>= i n))
+      0
+      (begin
+        (if (> (string-ref s i) 126) (set! *utf-hi* #t) 0)
+        (pad:utf-note-str! s (+ i 1) n))))
+
+(define (pad:utf-note-line! ln)
+  (if (or *utf-hi* (null? ln))
+      0
+      (begin
+        (pad:utf-note! (car ln))
+        (pad:utf-note-line! (cdr ln)))))
+
+(define (pad:utf-note-page! L)
+  (if (or *utf-hi* (null? L))
+      0
+      (begin
+        (pad:utf-note-line! (car L))
+        (pad:utf-note-page! (cdr L)))))
+
+(define (pad:utf-cells codes)
+  (if *utf-hi*
+      (list->string (map pad:utf-fold codes))
+      (list->string codes)))
+
+(define (pad:utf-fold-lines L)
+  (if (null? L)
+      (list)
+      (cons (map pad:utf-fold (car L)) (pad:utf-fold-lines (cdr L)))))
+
+;; Display text. One byte per scalar. Same bytes as pad:utf-encode on ASCII.
+(define (pad:utf-fold-src L)
+  (pad:utf-encode (pad:utf-fold-lines L)))
+
+(define *utf-on* #t)

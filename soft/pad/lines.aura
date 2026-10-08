@@ -5,6 +5,13 @@
 ;; pad:seed-step). M0-M2 do not load this file.
 ;; Soft reserved: never bind the identifier quote.
 
+(if (try *utf-on* (catch (e) #f))
+    0
+    (load (string-append
+            (let ((h (getenv "AURA_PAD_HOME")))
+              (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad"))
+            "/soft/pad/utf.aura")))
+
 (require "std/string" all:)
 
 ;; Goal fixture: two lines "hi" / "aura".
@@ -64,8 +71,9 @@
               (append acc (list (+ 97 (modulo r 26))))))))
 
 ;; Line text for TAPE: "hi|aura".
+;; Tape only. The file is pad:utf-encode, not this fold.
 (define (pad:line-text ln)
-  (list->string (map integer->char ln)))
+  (list->string (map integer->char (map pad:utf-fold ln))))
 
 (define (pad:lines-text L)
   (string-join (map pad:line-text L) "|"))
