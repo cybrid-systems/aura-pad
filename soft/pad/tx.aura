@@ -658,7 +658,7 @@
                     (pad:tx-gate-ops (cdr ops))
                     g))))))))
 
-(define (pad:tx-ops-child! c ops src)
+(define (pad:tx-ops-child! c ops checks src)
   (if (not (= (pad:tx-current) c))
       (begin
         (pad:tx-leave! c)
@@ -715,33 +715,43 @@
                                                   (pad:tx-leave! c)
                                                   (list "DROP"
                                                     "GAPS mutate:set-agent-fingerprint"))
-                                                (let ((ok (pad:world-batch!
-                                                            (pad:robot-tx-sexprs ops))))
-                                                  (pad:tx-show!
-                                                    (string-append
-                                                      "APPLY ops="
-                                                      (number->string (length ops))))
-                                                  (pad:tx-show!
-                                                    (string-append
-                                                      "APPLY typed-mutate-atomic="
-                                                      (if (eq? ok #t) "ok" "no")))
-                                                  (pad:tx-fp! "kid")
-                                                  (if (not (eq? ok #t))
-                                                      (pad:tx-fail! c snap "type" src)
-                                                      (begin
-                                                        (try (workspace :switch 0)
-                                                             (catch (e) #f))
-                                                        (pad:tx-show! "APPLY tried=1")
-                                                        (list "tried"
-                                                          "aura cannot change this page yet"))))))))))))))))))))
+                                                (let ((page-n (pad:tx-score checks)))
+                                                  (let ((ok (pad:world-batch!
+                                                              (pad:robot-tx-sexprs ops))))
+                                                    (pad:tx-show!
+                                                      (string-append
+                                                        "APPLY ops="
+                                                        (number->string (length ops))))
+                                                    (pad:tx-show!
+                                                      (string-append
+                                                        "APPLY typed-mutate-atomic="
+                                                        (if (eq? ok #t) "ok" "no")))
+                                                    (pad:tx-fp! "kid")
+                                                    (if (not (eq? ok #t))
+                                                        (pad:tx-fail! c snap "type" src)
+                                                        (begin
+                                                          (let ((child-n (pad:tx-score checks)))
+                                                            (pad:tx-score-show! page-n child-n)
+                                                            0)
+                                                          (try (workspace :switch 0)
+                                                               (catch (e) #f))
+                                                          (pad:tx-show! "APPLY tried=1")
+                                                          (list "tried"
+                                                            "aura cannot change this page yet")))))))))))))))))))))
 
-(define (pad:tx-ops! ops src)
-  (if (not (and (pad:tx-robot-ready!) (pad:tx-world-ready!)))
-      (list "DROP" "aura cannot change this page yet")
-      (let ((c (pad:world-open! "try")))
-        (if (not (number? c))
-            (list "DROP" "aura cannot change this page yet")
-            (pad:tx-ops-child! c ops src)))))
+(define (pad:tx-ops! ops checks src)
+  (set! *tx-exec* 0)
+  (if (pad:tx-danger? ops)
+      (begin
+        (pad:tx-show! "SCORE exec=0")
+        (pad:tx-show! "SCORE better=no")
+        (list "no" "aura cannot change this page yet"))
+      (if (not (and (pad:tx-robot-ready!) (pad:tx-world-ready!)))
+          (list "DROP" "aura cannot change this page yet")
+          (let ((c (pad:world-open! "try")))
+            (if (not (number? c))
+                (list "DROP" "aura cannot change this page yet")
+                (pad:tx-ops-child! c ops checks src))))))
 
 (define (pad:tx-dispatch! parsed)
   (let ((kind (car parsed)))
@@ -750,7 +760,8 @@
       ((string=? kind "gate")
        (pad:tx-show! (string-append "APPLY gate=" (cadr parsed)))
        (list "DROP" (cadr parsed)))
-      ((string=? kind "ops") (pad:tx-ops! (cadr parsed) (pad:tx-page)))
+      ((string=? kind "ops")
+       (pad:tx-ops! (cadr parsed) (caddr parsed) (pad:tx-page)))
       (#t (list "DROP" "aura cannot change this page yet")))))
 
 (define (pad:tx-run! text)
@@ -761,3 +772,87 @@
       (if (not (string? text))
           (list "DROP" "aura cannot change this page yet")
           (pad:tx-dispatch! (pad:tx-parse text)))))
+
+;; How many check calls this proposal made. A refused form stays at 0.
+(define *tx-exec* 0)
+
+(define (pad:tx-digit? c)
+  (and (>= c 48) (<= c 57)))
+
+(define (pad:tx-num-acc s i n acc bad)
+  (if (>= i n)
+      (if (eq? bad #t) #f acc)
+      (let ((c (string-ref s i)))
+        (if (pad:tx-digit? c)
+            (pad:tx-num-acc s (+ i 1) n (+ (* acc 10) (- c 48)) bad)
+            (pad:tx-num-acc s n n acc #t)))))
+
+(define (pad:tx-num s)
+  (if (not (string? s))
+      #f
+      (let ((n (string-length s)))
+        (if (= n 0)
+            #f
+            (if (= (string-ref s 0) 45)
+                (if (< n 2)
+                    #f
+                    (let ((v (pad:tx-num-acc s 1 n 0 #f)))
+                      (if (number? v) (- 0 v) #f)))
+                (pad:tx-num-acc s 0 n 0 #f))))))
+
+(define (pad:tx-as-num v)
+  (cond
+    ((number? v) v)
+    ((eq? v #t) 1)
+    ((eq? v #f) 0)
+    (#t #f)))
+
+;; Call the function that is already bound. The model form is not passed in.
+(define (pad:tx-call! name lit)
+  (set! *tx-exec* (+ *tx-exec* 1))
+  (try (eval (string-append "("
+               (string-append name
+                 (string-append " " (string-append lit ")")))))
+       (catch (e) (list "raised"))))
+
+(define (pad:tx-check-pass? chk)
+  (let ((got (pad:tx-call! (car chk) (cadr chk))))
+    (if (and (pair? got) (string? (car got)) (string=? (car got) "raised"))
+        #f
+        (let ((want (pad:tx-num (caddr chk))))
+          (if (number? want)
+              (let ((g (pad:tx-as-num got)))
+                (and (number? g) (= g want)))
+              (equal? got (caddr chk)))))))
+
+(define (pad:tx-score checks)
+  (if (not (pair? checks))
+      0
+      (+ (if (pad:tx-check-pass? (car checks)) 1 0)
+         (pad:tx-score (cdr checks)))))
+
+(define (pad:tx-score-show! page-n child-n)
+  (pad:tx-show! (string-append "SCORE page=" (number->string page-n)))
+  (pad:tx-show! (string-append "SCORE child=" (number->string child-n)))
+  (pad:tx-show! (string-append "SCORE better="
+                  (if (> child-n page-n) "yes" "no")))
+  (pad:tx-show! (string-append "SCORE exec=" (number->string *tx-exec*)))
+  0)
+
+(define (pad:tx-scan-ready!)
+  (if (try pad:read-guard-src? (catch (e) #f))
+      #t
+      (pad:tx-aw-ready!)))
+
+(define (pad:tx-scan-ops ops)
+  (if (null? ops)
+      #f
+      (if (pad:read-guard-src?
+            (pad:tx-form (car (car ops)) (cadr (car ops))))
+          #t
+          (pad:tx-scan-ops (cdr ops)))))
+
+(define (pad:tx-danger? ops)
+  (if (not (pad:tx-scan-ready!))
+      #t
+      (pad:tx-scan-ops ops)))

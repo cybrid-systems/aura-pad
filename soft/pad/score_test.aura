@@ -1,0 +1,89 @@
+;; Step 40. The same checks score the page and the child.
+;; A dangerous form is not called. Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+(load (string-append *pad-home* "/soft/pad/tx.aura"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define (slurp name)
+  (let ((p (string-append *pad-home*
+             (string-append "/soft/pad/fixtures/" name))))
+    (let ((raw (try (read-file p) (catch (e) #f))))
+      (if (string? raw) raw ""))))
+
+(define page
+  (string-append ";; keep this\n\n"
+    (string-append "(define (hello x)\n  (+ x 1))\n"
+      "(define (main) (hello 3))\n")))
+
+(define show-d
+  (string-append "hello=(lambda (x) (display \"hi\"))\n"
+    "check hello 1 1\n"))
+
+(define begin-d
+  (string-append "hello=(lambda (x) (begin (display \"hi\") x))\n"
+    "check hello 1 1\n"))
+
+(define let-d
+  (string-append "hello=(lambda (x) (let ((y x)) (require \"std/string\")))\n"
+    "check hello 1 1\n"))
+
+(define nest-d
+  (string-append "hello=(lambda (x) ((lambda () (load \"a\"))))\n"
+    "check hello 1 1\n"))
+
+(define same-t
+  (string-append "hello=(lambda (x) (+ x 1))\n"
+    "check hello 3 4\n"))
+
+(define lower-t
+  (string-append "hello=(lambda (x) (+ x 0))\n"
+    "check hello 3 4\n"))
+
+(set! *ux-lines* (pad:v-lines page))
+(define *read-proj* page)
+
+(define (page-same? tag)
+  (say (string-append "CHECK "
+         (string-append tag
+           (if (string=? (pad:v-src *ux-lines*) page)
+               " page=same"
+               " page=moved"))))
+  0)
+
+(define (one! tag text)
+  (say (string-append "MARK " tag))
+  (say (string-append "CHECK "
+         (string-append tag
+           (string-append " kind=" (car (pad:tx-run! text))))))
+  (page-same? tag)
+  0)
+
+(one! "show" show-d)
+(one! "begin" begin-d)
+(one! "let" let-d)
+(one! "nest" nest-d)
+(one! "up" (slurp "propose_ok.txt"))
+(one! "same" same-t)
+(one! "lower" lower-t)
+(say "MARK end")
+(say "SCORE_UNIT_OK")
