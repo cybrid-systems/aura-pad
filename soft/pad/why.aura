@@ -213,3 +213,42 @@
   (if (string? tc) (pad:why-diag-msgs (pad:why-cut tc "\n") (list)) (list)))
 (define (pad:why-tc-now)
   (try (pad:why-diags (typecheck-incremental)) (catch (e) (list))))
+
+;; Story SAY uses only fields already in the engine text, and stays
+;; at most eight words. An aura page may keep the engine text.
+(define (pad:why-short-type text)
+  (let ((got (pad:why-after text "got " *why-stops*)))
+    (let ((exp (pad:why-after text "expected " *why-stops*)))
+      (if (or (string=? got "") (string=? exp ""))
+          "aura said no"
+          (string-append "used "
+            (string-append (pad:why-type-word got)
+              (string-append " where "
+                (string-append (pad:why-type-word exp) " go"))))))))
+
+(define (pad:why-short-arity text)
+  (let ((call (pad:why-after text "call '" *why-stops*)))
+    (let ((want (pad:why-after text "expected " *why-stops*)))
+      (let ((got (pad:why-after text "got " *why-stops*)))
+        (if (or (string=? call "")
+                (or (string=? want "") (string=? got "")))
+            "aura said no"
+            (string-append call
+              (string-append " wants "
+                (string-append (pad:why-things want)
+                  (string-append ", got " got)))))))))
+
+(define (pad:why-face proj text)
+  (cond
+    ((not (string? text)) "aura said no")
+    ((and (string? proj) (string=? proj "aura"))
+     (cond
+       ((string=? text "not-kind") "let's use kind words")
+       ((string=? text "not-allowed")
+        "that change uses a word the pad keeps locked")
+       (#t text)))
+    ((pad:why-has? text "type error") (pad:why-short-type text))
+    ((pad:why-has? text "arity mismatch") (pad:why-short-arity text))
+    ((string=? text "not-kind") "let's use kind words")
+    ((string=? text "not-allowed") "uses a word the pad keeps locked")
+    (#t "aura said no")))

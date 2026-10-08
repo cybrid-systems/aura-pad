@@ -132,3 +132,24 @@
                             "ok"
                             g1)
                         (if (eq? wrote #t) "yes" "no"))))))))))
+
+;; Story refusals go through the why table. The page text stays put.
+(define (pad:sp-why-ready!)
+  (if (try pad:why-face (catch (e) #f))
+      #t
+      (if (try pad:tx-load-in! (catch (e) #f))
+          (pad:tx-load-in! "sp-why"
+            (string-append (pad:tx-home) "/soft/pad/why.aura"))
+          #f)))
+
+(define (pad:sp-say! proj text)
+  (if (pad:sp-why-ready!)
+      (let ((s (pad:why-face proj text)))
+        (if (string? (try *pl-say* (catch (e) #f)))
+            (set! *pl-say* s)
+            0)
+        s)
+      "aura said no"))
+
+(define (pad:sp-gate-say! proj lam)
+  (pad:sp-say! proj (pad:tx-gate "kid" "s1" lam #t 0)))

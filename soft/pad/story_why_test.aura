@@ -1,0 +1,56 @@
+;; Step 51. Story refusals are at most eight words.
+;; An aura page may keep the engine text.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/lc.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/read.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+(load (string-append *pad-home* "/soft/pad/tx.aura"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define type-text "type error: argument 1: expected String, got Int")
+(define arity-text "arity mismatch: call 'hello': expected 1 arguments, got 2")
+(define mean-lam "(lambda () stupid)")
+(define ban-lam "(lambda () (display x))")
+
+(pad:tx-story-ready!)
+
+(let ((s (pad:sp-say! "story" type-text)))
+  (say (string-append "CHECK type-story=" s))
+  (say (string-append "CHECK slot="
+        (if (string=? s (try *pl-say* (catch (e) ""))) "yes" "no")))
+  (say (string-append "CHECK type-aura=" (pad:sp-say! "aura" type-text)))
+  (say (string-append "CHECK arity-story=" (pad:sp-say! "story" arity-text)))
+  (say (string-append "CHECK arity-aura=" (pad:sp-say! "aura" arity-text)))
+  0)
+
+(let ((tag (pad:tx-gate "kid" "s1" mean-lam #t 0)))
+  (say (string-append "CHECK mean-tag=" tag))
+  (say (string-append "CHECK mean-story=" (pad:sp-say! "story" tag)))
+  (say (string-append "CHECK mean-aura=" (pad:sp-say! "aura" tag)))
+  0)
+
+(let ((tag (pad:tx-gate "kid" "s1" ban-lam #t 0)))
+  (say (string-append "CHECK ban-tag=" tag))
+  (say (string-append "CHECK ban-story=" (pad:sp-say! "story" tag)))
+  (say (string-append "CHECK ban-aura=" (pad:sp-say! "aura" tag)))
+  0)
