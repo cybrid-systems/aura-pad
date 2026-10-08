@@ -1344,6 +1344,28 @@
       (string-append (pad:tx-home)
         "/soft/pad/fixtures/propose_two.txt"))))
 
+;; One define per story line, in a child. The page text stays here.
+(define (pad:tx-story-ready!)
+  (if (try pad:sp-child! (catch (e) #f))
+      #t
+      (pad:tx-load-in! "tx-story"
+        (string-append (pad:tx-home) "/soft/pad/story_proj.aura"))))
+
+(define (pad:tx-story-child! lines)
+  (if (pad:tx-story-ready!)
+      (pad:sp-child! lines)
+      (list "missing" "no-def" "no-def" "no")))
+
+(define (pad:tx-story-code! lines)
+  (if (pad:tx-story-ready!)
+      (pad:sp-code! lines)
+      "not aura code"))
+
+(define (pad:tx-story-say! lines)
+  (if (pad:tx-story-ready!)
+      (pad:sp-story! lines)
+      "not a story"))
+
 ;; Enter splices only the idea whose host score is strictly higher.
 ;; The other idea is refused. No other key writes it.
 (define (pad:tx-pair-act!)

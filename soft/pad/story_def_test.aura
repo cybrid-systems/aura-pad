@@ -1,0 +1,54 @@
+;; Step 50. Three story lines become s1 s2 s3 in a child.
+;; The projection stays the sentences. Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/lc.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/read.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+(load (string-append *pad-home* "/soft/pad/tx.aura"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define page
+  (string-append "the cat sat\n"
+    (string-append "the cat ran\n" "the cat slept")))
+
+(define lines
+  (list "the cat sat" "the cat ran" "the cat slept"))
+
+(define sexp
+  (list "(define (hello x)" "  (+ x 1))"))
+
+(set! *ux-lines* (pad:v-lines page))
+
+(let ((r (pad:tx-story-child! lines)))
+  (say (string-append "CHECK names=" (car r)))
+  (say (string-append "CHECK before=" (cadr r)))
+  (say (string-append "CHECK gate=" (caddr r)))
+  (say (string-append "CHECK wrote=" (car (cdr (cdr (cdr r))))))
+  (say (string-append "CHECK page="
+        (if (string=? (pad:v-src *ux-lines*) page) "same" "moved")))
+  (say (string-append "CHECK shown="
+        (if (string-contains? (pad:v-src *ux-lines*) "(define")
+            "define"
+            "sentences")))
+  (say (string-append "CHECK code=" (pad:tx-story-code! lines)))
+  (say (string-append "CHECK story=" (pad:tx-story-say! sexp)))
+  0)

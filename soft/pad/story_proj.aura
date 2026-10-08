@@ -1,0 +1,134 @@
+;; Story projection. The page the person sees stays the sentences.
+;; The child program is one define per line: s1, s2, s3.
+;; Those forms are not drawn on a SNAP row.
+;; Soft reserved: never bind quote.
+
+(define (pad:sp-name i)
+  (string-append "s" (number->string i)))
+
+(define (pad:sp-lam line)
+  (string-append "(lambda () " (string-append (pad:tx-q line) ")")))
+
+(define (pad:sp-form i line)
+  (string-append "(define "
+    (string-append (pad:sp-name i)
+      (string-append " "
+        (string-append (pad:sp-lam line) ")")))))
+
+(define (pad:sp-join lines i)
+  (if (null? lines)
+      ""
+      (string-append (pad:sp-form i (car lines))
+        (if (null? (cdr lines))
+            ""
+            (string-append "\n" (pad:sp-join (cdr lines) (+ i 1)))))))
+
+(define (pad:sp-src lines)
+  (if (null? lines)
+      ""
+      (string-append (car lines)
+        (if (null? (cdr lines))
+            ""
+            (string-append "\n" (pad:sp-src (cdr lines)))))))
+
+(define (pad:sp-nth lines i)
+  (if (= i 0) (car lines) (pad:sp-nth (cdr lines) (- i 1))))
+
+(define (pad:sp-ws? c)
+  (or (= c 32) (= c 9) (= c 10) (= c 13)))
+
+(define (pad:sp-blank-at s i n)
+  (or (>= i n)
+      (and (pad:sp-ws? (string-ref s i))
+           (pad:sp-blank-at s (+ i 1) n))))
+
+(define (pad:sp-blank? line)
+  (pad:sp-blank-at line 0 (string-length line)))
+
+(define (pad:sp-letter? c)
+  (or (and (>= c 65) (<= c 90))
+      (and (>= c 97) (<= c 122))))
+
+(define (pad:sp-has-letter? s i n)
+  (and (< i n)
+       (or (pad:sp-letter? (string-ref s i))
+           (pad:sp-has-letter? s (+ i 1) n))))
+
+(define (pad:sp-has-paren? s i n)
+  (and (< i n)
+       (or (= (string-ref s i) 40)
+           (= (string-ref s i) 41)
+           (pad:sp-has-paren? s (+ i 1) n))))
+
+(define (pad:sp-comment? line)
+  (and (> (string-length line) 0) (= (string-ref line 0) 59)))
+
+(define (pad:sp-sentence? line)
+  (let ((n (string-length line)))
+    (and (not (pad:sp-blank? line))
+         (not (pad:sp-comment? line))
+         (not (pad:sp-has-paren? line 0 n))
+         (pad:sp-has-letter? line 0 n))))
+
+(define (pad:sp-sentences? lines)
+  (cond
+    ((null? lines) #t)
+    ((pad:sp-sentence? (car lines)) (pad:sp-sentences? (cdr lines)))
+    (#t #f)))
+
+(define (pad:sp-aura? lines)
+  (and (not (pad:sp-sentences? lines))
+       (eq? (try (pad:read-guard-src? (pad:sp-src lines)) (catch (e) #t)) #f)))
+
+(define (pad:sp-code! lines)
+  (if (string? (try *pl-say* (catch (e) #f)))
+      (set! *pl-say* (if (pad:sp-aura? lines) "aura" "not aura code"))
+      0)
+  (try *pl-say* (catch (e) "not aura code")))
+
+(define (pad:sp-story! lines)
+  (if (string? (try *pl-say* (catch (e) #f)))
+      (set! *pl-say* (if (pad:sp-sentences? lines) "story" "not a story"))
+      0)
+  (try *pl-say* (catch (e) "not a story")))
+
+(define (pad:sp-defined? name)
+  (pair? (try (query:defines name) (catch (e) #f))))
+
+(define (pad:sp-born? name)
+  (pair? (pad:define-lookup name)))
+
+(define (pad:sp-gate name lam)
+  (pad:tx-gate "kid" name lam (if (pad:sp-born? name) #t #f) 0))
+
+(define (pad:sp-child! lines)
+  (let ((src (pad:sp-join lines 1))
+        (lam1 (pad:sp-lam (pad:sp-nth lines 0)))
+        (lam2 (pad:sp-lam (pad:sp-nth lines 1)))
+        (lam3 (pad:sp-lam (pad:sp-nth lines 2))))
+    (let ((c (try (workspace :create "story") (catch (e) #f))))
+      (if (not (number? c))
+          (list "missing" "no-def" "no-def" "no")
+          (begin
+            (try (workspace :switch c) (catch (e) #f))
+            (let ((before (pad:sp-gate "s1" lam1)))
+              (let ((wrote (try (set-code (string-append src "\n#t\n"))
+                                (catch (e) #f))))
+                (let ((g1 (pad:sp-gate "s1" lam1))
+                      (g2 (pad:sp-gate "s2" lam2))
+                      (g3 (pad:sp-gate "s3" lam3))
+                      (names (if (and (pad:sp-defined? "s1")
+                                      (pad:sp-defined? "s2")
+                                      (pad:sp-defined? "s3"))
+                                 "s1.s2.s3"
+                                 "missing")))
+                  (try (workspace :switch 0) (catch (e) #f))
+                  (try (workspace:delete c) (catch (e) #f))
+                  (list names
+                        before
+                        (if (and (string=? g1 "ok")
+                                 (string=? g2 "ok")
+                                 (string=? g3 "ok"))
+                            "ok"
+                            g1)
+                        (if (eq? wrote #t) "yes" "no"))))))))))
