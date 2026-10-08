@@ -1,0 +1,63 @@
+;; Step 55. Multi-line proposals and a tab sentence cut on string-index.
+;; Load view first so the later files see the recursive string copies.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/fix_loop.aura"))
+(load (string-append *pad-home* "/soft/pad/kid_rules.aura"))
+
+(define *fxd-fail* 0)
+
+(define (fxd-same? a b)
+  (cond
+    ((and (null? a) (null? b)) #t)
+    ((and (number? a) (number? b)) (= a b))
+    ((and (string? a) (string? b)) (string=? a b))
+    ((and (pair? a) (pair? b))
+     (and (fxd-same? (car a) (car b)) (fxd-same? (cdr a) (cdr b))))
+    (#t #f)))
+
+(define (fxd-check tag got want)
+  (set! *fxd-fail* (if (fxd-same? got want) *fxd-fail* (+ *fxd-fail* 1)))
+  (display "CHECK ")
+  (display tag)
+  (display "=")
+  (display (if (fxd-same? got want) "ok" "fail"))
+  (newline))
+
+(define want-ops
+  (list (list "hello" "(lambda (x) (+ x 1))")
+        (list "main" "(lambda () (hello 3))")))
+
+(define blob
+  (string-append "hello=(lambda (x) (+ x 1))\n"
+                 "main=(lambda () (hello 3))\n"))
+
+(define blank
+  (string-append "hello=(lambda (x) (+ x 1))\n\n"
+                 "main=(lambda () (hello 3))"))
+
+(define hist
+  (string-append "note:attempt_1:passes 1 of 3 checks\n"
+                 "note:attempt_2:success\n"))
+
+(fxd-check "dec" (pad:fx-dec blob) want-ops)
+(fxd-check "round" (pad:fx-dec (pad:fx-enc want-ops)) want-ops)
+(fxd-check "blank" (pad:fx-dec blank) want-ops)
+(fxd-check "not-str" (pad:fx-dec 0) (list))
+(fxd-check "tab" (pad:kr-parts "tab 4") (list "tab" "4"))
+(fxd-check "tab-gap" (pad:kr-parts "tab  4") (list "tab" "4"))
+(fxd-check "tab-num" (string->number (cadr (pad:kr-parts "tab 4"))) 4)
+(fxd-check "hist" (pad:fx-hist-lines hist)
+           (list (list 1 "passes 1 of 3 checks") (list 2 "success")))
+
+(if (= *fxd-fail* 0)
+    (display "FX_DEC_UNIT_OK\n")
+    (begin
+      (display "FX_DEC_UNIT_FAIL ")
+      (display *fxd-fail*)
+      (newline)))

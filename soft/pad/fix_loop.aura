@@ -46,7 +46,7 @@
     (#t (let ((op (pad:fx-dec-line (car xs))))
           (if op (cons op (pad:fx-dec-all (cdr xs))) (pad:fx-dec-all (cdr xs)))))))
 (define (pad:fx-dec s)
-  (if (string? s) (pad:fx-dec-all (string-split s "\n")) (list)))
+  (if (string? s) (pad:fx-dec-all (pad:why-cut s "\n")) (list)))
 
 ;; --- the verifier: child world, checks, kid sentence ---
 (define (pad:fx-verify code)
@@ -89,7 +89,7 @@
 
 ;; --- intend-history -> ((i text) ...) for the attempt lines ---
 (define (pad:fx-hist-lines s)
-  (if (string? s) (pad:fx-hist-parse (string-split s "\n")) (list)))
+  (if (string? s) (pad:fx-hist-parse (pad:why-cut s "\n")) (list)))
 (define (pad:fx-hist-parse xs)
   (if (null? xs)
       (list)

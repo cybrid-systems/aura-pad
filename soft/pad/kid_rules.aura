@@ -76,7 +76,7 @@
 
 ;; "tab  4" -> ("tab" "4")
 (define (pad:kr-parts s)
-  (pad:kr-nonempty (string-split s " ")))
+  (pad:kr-nonempty (pad:why-cut s " ")))
 (define (pad:kr-nonempty xs)
   (cond
     ((null? xs) (list))

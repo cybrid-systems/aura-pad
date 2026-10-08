@@ -48,12 +48,12 @@ for f in "${files[@]}"; do
   grep -q 'not measure a return' "$f" || fail "$(basename "$f") missing the no-measure note"
 done
 
-# The two files this step must not touch.
-if ! grep -q 'string-split' "$ROOT/soft/pad/fix_loop.aura"; then
-  fail "fix_loop.aura changed before its step"
+# Step 55 removed the std cutter from the two files step 24 left alone.
+if grep -q 'string-split' "$ROOT/soft/pad/fix_loop.aura"; then
+  fail "fix_loop.aura still names the std cutter"
 fi
-if ! grep -q 'string-split' "$ROOT/soft/pad/kid_rules.aura"; then
-  fail "kid_rules.aura changed before its step"
+if grep -q 'string-split' "$ROOT/soft/pad/kid_rules.aura"; then
+  fail "kid_rules.aura still names the std cutter"
 fi
 
 AURA_PATH="$lib" AURA_PIPELINE_STRICT=0 AURA_SANDBOX=off \
