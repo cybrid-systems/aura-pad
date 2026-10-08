@@ -1,0 +1,127 @@
+;; Step 56. The first idea fails its type check. The second passes.
+;; SAY carries try 1 and try 2 from intend-history. The page moves
+;; on the final KEEP. Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/lc.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/who.aura"))
+(load (string-append *pad-home* "/soft/pad/who_pen.aura"))
+(load (string-append *pad-home* "/soft/pad/eng_who.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/robot.aura"))
+(load (string-append *pad-home* "/soft/pad/time.aura"))
+(load (string-append *pad-home* "/soft/pad/world.aura"))
+(load (string-append *pad-home* "/soft/pad/tx.aura"))
+
+(define *txf-fail* 0)
+
+(define *txf-page*
+  (string-append "(define (hello x) (+ x 1))\n"
+    (string-append "(define (bye y) (hello y))\n"
+      (string-append "(define (add a b) (+ a b))\n"
+                     "(define (greet n) (add n 1))\n"))))
+
+(define *txf-goal*
+  (list (list "hello 3 is 6" (lambda () (hello 3)) 6)
+        (list "bye 2 is 4" (lambda () (bye 2)) 4)
+        (list "greet 1 is 2" (lambda () (greet 1)) 2)))
+
+(define *txf-bad*
+  (list (list "hello" "(lambda (x) (string-append x 1))")))
+
+(define *txf-good*
+  (list (list "hello" "(lambda (x) (* x 2))")))
+
+(define (txf-fixer ops err)
+  *txf-good*)
+
+(define (txf-check tag ok)
+  (set! *txf-fail* (if ok *txf-fail* (+ *txf-fail* 1)))
+  (display "CHECK ")
+  (display tag)
+  (display "=")
+  (display (if ok "ok" "fail"))
+  (newline))
+
+(define (txf-src)
+  (pad:v-src (pad:es-L *pl-st*)))
+
+(define (txf-older log)
+  (if (and (pair? log) (pair? (cdr log)) (null? (cddr log)))
+      (cadr log)
+      #f))
+
+(define (txf-go)
+  (pad:play-reset! *txf-page*)
+  (pad:who-reset!)
+  (set! *robot-undo* (list))
+  (let ((loaded (car (pad:who-check!))))
+    (let ((before (txf-src))
+          (row1 (pad:v-src (list (list-ref (pad:es-L *pl-st*) 1))))
+          (kids0 *world-children*))
+      (let ((r (pad:tx-fix! *txf-goal* *txf-bad* txf-fixer)))
+        (let ((after (txf-src))
+              (say (if (and (pair? r) (pair? (cdr r)) (string? (cadr r)))
+                       (cadr r)
+                       ""))
+              (tag (if (and (pair? r) (string? (car r))) (car r) ""))
+              (verdict (if (and (pair? r) (pair? (cdr r)) (pair? (cddr r))
+                                (string? (caddr r)))
+                           (caddr r)
+                           ""))
+              (old (try (txf-older *fx-log*) (catch (e) #f)))
+              (hist (try (intend-history) (catch (e) ""))))
+          (txf-check "load" (string=? loaded "ok"))
+          (txf-check "tag" (string=? tag "FIXED"))
+          (txf-check "verdict" (string=? verdict "agree"))
+          (txf-check "say-1" (string-contains? say "try 1:"))
+          (txf-check "say-2" (string-contains? say "try 2:"))
+          (txf-check "say-line" (string=? *pl-say* say))
+          (txf-check "hist-1" (and (string? hist) (string-contains? hist "attempt_1:")))
+          (txf-check "hist-2" (and (string? hist) (string-contains? hist "attempt_2:success")))
+          (txf-check "disagree" (equal? (try *fx-disagree* (catch (e) -1)) 0))
+          (txf-check "tries" (and old #t))
+          (txf-check "type"
+            (and old (string? (cadr old))
+                 (string-contains? (cadr old) "used ")
+                 (= (caddr old) -1)))
+          (txf-check "during" (string=? verdict "agree"))
+          (txf-check "moved" (not (string=? before after)))
+          (txf-check "kept" (string-contains? after "(* x 2)"))
+          (txf-check "no-bad" (not (string-contains? after "string-append x 1")))
+          (txf-check "row1" (string=? row1
+                               (pad:v-src (list (list-ref (pad:es-L *pl-st*) 1)))))
+          (txf-check "hello" (equal? (try (hello 3) (catch (e) "raised")) 6))
+          (txf-check "bye" (equal? (try (bye 2) (catch (e) "raised")) 4))
+          (txf-check "kids" (= (- *world-children* kids0) 2))
+          (txf-check "max" (equal? (try *fx-max* (catch (e) -1)) 3))
+          (display "NOTE say=")
+          (display say)
+          (newline)
+          (if old
+              (begin
+                (display "NOTE try1=")
+                (display (cadr old))
+                (newline))
+              0))))))
+
+(txf-go)
+(if (= *txf-fail* 0)
+    (display "TX_FIX_UNIT_OK\n")
+    (begin
+      (display "TX_FIX_UNIT_FAIL ")
+      (display *txf-fail*)
+      (newline)))

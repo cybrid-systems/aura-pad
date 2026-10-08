@@ -202,6 +202,12 @@
             (set! *pl-say* say)
             (list (car *fx-last*) say v))))))
 
+;; Sentence repair. Same intend call as pad:fx-run!. The verifier is
+;; pad:fx-verify, which tries each idea in its own child world.
+;; *fx-max* stays 3. The page moves only when the last idea is a KEEP.
+(define (pad:fx-tx! goal first fixer)
+  (pad:fx-run! "helper" "pass the checks" goal first fixer "closer"))
+
 ;; FIX tag=FIXED status=ok base=1 best=3 verdict=agree tries=try 1: ... | try 2: ok
 (define (pad:fx-line x)
   (if (not x)

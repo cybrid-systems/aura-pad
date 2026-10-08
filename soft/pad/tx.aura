@@ -1447,3 +1447,24 @@
   (pad:tx-show! "CARD keep=1")
   (set! *pl-say* "kept")
   "go")
+
+;; Repair loads the intend file on the first call. Arrow keys do not.
+(define *tx-fix* #f)
+
+(define (pad:tx-fix-ready!)
+  (if *tx-fix*
+      #t
+      (if (try pad:fx-tx! (catch (e) #f))
+          (begin (set! *tx-fix* #t) #t)
+          (if (pad:tx-load-in! "tx-fix"
+                               (string-append (pad:tx-home)
+                                 "/soft/pad/fix_loop.aura"))
+              (begin (set! *tx-fix* #t) #t)
+              #f))))
+
+;; First idea, then the fixer. SAY is the intend timeline.
+;; The page stays until that timeline ends in a KEEP.
+(define (pad:tx-fix! goal first fixer)
+  (if (not (pad:tx-fix-ready!))
+      (list "DROP" "aura cannot change this page yet" "disagree")
+      (pad:fx-tx! goal first fixer)))
