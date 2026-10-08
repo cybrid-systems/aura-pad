@@ -1468,3 +1468,17 @@
   (if (not (pad:tx-fix-ready!))
       (list "DROP" "aura cannot change this page yet" "disagree")
       (pad:fx-tx! goal first fixer)))
+
+;; The rule file loads on the first tab sentence. Arrow keys do not.
+(define *tx-kr* #f)
+
+(define (pad:tx-kr-ready!)
+  (if *tx-kr*
+      #t
+      (if (try pad:kr-cmd! (catch (e) #f))
+          (begin (set! *tx-kr* #t) #t)
+          (if (pad:tx-load-in! "tx-kr"
+                               (string-append (pad:tx-home)
+                                 "/soft/pad/kid_rules.aura"))
+              (begin (set! *tx-kr* #t) #t)
+              #f))))

@@ -82,6 +82,8 @@
        (list "apply" (substring line 6 n)))
       ((string=? line "who") (list "who" ""))
       ((string=? line "undo") (list "undo" ""))
+      ((and (> n 4) (string=? (substring line 0 4) "tab "))
+       (list "tab" line))
       (#t (list "later" line)))))
 
 ;; Directory of the open file, with the trailing slash.
@@ -394,6 +396,7 @@
             ((string=? intent "apply") (pad:ux-apply! (cadr hit)))
             ((string=? intent "who") (pad:ux-who!))
             ((string=? intent "undo") (pad:ux-undo!))
+            ((string=? intent "tab") (pad:ux-rule! (cadr hit)))
             (#t (pad:ux-propose! (cadr hit))))))))
 
 (define (pad:ux-legend!)
@@ -652,3 +655,58 @@
                        (pad:ux-esc!)
                        (pad:ux-feed! bs *pl-esc*))))))
         (#t (pad:play-step! line)))))
+
+;; The number in "tab 4", or #f when the sentence is not one number.
+(define (pad:ux-rule-num text)
+  (let ((parts (pad:kr-parts text)))
+    (if (and (pair? parts) (pair? (cdr parts)) (null? (cddr parts)))
+        (string->number (cadr parts))
+        #f)))
+
+;; After the kid command. An in-range value is one swap.
+;; An out-of-range body is heal!, and the say keeps the live value.
+(define (pad:ux-rule-hot! text)
+  (if (not (pair? *kr-last*))
+      #f
+      (let ((verdict (car *kr-last*))
+            (name (caddr *kr-last*))
+            (reason (pad:nth *kr-last* 6))
+            (n (pad:ux-rule-num text)))
+        (if (and (string=? verdict "KEEP")
+                 (number? n)
+                 (string? name)
+                 (> (string-length name) 0))
+            (pad:hs-rule-swap! name
+              (string-append "(lambda () " (number->string n) ")"))
+            (if (and (string=? verdict "REJECT")
+                     (string=? reason "out-of-range")
+                     (number? n)
+                     (string? name)
+                     (> (string-length name) 0))
+                (begin
+                  (pad:hs-rule-heal! name
+                    (string-append "(lambda () " (number->string n) ")"))
+                  (set! *pl-say*
+                    (string-append "heal, "
+                      (pad:kr-now (pad:kr-rule-named name)
+                                  (pad:kr-value-of-name name))))
+                  #f)
+                #f)))))
+
+;; Sentence "tab 4". The rule file loads on this call, not on an arrow.
+(define (pad:ux-rule! text)
+  (set! *ux-line* "")
+  (if (not (pad:ux-tx-ready!))
+      (begin
+        (set! *pl-say* "aura cannot change this page yet")
+        *pl-say*)
+      (if (not (pad:tx-kr-ready!))
+          (begin
+            (set! *pl-say* "aura cannot change this page yet")
+            *pl-say*)
+          (let ((r (pad:kr-cmd! text)))
+            (if (not r)
+                *pl-say*
+                (begin
+                  (pad:ux-rule-hot! text)
+                  *pl-say*))))))

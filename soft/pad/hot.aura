@@ -143,3 +143,40 @@
   (hot-strategy:swap! "pd:shadow" *main-body* "shadow")
   (hot-strategy:swap! "pd:law" *main-body* "choose")
   *main-body*)
+
+(define *hs-rule-swaps* 0)
+(define *hs-rule-heals* 0)
+
+;; One line. The number is milliseconds, not a key interval.
+(define (pad:hs-rule-log! kind name)
+  (display kind)
+  (display " name=")
+  (display name)
+  (display " ms=")
+  (display (number->string (current-time-ms)))
+  (newline))
+
+;; Page rule slot. pad:hs-register! carries the snapshot heal.
+;; A kept body is one swap. The log is the line above.
+(define (pad:hs-rule-swap! name body)
+  (pad:hs-register! name body)
+  (let ((sw (hot-strategy:swap! name body "tab")))
+    (if (and (pair? sw) (equal? (car sw) #t))
+        (begin
+          (set! *hs-rule-swaps* (+ *hs-rule-swaps* 1))
+          (pad:hs-rule-log! "SWAP" name)
+          #t)
+        (begin
+          (hot-strategy:heal!)
+          (set! *hs-rule-heals* (+ *hs-rule-heals* 1))
+          (pad:hs-rule-log! "HEAL" name)
+          #f))))
+
+;; The body is outside the rule table. swap! then heal! puts the
+;; last good snapshot back. The value does not stay on this body.
+(define (pad:hs-rule-heal! name body)
+  (hot-strategy:swap! name body "tab")
+  (hot-strategy:heal!)
+  (set! *hs-rule-heals* (+ *hs-rule-heals* 1))
+  (pad:hs-rule-log! "HEAL" name)
+  #f)
