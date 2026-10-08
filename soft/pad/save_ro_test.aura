@@ -1,0 +1,43 @@
+;; Step 19. A look-only page refuses save. Disk bytes stay put.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/lc.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/file.aura"))
+
+(define (pad:em-other-dirty) "")
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define (ro:has? s key)
+  (>= (string-index s key 0) 0))
+
+(define (ro:open! label path)
+  (let ((r (pad:pf-open! path)))
+    (say (string-append label
+                        " open=" r
+                        " ro=" (if *pf-ro* "true" "false")
+                        " len=" (number->string (length (car (car *pl-st*))))
+                        " reason=" (cond
+                                     ((ro:has? *pl-say* "bad-utf8") "bad-utf8")
+                                     ((ro:has? *pl-say* "too-wide") "too-wide")
+                                     ((ro:has? *pl-say* "too-long") "too-long")
+                                     (#t "none"))))
+    (say (string-append label " save=" (pad:pf-save!)))))
+
+(ro:open! "BAD" (getenv "PAD_RO_BAD"))
+(ro:open! "WIDE" (getenv "PAD_RO_WIDE"))
+(ro:open! "GOOD" (getenv "PAD_RO_GOOD"))
+(say "SAVE_RO_UNIT_OK")
