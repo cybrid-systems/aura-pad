@@ -1,0 +1,46 @@
+;; Sentence-line gate. The old pen gate stays at 120 and still refuses kid.
+;; This gate allows the fingerprint labels kid, helper, macro, and law.
+;; A form may be 4096 scalars, or 400 longer than the form it replaces.
+;; A name the child set-code just introduced is born when the caller
+;; says so. A refusal does not take a snapshot and does not write.
+;; Needs view.aura (the recursive word scan), pen.aura (the word lists),
+;; why.aura (pad:why-brackets-ok?), and the highlighter those call.
+;; Soft reserved: never bind quote.
+
+(define *tx-whos* (list "kid" "helper" "macro" "law"))
+(define *tx-max-len* 4096)
+(define *tx-slack* 400)
+
+(define (pad:tx-mem? s xs)
+  (cond
+    ((null? xs) #f)
+    ((and (string? (car xs)) (string=? s (car xs))) #t)
+    (#t (pad:tx-mem? s (cdr xs)))))
+
+(define (pad:tx-has? s xs)
+  (cond
+    ((null? xs) #f)
+    ((and (string? (car xs)) (string-contains? s (car xs))) #t)
+    (#t (pad:tx-has? s (cdr xs)))))
+
+(define (pad:tx-limit-n n)
+  (let ((room (+ n *tx-slack*)))
+    (if (> room *tx-max-len*) room *tx-max-len*)))
+
+(define (pad:tx-limit form-len)
+  (pad:tx-limit-n (if (number? form-len) form-len 0)))
+
+;; born? is #t only after the caller has seen the name in the child.
+;; form-len is the scalar count of the form being replaced.
+(define (pad:tx-gate who name lam born? form-len)
+  (cond
+    ((not (pad:tx-mem? who *tx-whos*)) "not-allowed")
+    ((or (not (string? name)) (string=? name "")) "no-name")
+    ((not (string? lam)) "not-lambda")
+    ((pad:tx-has? lam *pen-mean*) "not-kind")
+    ((pad:tx-has? lam *pen-banned*) "not-allowed")
+    ((not (string-prefix? lam "(lambda")) "not-lambda")
+    ((not (pad:why-brackets-ok? lam)) "brackets")
+    ((> (string-length lam) (pad:tx-limit form-len)) "too-long")
+    ((not (eq? born? #t)) "no-def")
+    (#t "ok")))

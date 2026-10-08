@@ -1,0 +1,120 @@
+;; Step 26. pad:tx-gate allows kid and a form up to 4096.
+;; pad:pen-gate still refuses kid and still stops at 120.
+;; A banned word or a bad bracket takes no snapshot.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/tx.aura"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define (tx-grow s need)
+  (if (<= need 0)
+      s
+      (let ((n (string-length s)))
+        (if (or (= n 0) (> (+ n n) need))
+            (tx-grow (string-append s "x") (- need 1))
+            (tx-grow (string-append s s) (- need n))))))
+
+(define (tx-xs n)
+  (if (<= n 0) "" (tx-grow "x" (- n 1))))
+
+(define (tx-lam n)
+  (string-append "(lambda () " (string-append (tx-xs n) ")")))
+
+(define (tx-whos-ok?)
+  (and (pair? *pen-whos*)
+       (string=? (car *pen-whos*) "helper")
+       (pair? (cdr *pen-whos*))
+       (string=? (car (cdr *pen-whos*)) "macro")
+       (pair? (cdr (cdr *pen-whos*)))
+       (string=? (car (cdr (cdr *pen-whos*))) "law")
+       (null? (cdr (cdr (cdr *pen-whos*))))
+       (not (pad:tx-mem? "kid" *pen-whos*))))
+
+(define (tx-current)
+  (let ((id (try (workspace :current) (catch (e) #f))))
+    (if (number? id) id -1)))
+
+(define (tx-seen? name)
+  (pair? (pad:define-lookup name)))
+
+;; The name is absent on the root. The child set-code introduces it.
+(define (tx-child-sees? name src)
+  (let ((c (try (workspace :create "tx") (catch (e) #f))))
+    (if (not (number? c))
+        #f
+        (begin
+          (try (workspace :switch c) (catch (e) #f))
+          (if (not (= (tx-current) c))
+              (begin
+                (try (workspace :switch 0) (catch (e) #f))
+                #f)
+              (begin
+                (try (set-code src) (catch (e) #f))
+                (let ((seen (tx-seen? name)))
+                  (if seen 0 (try (eval-current) (catch (e) #f)))
+                  (let ((yes (if seen #t (tx-seen? name))))
+                    (try (workspace :switch 0) (catch (e) #f))
+                    (try (workspace:delete c) (catch (e) #f))
+                    yes))))))))
+
+(define short "(lambda () 1)")
+(define long (tx-lam (- 121 12)))
+(define cap (tx-lam (- 4096 12)))
+(define over (tx-lam (- 4097 12)))
+(define slack (tx-lam (- 4200 12)))
+(define past (tx-lam (- 4201 12)))
+(define banned "(lambda (x) (display x))")
+(define messy "(lambda (y) (+ y 2)")
+(define nested "(lambda ()\n1)")
+
+(say (string-append "CHECK pen-kid=" (pad:pen-gate "kid" "hello" short)))
+(say (string-append "CHECK pen-max=" (number->string *pen-max-len*)))
+(say (if (tx-whos-ok?) "CHECK pen-whos=helper.macro.law" "CHECK pen-whos=changed"))
+(say (string-append "CHECK tx-kid=" (pad:tx-gate "kid" "hello" short #t 0)))
+(say (string-append "CHECK tx-helper=" (pad:tx-gate "helper" "hello" short #t 0)))
+(say (string-append "CHECK tx-macro=" (pad:tx-gate "macro" "hello" short #t 0)))
+(say (string-append "CHECK tx-law=" (pad:tx-gate "law" "hello" short #t 0)))
+(say (string-append "CHECK tx-robot=" (pad:tx-gate "robot" "hello" short #t 0)))
+(say (string-append "CHECK tx-long-n=" (number->string (string-length long))))
+(say (string-append "CHECK tx-long=" (pad:tx-gate "helper" "hello" long #t 0)))
+(say (string-append "CHECK pen-long=" (pad:pen-gate "helper" "hello" long)))
+(say (string-append "CHECK tx-cap-n=" (number->string (string-length cap))))
+(say (string-append "CHECK tx-cap=" (pad:tx-gate "law" "hello" cap #t 0)))
+(say (string-append "CHECK tx-over=" (pad:tx-gate "law" "hello" over #t 0)))
+(say (string-append "CHECK tx-slack=" (pad:tx-gate "helper" "hello" slack #t 3800)))
+(say (string-append "CHECK tx-past=" (pad:tx-gate "helper" "hello" past #t 3800)))
+(say (string-append "CHECK tx-mean=" (pad:tx-gate "kid" "hello" "(lambda () hate)" #t 0)))
+(say (string-append "CHECK tx-nl=" (pad:tx-gate "kid" "s1" nested #t 0)))
+
+(define g0 (pad:pen-raw-gen))
+(define t0 (pad:pen-total))
+(say (string-append "CHECK tx-ban=" (pad:tx-gate "helper" "hello" banned #t 0)))
+(say (string-append "CHECK tx-brackets=" (pad:tx-gate "helper" "hello" messy #t 0)))
+(define g1 (pad:pen-raw-gen))
+(define t1 (pad:pen-total))
+(say (if (and (>= g0 0) (= g0 g1)) "CHECK snap=0" "CHECK snap=moved"))
+(say (if (and (>= t0 0) (= t0 t1)) "CHECK writes=0" "CHECK writes=moved"))
+
+(say (if (tx-seen? "s1") "CHECK root-s1=yes" "CHECK root-s1=no"))
+(define saw (tx-child-sees? "s1" "(define (s1) 1)\n#t\n"))
+(say (if (eq? saw #t) "CHECK child-saw=yes" "CHECK child-saw=no"))
+(say (string-append "CHECK pen-born=" (pad:pen-gate "helper" "s1" short)))
+(say (string-append "CHECK tx-born="
+                    (pad:tx-gate "kid" "s1" short (if (eq? saw #t) #t #f) 0)))
+(say (string-append "CHECK tx-unborn=" (pad:tx-gate "helper" "s1" short #f 0)))
+(say (if (tx-seen? "s1") "CHECK root-after=yes" "CHECK root-after=no"))
+(say "TX_UNIT_OK")
