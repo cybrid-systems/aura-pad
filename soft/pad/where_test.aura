@@ -1,0 +1,115 @@
+;; Step 13. where answers from the cache.
+;; A fresh cache does not set-code. A stale cache checks once.
+;; used 0 is still an answer. A shorter word is not where.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+(define *pl-say* "")
+(define *read-ready* #f)
+(define *read-frame* #f)
+(define *pad-def-lookup* #f)
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+(load (string-append *pad-home* "/soft/pad/read.aura"))
+(pad:read-load!)
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(set! *pad-def-lookup* pad:define-lookup)
+(if (not (eq? string-join *read-join*))
+    (set! string-join *read-join*)
+    0)
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define (where:intent line)
+  (pad:say-intent line))
+
+(say (if (and (string=? (car (where:intent "where")) "where")
+              (string=? (cadr (where:intent "where")) ""))
+         "WHERE bare-intent=where"
+         "WHERE bare-intent=bad"))
+(say (if (and (string=? (car (where:intent "where hello")) "where")
+              (string=? (cadr (where:intent "where hello")) "hello"))
+         "WHERE named-intent=hello"
+         "WHERE named-intent=bad"))
+(say (if (string=? (car (where:intent "wher")) "later")
+         "WHERE partial=later"
+         "WHERE partial=completed"))
+(say (if (string=? (car (where:intent "wherex")) "later")
+         "WHERE glued=later"
+         "WHERE glued=where"))
+
+(define *where-a* "")
+(define *where-b* "")
+
+(if (not (pad:ux-on?))
+    (say "WHERE flag=off")
+    (begin
+      (set! *ux-lines*
+            (pad:v-lines "(define (hello x) (+ x 1))\n"))
+      (set! *ux-point* 9)
+      (say (string-append "WHERE sym="
+                          (pad:sym-at (pad:v-src *ux-lines*) *ux-point*)))
+      (set! *ux-line* "")
+      (pad:say-run!)
+      (set! *ux-point* 9)
+      (set! *ux-line* "where")
+      (let ((n0 *ws-set-code-n*))
+        (pad:say-run!)
+        (say (string-append "WHERE fresh-set="
+                            (number->string (- *ws-set-code-n* n0)))))
+      (set! *where-a* *pl-say*)
+      (set! *ux-point* 9)
+      (set! *ux-line* "where hello")
+      (let ((n1 *ws-set-code-n*))
+        (pad:say-run!)
+        (say (string-append "WHERE named-set="
+                            (number->string (- *ws-set-code-n* n1)))))
+      (say (if (string=? *pl-say* *where-a*) "WHERE same=true" "WHERE same=false"))
+      (say (string-append "WHERE say=" *pl-say*))
+      (say (string-append "WHERE status=" *read-status*))
+      (set! *read-status* "stale")
+      (set! *ux-point* 9)
+      (set! *ux-line* "where hello")
+      (let ((n2 *ws-set-code-n*))
+        (pad:say-run!)
+        (say (string-append "WHERE stale-set="
+                            (number->string (- *ws-set-code-n* n2)))))
+      (say (if (string=? *pl-say* *where-a*)
+               "WHERE stale-same=true"
+               "WHERE stale-same=false"))
+      (say (string-append "WHERE stale-status=" *read-status*))
+      (set! *ux-lines* (pad:v-lines "(define tcp-connect tcp-connect)\n"))
+      (set! *ux-point* 8)
+      (set! *read-status* "none")
+      (say (string-append "WHERE alias-sym="
+                          (pad:sym-at (pad:v-src *ux-lines*) *ux-point*)))
+      (set! *ux-line* "")
+      (pad:say-run!)
+      (set! *ux-point* 8)
+      (set! *ux-line* "where")
+      (pad:say-run!)
+      (set! *where-b* *pl-say*)
+      (set! *ux-point* 8)
+      (set! *ux-line* "where tcp-connect")
+      (let ((n3 *ws-set-code-n*))
+        (pad:say-run!)
+        (say (string-append "WHERE alias-set="
+                            (number->string (- *ws-set-code-n* n3)))))
+      (say (if (string=? *pl-say* *where-b*)
+               "WHERE alias-same=true"
+               "WHERE alias-same=false"))
+      (say (if (and (string? *pl-say*)
+                    (<= 8 (string-length *pl-say*))
+                    (string=? (substring *pl-say*
+                                         (- (string-length *pl-say*) 8)
+                                         (string-length *pl-say*))
+                              ", used 0"))
+               "WHERE alias-used0=true"
+               "WHERE alias-used0=false"))
+      (say (string-append "WHERE alias-say=" *pl-say*))
+      (say "WHERE_UNIT_OK")))

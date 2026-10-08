@@ -46,14 +46,17 @@
       *ux-lines*
       (try (pad:es-L *pl-st*) (catch (e) (list)))))
 
-;; Empty sentence is check. save, open, and quit call the file pad.
-;; They are not M-x words. Anything else waits for its own step.
+;; Empty sentence is check. where reads the cache. save, open, and quit
+;; call the file pad. They are not M-x words. A shorter word is not where.
 (define (pad:say-intent line)
   (let ((n (string-length line)))
     (cond
       ((string=? line "") (list "check" ""))
       ((string=? line "save") (list "save" ""))
       ((string=? line "quit") (list "quit" ""))
+      ((string=? line "where") (list "where" ""))
+      ((and (> n 6) (string=? (substring line 0 6) "where "))
+       (list "where" (substring line 6 n)))
       ((and (> n 5) (string=? (substring line 0 5) "open "))
        (list "open" (substring line 5 n)))
       (#t (list "later" line)))))
@@ -190,6 +193,31 @@
         (pad:read-check! (pad:ux-page)))
       0))
 
+;; where NAME, or where under the cursor. A checked cache is not checked
+;; again. A stale cache is checked once, then the answer comes from the row.
+(define (pad:ux-where-say asked)
+  (let* ((page (pad:ux-page))
+         (src (pad:v-src page))
+         (at (pad:sym-at src *ux-point*))
+         (nm (if (string=? asked "") at asked)))
+    (let ((row (if (string=? nm "") #f (pad:ux-find nm *read-mean*))))
+      (if (not row)
+          (begin (set! *pl-say* "not a name") *pl-say*)
+          (let ((at-def (if (string=? at nm)
+                            (pad:ux-at-def? *ux-point* nm page row)
+                            #t)))
+            (set! *pl-say* (pad:ux-say-of row at-def))
+            *pl-say*)))))
+
+(define (pad:ux-where! asked)
+  (if (string=? *read-status* "checked")
+      0
+      (pad:ux-check!))
+  (set! *ux-line* "")
+  (if (string=? *read-status* "checked")
+      (pad:ux-where-say asked)
+      *pl-say*))
+
 ;; Empty sentence Enter. Arrows stay on pad:ux-arrow! / pad:ux-say-at.
 (define (pad:say-run!)
   (if (not (pad:ux-on?))
@@ -207,6 +235,7 @@
                   *pl-say*)
                  (#t (set! *pl-say* "aura could not read this page, keep typing")))
                *pl-say*))
+            ((string=? intent "where") (pad:ux-where! (cadr hit)))
             ((string=? intent "save") (pad:ux-file-save!))
             ((string=? intent "open") (pad:ux-file-open! (cadr hit)))
             ((string=? intent "quit") (pad:ux-file-quit!))
