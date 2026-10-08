@@ -1,0 +1,58 @@
+;; Step 30. Engine who against the existing Soft row stamp.
+;; A matching stamp logs verdict=agree. A forged stamp logs
+;; M11_WHO_DISAGREE. Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/who.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define (wa-set xs i v)
+  (if (null? xs)
+      (list)
+      (if (= i 0)
+          (cons v (cdr xs))
+          (cons (car xs) (wa-set (cdr xs) (- i 1) v)))))
+
+(define page
+  (string-append ";; keep this\n\n"
+    (string-append "(define (hello x)\n  (+ x 1))\n"
+      "(define (main) (hello 3))\n")))
+
+(set! *ux-lines* (pad:v-lines page))
+(define *read-proj* page)
+(set! *ux-line* "apply keep-hello")
+(say (string-append "CHECK say=" (pad:say-run!)))
+
+(define out (pad:v-src *ux-lines*))
+(define hello-at (string-index out "(define hello" 0))
+(define hello-line (car (pad:v-linecol *ux-lines* hello-at)))
+(set! *who-S* (wa-set (pad:who-falses (length *ux-lines*))
+                      hello-line
+                      (list "helper" "closer" 1)))
+(set! *ux-point* hello-at)
+(set! *ux-line* "who")
+(pad:say-run!)
+
+(set! *who-S* (wa-set *who-S* hello-line (list "macro" "closer" 1)))
+(set! *ux-line* "who")
+(pad:say-run!)
+(say "WHO_AGREE_UNIT_OK")

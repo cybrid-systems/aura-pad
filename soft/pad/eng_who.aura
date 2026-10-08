@@ -258,14 +258,48 @@
   (let ((id (try (workspace :current) (catch (err) #f))))
     (if (number? id) id -1)))
 
+;; Cursor line on the sentence page. The editor row is the fallback.
+(define (pad:ew-line)
+  (let ((page (try *ux-lines* (catch (err) #f))))
+    (if (pair? page)
+        (car (pad:v-linecol page (let ((p (try *ux-point* (catch (err) 0))))
+                                   (if (number? p) p 0))))
+        (if (try pad:es-l (catch (err) #f))
+            (pad:es-l *pl-st*)
+            0))))
+
+;; Existing row stamp. No second stamp list.
+(define (pad:ew-stamp l)
+  (if (try pad:who-stamp-of (catch (err) #f))
+      (pad:who-stamp-of l)
+      #f))
+
+;; Same failure line as ctrl-o. Agreement prints the tag, which carries
+;; verdict=agree.
+(define (pad:ew-log! l x)
+  (if (string=? (caddr x) "disagree")
+      (begin
+        (set! *ew-disagree* (+ *ew-disagree* 1))
+        (newline)
+        (display "M11_WHO_DISAGREE ")
+        (display (pad:ew-tag l x))
+        (newline))
+      (begin
+        (newline)
+        (display (pad:ew-tag l x))
+        (newline))))
+
 (define (pad:ew-say-name name)
   (let ((c (pad:ew-held)))
     (if (not (number? c))
         "nobody has changed this yet"
-        (begin
-          (try (workspace :switch c) (catch (err) #f))
-          (let ((e (if (= (pad:ew-here) c) (pad:ew-prov name) #f)))
-            (try (workspace :switch 0) (catch (err) #f))
-            (if (or (not e) (string=? (cadr e) "nobody"))
-                "nobody has changed this yet"
-                (pad:ew-say "agree" #f e)))))))
+        (let ((l (pad:ew-line)))
+          (let ((st (pad:ew-stamp l)))
+            (begin
+              (try (workspace :switch c) (catch (err) #f))
+              (let ((e (if (= (pad:ew-here) c) (pad:ew-prov name) #f)))
+                (try (workspace :switch 0) (catch (err) #f))
+                (pad:ew-log! l (list st e (pad:ew-verdict st e)))
+                (if (or (not e) (string=? (cadr e) "nobody"))
+                    "nobody has changed this yet"
+                    (pad:ew-say "agree" #f e)))))))))
