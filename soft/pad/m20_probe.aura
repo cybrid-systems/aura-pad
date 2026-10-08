@@ -1,0 +1,56 @@
+;; Step 32. A later process opens the same path.
+;; save keeps one define and answers who. open deserializes in the
+;; file child, then asks who again. Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/who.aura"))
+(load (string-append *pad-home* "/soft/pad/read.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define *pf-path*
+  (let ((e (getenv "AURA_PAD_AW_FILE")))
+    (if (and (string? e) (> (string-length e) 0))
+        e
+        "/tmp/aura-pad-reopen.aura")))
+
+(define phase
+  (let ((e (getenv "AURA_PAD_REOPEN")))
+    (if (and (string? e) (string=? e "save")) "save" "open")))
+
+(define page
+  (string-append ";; keep this\n\n"
+    (string-append "(define (hello x)\n  (+ x 1))\n"
+      "(define (main) (hello 3))\n")))
+
+(if (string=? phase "save")
+    (begin
+      (set! *ux-lines* (pad:v-lines page))
+      (set! *read-proj* page)
+      (set! *ux-line* "apply keep-hello")
+      (say (string-append "CHECK say=" (pad:say-run!)))
+      (set! *ux-point* (string-index (pad:v-src *ux-lines*) "(define hello" 0))
+      (set! *ux-line* "who")
+      (say (string-append "CHECK who-before=" (pad:say-run!)))
+      (say "REOPEN_SAVE_OK"))
+    (begin
+      (say (string-append "CHECK who-after=" (pad:read-reopen! *pf-path*)))
+      (say "REOPEN_UNIT_OK")))

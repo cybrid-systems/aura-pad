@@ -968,6 +968,142 @@
                           (pad:read-aw-proj! file text)
                           #t))))))))))
 
+(define (pad:read-log-code! tag code)
+  (pad:read-show! (string-append "REOPEN " tag "-begin"))
+  (display (if (string? code) code ""))
+  (newline)
+  (pad:read-show! (string-append "REOPEN " tag "-end"))
+  0)
+
+(define (pad:read-canary-now)
+  (let ((s (try (string-join (list "a" "b") ",") (catch (e) ""))))
+    (if (string? s) s "")))
+
+(define (pad:read-sane-now)
+  (if (try pad:q-sane? (catch (e) #f))
+      (if (pad:q-sane?) "yes" "no")
+      "no"))
+
+;; Load a helper without replacing the editor program.
+(define (pad:read-scratch! tag path)
+  (let ((c (try (workspace :create tag) (catch (e) #f))))
+    (if (not (number? c))
+        #f
+        (begin
+          (try (workspace :switch c) (catch (e) #f))
+          (let ((ok (if (= (pad:read-current) c)
+                        (try (begin (load path) #t) (catch (e) #f))
+                        #f)))
+            (try (workspace :switch 0) (catch (e) #f))
+            (try (workspace:delete c) (catch (e) #f))
+            ok)))))
+
+(define (pad:read-who-ready!)
+  (if (not (try pad:tx-hold! (catch (e) #f)))
+      (pad:read-scratch! "reopen-tx"
+                         (string-append *pad-home* "/soft/pad/tx.aura"))
+      0)
+  (if (not (try pad:ew-say-name (catch (e) #f)))
+      (pad:read-scratch! "reopen-ew"
+                         (string-append *pad-home* "/soft/pad/eng_who.aura"))
+      0)
+  0)
+
+(define (pad:read-show-page! proj)
+  (if (try *ux-lines* (catch (e) #f))
+      (set! *ux-lines* (pad:v-lines proj))
+      0)
+  (if (string? (try *read-proj* (catch (e) "")))
+      (set! *read-proj* proj)
+      0)
+  (let ((at (string-index proj "(define hello" 0)))
+    (if (number? (try *ux-point* (catch (e) #f)))
+        (set! *ux-point* (if (< at 0) 0 at))
+        0))
+  0)
+
+;; The engine did not come back cleanly. The author word is the stamp.
+;; Do not invent a sum from the missing log.
+(define (pad:read-soft-say proj)
+  (let ((at (string-index proj "(define hello" 0)))
+    (let ((line (if (and (>= at 0) (try pad:v-lines (catch (e) #f)))
+                    (car (pad:v-linecol (pad:v-lines proj) at))
+                    0)))
+      (let ((st (if (try pad:who-stamp-of (catch (e) #f))
+                    (pad:who-stamp-of line)
+                    #f)))
+        (let ((who (if (and (pair? st) (string? (car st))) (car st) "nobody")))
+          (string-append "soft-only " who))))))
+
+(define (pad:read-gap! proj)
+  (pad:read-show! "GAPS persist-global")
+  (pad:read-show! "TITLE deserialize-workspace changed the root or the canary")
+  (pad:read-soft-say proj))
+
+(define (pad:read-ask-who!)
+  (if (try pad:ux-who! (catch (e) #f))
+      (pad:ux-who!)
+      (if (try pad:ew-say-name (catch (e) #f))
+          (pad:ew-say-name "hello")
+          "nobody has changed this yet")))
+
+;; Open path in a new process. Deserialize only while the file child
+;; is current. A broken root or canary is soft-only, and that is a pass.
+(define (pad:read-reopen! path)
+  (pad:read-who-ready!)
+  (let ((proj (try (read-file path) (catch (e) #f))))
+    (if (not (string? proj))
+        "nobody has changed this yet"
+        (let ((code0 (pad:q-code)))
+          (let ((can0 (pad:read-canary-now)))
+            (let ((sane0 (pad:read-sane-now)))
+              (pad:read-log-code! "code-before" code0)
+              (pad:read-show! (string-append "REOPEN canary-before=" can0))
+              (pad:read-show! (string-append "REOPEN sane-before=" sane0))
+              (let ((c (try (workspace :create "file") (catch (e) #f))))
+                (if (not (number? c))
+                    (pad:read-gap! proj)
+                    (begin
+                      (try (workspace :switch c) (catch (e) #f))
+                      (if (not (= (pad:read-current) c))
+                          (begin
+                            (try (workspace :switch 0) (catch (e) #f))
+                            (pad:read-gap! proj))
+                          (let ((deser (try (deserialize-workspace
+                                              (string-append path ".aw"))
+                                            (catch (e) #f))))
+                            (pad:read-show!
+                              (string-append "REOPEN workspace="
+                                             (number->string (pad:read-current))))
+                            (pad:read-show!
+                              (string-append "REOPEN child=" (number->string c)))
+                            (try (workspace :switch 0) (catch (e) #f))
+                            (let ((code1 (pad:q-code)))
+                              (let ((can1 (pad:read-canary-now)))
+                                (let ((sane1 (pad:read-sane-now)))
+                                  (pad:read-log-code! "code-after" code1)
+                                  (pad:read-show!
+                                    (string-append "REOPEN canary-after=" can1))
+                                  (pad:read-show!
+                                    (string-append "REOPEN sane-after=" sane1))
+                                  (pad:read-show!
+                                    (string-append "REOPEN deser="
+                                                   (if (eq? deser #t) "yes" "no")))
+                                  (pad:read-show!
+                                    (string-append "REOPEN root="
+                                                   (if (string=? code0 code1)
+                                                       "same" "changed")))
+                                  (pad:read-show-page! proj)
+                                  (if (or (not (string=? code0 code1))
+                                          (not (string=? can0 can1))
+                                          (not (string=? can1 "a,b"))
+                                          (not (string=? sane1 "yes"))
+                                          (not (eq? deser #t)))
+                                      (pad:read-gap! proj)
+                                      (begin
+                                        (try (set! *tx-held* c) (catch (e) #f))
+                                        (pad:read-ask-who!)))))))))))))))))
+
 (define (pad:read-check! L)
   (set! *read-report* "")
   (if (pad:read-guard? L)
