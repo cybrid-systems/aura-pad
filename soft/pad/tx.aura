@@ -837,6 +837,9 @@
   (pad:tx-show! (string-append "SCORE better="
                   (if (> child-n page-n) "yes" "no")))
   (pad:tx-show! (string-append "SCORE exec=" (number->string *tx-exec*)))
+  (if (try pad:play-step! (catch (e) #f))
+      (set! *tx-better* (if (> child-n page-n) #t #f))
+      0)
   0)
 
 (define (pad:tx-scan-ready!)
@@ -857,8 +860,26 @@
       #t
       (pad:tx-scan-ops ops)))
 
+;; Splice every kept op. A missing name leaves that span unchanged.
+;; These two sit above the card so the card slice stays a key path.
+(define (pad:tx-card-splice! ops src)
+  (if (not (pair? ops))
+      src
+      (pad:tx-card-splice! (cdr ops)
+        (pad:proj-splice! src (car (car ops)) (cadr (car ops))))))
+
+(define (pad:tx-card-keep!)
+  (let ((out (pad:tx-card-splice! *tx-card-ops* (pad:tx-page))))
+    (pad:tx-install! out)
+    (if (try *pl-st* (catch (e) #f))
+        (set! *pl-st* (pad:es-at (pad:v-lines out) 0 0))
+        0)
+    (pad:tx-show! "CARD keep=1")
+    (set! *pl-say* "kept")
+    "go"))
+
 ;; Three choices. The mark sits on one of them. Choosing closes the card.
-;; This step does not splice the projection.
+;; Keep writes the projection only when the score was strictly higher.
 (define (pad:tx-card-say!)
   (let ((i *tx-card*))
     (set! *pl-say*
@@ -906,9 +927,18 @@
   (let ((name (pad:tx-card-name)))
     (set! *tx-card* #f)
     (pad:tx-show! (string-append "CARD did=" name))
-    (if (string=? name "undo")
-        (set! *pl-say* (pad:tx-undo!))
-        (set! *pl-say* (string-append "did " name)))
+    (cond
+      ((string=? name "undo")
+       (set! *pl-say* (pad:tx-undo!)))
+      ((string=? name "drop")
+       (set! *pl-say* "did drop"))
+      ((string=? name "keep")
+       (if (eq? *tx-better* #t)
+           (pad:tx-card-keep!)
+           (if (pair? *tx-card-ops*)
+               (set! *pl-say* "that one is not better")
+               (set! *pl-say* "did keep"))))
+      (#t (set! *pl-say* (string-append "did " name))))
     "go"))
 
 (define (pad:tx-card-drop!)
@@ -975,3 +1005,26 @@
       ((and (> n 3) (string=? (substring line 0 3) "IN "))
        (pad:tx-card-in! (pad:pi-parse line)))
       (#t (pad:tx-card-block!)))))
+
+;; One fixture, no network. The card stays up until Enter or Esc.
+(define (pad:tx-propose-text! text)
+  (pad:tx-show! "PROPOSE enter=1")
+  (pad:tx-show! "PROPOSE net=0")
+  (let ((parsed (pad:tx-parse text)))
+    (set! *tx-better* #f)
+    (set! *tx-card-ops*
+      (if (and (pair? parsed)
+               (string? (car parsed))
+               (string=? (car parsed) "ops"))
+          (cadr parsed)
+          (list)))
+    (let ((kind (car (pad:tx-run! text))))
+      (pad:tx-show! (string-append "PROPOSE kind=" kind))
+      (pad:tx-card-show!)
+      *pl-say*)))
+
+(define (pad:tx-propose!)
+  (pad:tx-propose-text!
+    (pad:tx-read
+      (string-append (pad:tx-home)
+        "/soft/pad/fixtures/propose_ok.txt"))))

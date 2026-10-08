@@ -199,6 +199,10 @@
 ;; 0 is a real choice, so the key path tests number?. Defined once:
 ;; a later load must not reset it.
 (define *tx-card* #f)
+;; #t only when the proposal scored strictly higher. Empty ops means
+;; the card was shown without a proposal.
+(define *tx-better* #f)
+(define *tx-card-ops* (list))
 
 (define (pad:play-step! line)
   (if (number? *tx-card*)

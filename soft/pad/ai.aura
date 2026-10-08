@@ -8,8 +8,9 @@
 ;;   M-x ask QUESTION     gptel-send. The page is the context. The
 ;;                        answer opens on the chat page.
 ;;   M-x chat             gptel. Open that page.
-;;   M-x rewrite HOW      gptel-rewrite. Replace this page. u puts the
-;;                        old page back.
+;;   M-x rewrite HOW      gptel-rewrite. PAD_CLASSIC=1 opens the card
+;;                        and does not paste. Otherwise this replaces
+;;                        the page. u puts the old page back.
 ;;   M-x gptel / gptel-send / gptel-rewrite   the same three.
 ;;
 ;; *ai-fake* is a string only in tests. A real call uses http-post.
@@ -289,6 +290,36 @@
        "this page is the chat. M-x ask, then your words"
        "this page is the chat")))
 
+(define (pad:ai-home)
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+;; tx.aura is not on the boot list. Load it in a scratch so the root
+;; program stays the editor. A child that was not snapshotted can go.
+(define (pad:ai-load-tx!)
+  (if (try pad:tx-propose! (catch (e) #f))
+      #t
+      (let ((c (try (workspace :create "ai-tx") (catch (e) #f))))
+        (if (not (number? c))
+            #f
+            (begin
+              (try (workspace :switch c) (catch (e) #f))
+              (let ((cur (try (workspace :current) (catch (e) #f))))
+                (let ((ok (if (and (number? cur) (= cur c))
+                              (try (begin
+                                     (load (string-append (pad:ai-home)
+                                              "/soft/pad/tx.aura"))
+                                     #t)
+                                   (catch (e) #f))
+                              #f)))
+                  (try (workspace :switch 0) (catch (e) #f))
+                  (try (workspace:delete c) (catch (e) #f))
+                  ok)))))))
+
+(define (pad:ai-classic?)
+  (let ((v (getenv "PAD_CLASSIC")))
+    (and (string? v) (string=? v "1"))))
+
 (define (pad:ai-rewrite! how)
   (let ((page (pad:play-src)))
     (cond
@@ -303,6 +334,11 @@
        "vi-do")
       ((string=? page "")
        (set! *pl-say* "the page is empty")
+       "vi-do")
+      ((pad:ai-classic?)
+       (if (pad:ai-load-tx!)
+           (pad:tx-propose!)
+           (set! *pl-say* "aura cannot change this page yet"))
        "vi-do")
       (#t
        (let* ((user (string-append "Change the page this way: " how

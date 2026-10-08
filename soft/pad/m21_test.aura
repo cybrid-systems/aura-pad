@@ -1,0 +1,161 @@
+;; Step 42. One fixture proposal, sentence mode and classic mode.
+;; Esc leaves the projection. Enter keeps it only when the score is
+;; strictly higher. Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/lc.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/card.aura"))
+(load (string-append *pad-home* "/soft/pad/who.aura"))
+(load (string-append *pad-home* "/soft/pad/play_in.aura"))
+(load (string-append *pad-home* "/soft/pad/vi.aura"))
+(load (string-append *pad-home* "/soft/pad/screen.aura"))
+(load (string-append *pad-home* "/soft/pad/emacs.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+(load (string-append *pad-home* "/soft/pad/ai.aura"))
+(load (string-append *pad-home* "/soft/pad/tx.aura"))
+
+(define page
+  (string-append ";; keep this\n\n"
+    (string-append "(define (hello x)\n  (+ x 1))\n"
+      "(define (main) (hello 3))\n")))
+
+(define same-t
+  (string-append "hello=(lambda (x) (+ x 1))\n"
+    "check hello 3 4\n"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define (mark m)
+  (say (string-append "MARK " m)))
+
+(define (pad:m21-classic?)
+  (let ((v (getenv "PAD_CLASSIC")))
+    (and (string? v) (string=? v "1"))))
+
+(define (yn b)
+  (if b "yes" "no"))
+
+(define (arm!)
+  (pad:play-reset! page)
+  (set! *pi-collect* #t)
+  (set! *ux-lines* (pad:v-lines page))
+  (if (string? (try *read-proj* (catch (e) #f)))
+      (set! *read-proj* page)
+      0)
+  (set! *vi-on* #t)
+  (set! *vi-mode* "normal")
+  (set! *vi-vanchor* -1)
+  (set! *vi-op* "")
+  (set! *vi-line* "")
+  (set! *vi-cx* #f)
+  (set! *vi-base* "t")
+  (set! *vi-num* 0)
+  (set! *vi-num-op* 0)
+  (set! *vi-seek* "")
+  (set! *vi-obj* "")
+  (set! *em-hit* #f)
+  (set! *em-anchor* #f)
+  (set! *tx-card* #f)
+  (set! *tx-better* #f)
+  (set! *tx-card-ops* (list))
+  (set! *ai-sets* 0)
+  0)
+
+(define (shot! ev)
+  (let ((p (getenv ev)))
+    (if (and (string? p) (> (string-length p) 0))
+        (write-file p (pad:tx-page))
+        0)))
+
+(define (see! tag)
+  (let ((src (pad:tx-page)))
+    (say (string-append "CHECK " (string-append tag (string-append " say=" *pl-say*))))
+    (say (string-append "CHECK " (string-append tag
+          (if (number? *tx-card*) " card=on" " card=off"))))
+    (say (string-append "CHECK " (string-append tag
+          (if (string=? src page) " page=same" " page=moved"))))
+    (say (string-append "CHECK " (string-append tag
+          (if (string=? (pad:play-src) src) " buf=page" " buf=other"))))
+    (say (string-append "CHECK " (string-append tag
+          (string-append " sets=" (number->string *ai-sets*)))))
+    (say (string-append "CHECK " (string-append tag
+          (string-append " comment=" (yn (string-contains? src ";; keep this"))))))
+    (say (string-append "CHECK " (string-append tag
+          (string-append " old=" (yn (string-contains? src "(define (hello x)"))))))
+    (say (string-append "CHECK " (string-append tag
+          (string-append " new="
+            (yn (string-contains? src "(define hello (lambda (x) (+ x 2)))"))))))
+    (say (string-append "CHECK " (string-append tag
+          (string-append " main=" (yn (string-contains? src "(define (main)"))))))
+    0))
+
+(define (classic!)
+  (set! *ux-keys* 0)
+  (arm!)
+  (mark "esc-start")
+  (shot! "M21_BEFORE")
+  (say (string-append "CHECK rewrite=" (pad:ai-run! "rewrite" "kinder")))
+  (see! "esc-ready")
+  (pad:play-step! "IN 27")
+  (shot! "M21_AFTER")
+  (mark "esc")
+  (see! "esc")
+  (arm!)
+  (mark "keep-start")
+  (pad:ai-run! "rewrite" "kinder")
+  (pad:play-step! "IN 13")
+  (mark "keep")
+  (see! "keep")
+  (arm!)
+  (mark "same-start")
+  (pad:tx-propose-text! same-t)
+  (pad:play-step! "IN 13")
+  (mark "same")
+  (see! "same")
+  (say (string-append "CHECK ux-keys=" (number->string *ux-keys*)))
+  (say "CARD_CLASSIC_OK"))
+
+(define (sentence!)
+  (arm!)
+  (mark "esc-start")
+  (shot! "M21_BEFORE")
+  (pad:tx-propose!)
+  (see! "esc-ready")
+  (pad:ux-key! "IN 27")
+  (shot! "M21_AFTER")
+  (mark "esc")
+  (see! "esc")
+  (arm!)
+  (mark "keep-start")
+  (pad:tx-propose!)
+  (pad:ux-key! "IN 13")
+  (mark "keep")
+  (see! "keep")
+  (arm!)
+  (mark "same-start")
+  (pad:tx-propose-text! same-t)
+  (pad:ux-key! "IN 13")
+  (mark "same")
+  (see! "same")
+  (say "CARD_SENTENCE_OK"))
+
+(if (pad:m21-classic?)
+    (classic!)
+    (sentence!))
