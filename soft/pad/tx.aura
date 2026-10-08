@@ -1239,3 +1239,28 @@
                   (set! *tx-blast-ok* #f)
                   (pad:tx-show! "TX_DISAGREE")))
             0)))))
+
+;; Equal scores drop. Neither idea is written, including the one
+;; whose fiber joined first.
+(define (pad:tx-tie-text! text)
+  (let ((parts (pad:tx-two-parts text)))
+    (if (not (pair? parts))
+        (list -1 -1)
+        (let ((host (pad:tx-world-race! (car parts) (cadr parts))))
+          (if (and (pad:tx-num-pair? host)
+                   (= (car host) (cadr host))
+                   (>= (car host) 0))
+              (begin
+                (pad:tx-show!
+                  (string-append "TIE score=" (number->string (car host))))
+                (if (string? (try *pl-say* (catch (e) #f)))
+                    (set! *pl-say* "neither is better")
+                    0)
+                host)
+              host)))))
+
+(define (pad:tx-tie!)
+  (pad:tx-tie-text!
+    (pad:tx-read
+      (string-append (pad:tx-home)
+        "/soft/pad/fixtures/propose_tie.txt"))))

@@ -1,0 +1,5 @@
+hello=(lambda (x) (+ x 2))
+check hello 3 5
+---
+hello=(lambda (x) (+ 2 x))
+check hello 3 5
