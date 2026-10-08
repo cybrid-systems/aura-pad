@@ -1,0 +1,157 @@
+;; Step 47. The higher score is marked. Enter on the lower score
+;; leaves the projection. Enter on the higher score splices that idea.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/lc.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/card.aura"))
+(load (string-append *pad-home* "/soft/pad/who.aura"))
+(load (string-append *pad-home* "/soft/pad/play_in.aura"))
+(load (string-append *pad-home* "/soft/pad/vi.aura"))
+(load (string-append *pad-home* "/soft/pad/screen.aura"))
+(load (string-append *pad-home* "/soft/pad/emacs.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+(load (string-append *pad-home* "/soft/pad/ai.aura"))
+(load (string-append *pad-home* "/soft/pad/tx.aura"))
+
+(define page
+  (string-append ";; keep this\n\n"
+    (string-append "(define (hello x)\n  (+ x 1))\n"
+      "(define (main) (hello 3))\n")))
+
+;; The second idea is the higher score, so the mark must not stay
+;; on the first line of the file.
+(define rev
+  (string-append "hello=(lambda (x) (+ x 0))\n"
+    (string-append "check hello 3 5\n"
+      (string-append "---\n"
+        (string-append "hello=(lambda (x) (+ x 2))\n"
+          "check hello 3 5\n")))))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define (mark m)
+  (say (string-append "MARK " m)))
+
+(define (pad:worse-classic?)
+  (let ((v (getenv "PAD_CLASSIC")))
+    (and (string? v) (string=? v "1"))))
+
+(define (yn b)
+  (if b "yes" "no"))
+
+(define (arm!)
+  (pad:play-reset! page)
+  (set! *pi-collect* #t)
+  (set! *ux-lines* (pad:v-lines page))
+  (if (string? (try *read-proj* (catch (e) #f)))
+      (set! *read-proj* page)
+      0)
+  (set! *vi-on* #t)
+  (set! *vi-mode* "normal")
+  (set! *tx-card* #f)
+  (set! *tx-better* #f)
+  (set! *tx-card-ops* (list))
+  (set! *tx-touches* #f)
+  (set! *tx-blast-ok* #f)
+  (set! *tx-pair* #f)
+  (set! *tx-scores* (list))
+  (set! *tx-ideas* (list))
+  0)
+
+(define (shot! ev)
+  (let ((p (getenv ev)))
+    (if (and (string? p) (> (string-length p) 0))
+        (write-file p (pad:tx-page))
+        0)))
+
+(define (see! tag)
+  (let ((src (pad:tx-page)))
+    (say (string-append "CHECK " (string-append tag (string-append " say=" *pl-say*))))
+    (say (string-append "CHECK " (string-append tag
+          (if (number? *tx-card*) " card=on" " card=off"))))
+    (say (string-append "CHECK " (string-append tag
+          (if (string=? src page) " page=same" " page=moved"))))
+    (say (string-append "CHECK " (string-append tag
+          (string-append " comment=" (yn (string-contains? src ";; keep this"))))))
+    (say (string-append "CHECK " (string-append tag
+          (string-append " old=" (yn (string-contains? src "(define (hello x)"))))))
+    (say (string-append "CHECK " (string-append tag
+          (string-append " plus2=" (yn (string-contains? src "(+ x 2)"))))))
+    (say (string-append "CHECK " (string-append tag
+          (string-append " plus0=" (yn (string-contains? src "(+ x 0)"))))))
+    (say (string-append "CHECK " (string-append tag
+          (string-append " main=" (yn (string-contains? src "(define (main)"))))))
+    0))
+
+(define (enter!)
+  (if (pad:worse-classic?)
+      (pad:play-step! "IN 13")
+      (pad:ux-key! "IN 13")))
+
+(define (step!)
+  (if (pad:worse-classic?)
+      (pad:play-step! "IN 9")
+      (pad:ux-key! "KEY right")))
+
+(define (run!)
+  (set! *ux-keys* 0)
+  (arm!)
+  (shot! "WORSE_BEFORE")
+  (mark "low-start")
+  (pad:tx-pair!)
+  (see! "low-ready")
+  (mark "low-ready")
+  (step!)
+  (see! "low-moved")
+  (shot! "WORSE_READY")
+  (mark "low-moved")
+  (enter!)
+  (shot! "WORSE_AFTER")
+  (see! "low")
+  (mark "low")
+  (arm!)
+  (shot! "HIGH_BEFORE")
+  (mark "high-start")
+  (pad:tx-pair!)
+  (see! "high-ready")
+  (shot! "HIGH_READY")
+  (mark "high-ready")
+  (enter!)
+  (shot! "HIGH_AFTER")
+  (see! "high")
+  (mark "high")
+  (arm!)
+  (shot! "REV_BEFORE")
+  (mark "rev-start")
+  (pad:tx-pair-text! rev)
+  (see! "rev-ready")
+  (shot! "REV_READY")
+  (mark "rev-ready")
+  (enter!)
+  (shot! "REV_AFTER")
+  (see! "rev")
+  (mark "rev")
+  (say (string-append "CHECK ux-keys=" (number->string *ux-keys*)))
+  (if (pad:worse-classic?)
+      (say "WORSE_CLASSIC_OK")
+      (say "WORSE_SENTENCE_OK")))
+
+(run!)

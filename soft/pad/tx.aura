@@ -887,20 +887,31 @@
 
 ;; Three choices. The mark sits on one of them. Choosing closes the card.
 ;; Keep writes the projection only when the score was strictly higher
-;; and the blast count agreed.
+;; and the blast count agreed. Two ideas use a and b instead.
+(define (pad:tx-pair?)
+  (eq? (try *tx-pair* (catch (e) #f)) #t))
+
+(define (pad:tx-card-end)
+  (if (pad:tx-pair?) 1 2))
+
 (define (pad:tx-card-say!)
   (let ((i *tx-card*))
     (set! *pl-say*
-      (string-append
-        (if (= i 0) "> keep" "keep")
-        (string-append "   "
+      (if (pad:tx-pair?)
+          (if (= i 0) "> a   b" "a   > b")
           (string-append
-            (if (= i 1) "> drop" "drop")
+            (if (= i 0) "> keep" "keep")
             (string-append "   "
-              (if (= i 2) "> undo" "undo"))))))
+              (string-append
+                (if (= i 1) "> drop" "drop")
+                (string-append "   "
+                  (if (= i 2) "> undo" "undo")))))))
     *pl-say*))
 
 (define (pad:tx-card-show!)
+  (if (pad:tx-pair?)
+      (set! *tx-pair* #f)
+      0)
   (set! *tx-card* 0)
   (pad:tx-card-say!)
   (pad:tx-show! "CARD show=1")
@@ -913,11 +924,12 @@
   "go")
 
 (define (pad:tx-card-step! d)
-  (let ((n (+ *tx-card* d)))
+  (let ((n (+ *tx-card* d))
+        (last (pad:tx-card-end)))
     (pad:tx-card-at!
       (cond
-        ((< n 0) 2)
-        ((> n 2) 0)
+        ((< n 0) last)
+        ((> n last) 0)
         (#t n)))))
 
 (define (pad:tx-card-block!)
@@ -932,28 +944,33 @@
     (#t "keep")))
 
 (define (pad:tx-card-act!)
-  (let ((name (pad:tx-card-name)))
-    (set! *tx-card* #f)
-    (pad:tx-show! (string-append "CARD did=" name))
-    (cond
-      ((string=? name "undo")
-       (set! *pl-say* (pad:tx-undo!)))
-      ((string=? name "drop")
-       (set! *pl-say* "did drop"))
-      ((string=? name "keep")
-       (if (eq? *tx-better* #t)
-           (if (eq? *tx-blast-ok* #t)
-               (pad:tx-card-keep!)
-               (begin
-                 (pad:tx-show! "TX_DISAGREE")
-                 (set! *pl-say* "TX_DISAGREE")))
-           (if (pair? *tx-card-ops*)
-               (set! *pl-say* "that one is not better")
-               (set! *pl-say* "did keep"))))
-      (#t (set! *pl-say* (string-append "did " name))))
-    "go"))
+  (if (pad:tx-pair?)
+      (pad:tx-pair-act!)
+      (let ((name (pad:tx-card-name)))
+        (set! *tx-card* #f)
+        (pad:tx-show! (string-append "CARD did=" name))
+        (cond
+          ((string=? name "undo")
+           (set! *pl-say* (pad:tx-undo!)))
+          ((string=? name "drop")
+           (set! *pl-say* "did drop"))
+          ((string=? name "keep")
+           (if (eq? *tx-better* #t)
+               (if (eq? *tx-blast-ok* #t)
+                   (pad:tx-card-keep!)
+                   (begin
+                     (pad:tx-show! "TX_DISAGREE")
+                     (set! *pl-say* "TX_DISAGREE")))
+               (if (pair? *tx-card-ops*)
+                   (set! *pl-say* "that one is not better")
+                   (set! *pl-say* "did keep"))))
+          (#t (set! *pl-say* (string-append "did " name))))
+        "go")))
 
 (define (pad:tx-card-drop!)
+  (if (pad:tx-pair?)
+      (set! *tx-pair* #f)
+      0)
   (set! *tx-card* #f)
   (pad:tx-show! "CARD drop=1")
   (set! *pl-say* "dropped")
@@ -973,7 +990,7 @@
     ((or (string=? w "left") (string=? w "prev-line"))
      (pad:tx-card-step! -1))
     ((string=? w "home") (pad:tx-card-at! 0))
-    ((string=? w "end") (pad:tx-card-at! 2))
+    ((string=? w "end") (pad:tx-card-at! (pad:tx-card-end)))
     ((string=? w "enter") (pad:tx-card-act!))
     (#t (pad:tx-card-block!))))
 
@@ -982,7 +999,7 @@
     ((or (= b 67) (= b 66)) (pad:tx-card-step! 1))
     ((or (= b 68) (= b 65)) (pad:tx-card-step! -1))
     ((= b 72) (pad:tx-card-at! 0))
-    ((= b 70) (pad:tx-card-at! 2))
+    ((= b 70) (pad:tx-card-at! (pad:tx-card-end)))
     (#t (pad:tx-card-block!))))
 
 (define (pad:tx-card-in! bs)
@@ -1026,6 +1043,7 @@
     (set! *tx-better* #f)
     (set! *tx-touches* #f)
     (set! *tx-blast-ok* #f)
+    (set! *tx-pair* #f)
     (set! *tx-card-ops*
       (if (and (pair? parsed)
                (string? (car parsed))
@@ -1264,3 +1282,83 @@
     (pad:tx-read
       (string-append (pad:tx-home)
         "/soft/pad/fixtures/propose_tie.txt"))))
+
+;; Two ideas from one sentence. The higher host score is marked.
+;; The three-item show would put the mark on the first idea, so the
+;; sentence is written here. Equal scores do not raise a card.
+(define (pad:tx-idea-ops text)
+  (let ((parsed (pad:tx-parse text)))
+    (if (and (pair? parsed)
+             (string? (car parsed))
+             (string=? (car parsed) "ops")
+             (pair? (cdr parsed))
+             (pair? (cadr parsed)))
+        (cadr parsed)
+        (list))))
+
+(define (pad:tx-pair-quiet! host)
+  (if (pad:tx-pair?)
+      (set! *tx-pair* #f)
+      0)
+  (if (number? (try *tx-card* (catch (e) #f)))
+      (set! *tx-card* #f)
+      0)
+  (if (and (pad:tx-num-pair? host)
+           (= (car host) (cadr host))
+           (>= (car host) 0))
+      (pad:tx-show!
+        (string-append "TIE score=" (number->string (car host))))
+      0)
+  (if (string? (try *pl-say* (catch (e) #f)))
+      (set! *pl-say* "neither is better")
+      0)
+  host)
+
+(define (pad:tx-pair-raise! host ideas)
+  (set! *tx-ideas* ideas)
+  (set! *tx-scores* host)
+  (set! *tx-pair* #t)
+  (pad:tx-card-at! (if (> (cadr host) (car host)) 1 0))
+  (pad:tx-show! "CARD show=1")
+  *pl-say*)
+
+(define (pad:tx-pair-text! text)
+  (let ((parts (pad:tx-two-parts text)))
+    (if (not (pair? parts))
+        (pad:tx-pair-quiet! (list -1 -1))
+        (let ((host (pad:tx-world-race! (car parts) (cadr parts))))
+          (if (not (and (pad:tx-num-pair? host)
+                        (>= (car host) 0)
+                        (>= (cadr host) 0)
+                        (not (= (car host) (cadr host)))))
+              (pad:tx-pair-quiet! host)
+              (let ((ia (pad:tx-idea-ops (car parts)))
+                    (ib (pad:tx-idea-ops (cadr parts))))
+                (if (and (pair? ia) (pair? ib))
+                    (pad:tx-pair-raise! host (list ia ib))
+                    (pad:tx-pair-quiet! host))))))))
+
+(define (pad:tx-pair!)
+  (pad:tx-pair-text!
+    (pad:tx-read
+      (string-append (pad:tx-home)
+        "/soft/pad/fixtures/propose_two.txt"))))
+
+;; Enter splices only the idea whose host score is strictly higher.
+;; The other idea is refused. No other key writes it.
+(define (pad:tx-pair-act!)
+  (let ((i *tx-card*))
+    (set! *tx-card* #f)
+    (set! *tx-pair* #f)
+    (let ((mine (list-ref *tx-scores* i))
+          (other (list-ref *tx-scores* (if (= i 0) 1 0)))
+          (ops (list-ref *tx-ideas* i)))
+      (if (and (number? mine)
+               (number? other)
+               (> mine other)
+               (pair? ops))
+          (begin
+            (set! *tx-card-ops* ops)
+            (pad:tx-card-keep!))
+          (set! *pl-say* "that one is not better")))
+    "go"))

@@ -207,6 +207,11 @@
 (define *tx-touches* #f)
 ;; #t only when that check agrees. Anything else refuses the keep.
 (define *tx-blast-ok* #f)
+;; #t when the card is two ideas. #f keeps keep / drop / undo.
+(define *tx-pair* #f)
+;; Host scores in fixture order, and the ops of each idea.
+(define *tx-scores* (list))
+(define *tx-ideas* (list))
 
 (define (pad:play-step! line)
   (if (number? *tx-card*)
