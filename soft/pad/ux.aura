@@ -81,6 +81,7 @@
       ((and (> n 6) (string=? (substring line 0 6) "apply "))
        (list "apply" (substring line 6 n)))
       ((string=? line "who") (list "who" ""))
+      ((string=? line "undo") (list "undo" ""))
       (#t (list "later" line)))))
 
 ;; Directory of the open file, with the trailing slash.
@@ -336,6 +337,16 @@
 
 ;; apply NAME reads a fixture in the repo. It does not open the network
 ;; and it does not call M-x.
+(define (pad:ux-undo!)
+  (set! *ux-line* "")
+  (if (not (pad:ux-tx-ready!))
+      (begin
+        (set! *pl-say* "aura cannot change this page yet")
+        *pl-say*)
+      (let ((r (pad:tx-undo!)))
+        (set! *pl-say* r)
+        r)))
+
 (define (pad:ux-apply! name)
   (set! *ux-line* "")
   (if (not (pad:ux-tx-ready!))
@@ -373,6 +384,7 @@
             ((string=? intent "quit") (pad:ux-file-quit!))
             ((string=? intent "apply") (pad:ux-apply! (cadr hit)))
             ((string=? intent "who") (pad:ux-who!))
+            ((string=? intent "undo") (pad:ux-undo!))
             (#t
              (begin
                (set! *pl-say* "aura cannot change this page yet")
@@ -498,6 +510,14 @@
 
 ;; One read()'s bytes. A lone 27 is Esc. An arrow is the whole
 ;; "IN 27 91 N" line, decoded by pad:key-step. Byte 9 never inserts.
+(define (pad:ux-undo-key!)
+  (if (pad:ux-tx-ready!)
+      (set! *pl-say* (pad:tx-undo!))
+      (set! *pl-say* "aura cannot change this page yet"))
+  (if (number? (try *lc-framed* (catch (e) #f)))
+      (pad:ux-draw!)
+      (pad:ux-legend!)))
+
 (define (pad:ux-feed! bs esc)
   (if (null? bs)
       (begin (set! *pl-esc* esc) "go")
@@ -508,9 +528,7 @@
       (begin
         (if (= b 9)
             (pad:ux-tab!)
-            (begin
-              (set! *pl-say* "aura cannot change this page yet")
-              (pad:ux-draw!)))
+            (pad:ux-undo-key!))
         (if (null? rest) "go" (pad:ux-feed! rest (list))))
       (let ((step (pad:key-step esc b)))
         (let ((cmd (car step)))

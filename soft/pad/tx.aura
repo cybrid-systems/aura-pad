@@ -274,16 +274,32 @@
   0)
 
 ;; The KEEP child stays so a later who can read its provenance.
-;; The next KEEP drops the previous one.
+;; The next KEEP drops the previous one. Undo uses the child still held.
 (define *tx-held* #f)
+(define *tx-undo-who* "")
+(define *tx-undos* (list))
 
+(define (pad:tx-note-who! name)
+  (let ((e (if (try pad:ew-prov (catch (e) #f)) (pad:ew-prov name) #f)))
+    (set! *tx-undo-who*
+          (if (or (not (pair? e)) (string=? (cadr e) "nobody"))
+              "nobody has changed this yet"
+              (if (try pad:ew-say (catch (e) #f))
+                  (pad:ew-say "agree" #f e)
+                  "nobody has changed this yet")))
+    0))
+
+(define (pad:tx-undo-push! snap text)
+  (if (number? snap)
+      (set! *tx-undos* (cons (list snap text *tx-undo-who*) *tx-undos*))
+      0)
+  0)
+
+;; Remember the file child and return to the editor. The previous child
+;; stays until the process exits: deleting a snapshotted child aborts.
 (define (pad:tx-hold! c)
   (try (workspace :switch 0) (catch (e) #f))
-  (let ((old *tx-held*))
-    (set! *tx-held* c)
-    (if (and (number? old) (not (= old c)))
-        (try (workspace:delete old) (catch (e) #f))
-        0))
+  (set! *tx-held* c)
   0)
 
 ;; A child shares the parent flat until the first mutate. Renaming a
@@ -390,6 +406,8 @@
                                                             (pad:tx-leave! c)
                                                             (list "DROP"
                                                               "GAPS mutate:set-agent-fingerprint"))
+                                                          (begin
+                                                          (pad:tx-note-who! name)
                                                           (let ((ok (pad:tx-rebind! name lam)))
                                                             (pad:tx-show!
                                                               (string-append
@@ -408,6 +426,7 @@
                                                                         (pad:tx-leave! c)
                                                                         (list "DROP" "no-row"))
                                                                       (begin
+                                                                        (pad:tx-undo-push! snap src)
                                                                         (try (pad:read-aw! c out)
                                                                              (catch (e) #f))
                                                                         (pad:tx-hold! c)
@@ -416,7 +435,52 @@
                                                                         (list "KEEP"
                                                                           (string-append
                                                                             "helper changed "
-                                                                            name)))))))))))))))))))))))))))
+                                                                            name))))))))))))))))))))))))))))
+
+;; One KEEP comes back. The file child is still here, so restore runs
+;; on that workspace. Heal logs the workspace that is current.
+(define (pad:tx-undo!)
+  (if (null? *tx-undos*)
+      (begin
+        (pad:tx-show! "UNDO none=1")
+        "nothing to undo")
+      (let ((rec (car *tx-undos*)))
+        (set! *tx-undos* (cdr *tx-undos*))
+        (let ((snap (car rec)))
+          (let ((text (cadr rec)))
+            (let ((who (caddr rec)))
+              (let ((c *tx-held*))
+                (if (not (number? c))
+                    (begin
+                      (pad:tx-show! "TX_UNDO_DISAGREE")
+                      "TX_UNDO_DISAGREE")
+                    (begin
+                      (try (workspace :switch c) (catch (e) #f))
+                      (pad:tx-show!
+                        (string-append "UNDO workspace="
+                                       (number->string (pad:tx-current))))
+                      (let ((ok (if (= (pad:tx-current) c)
+                                    (try (ast:restore snap) (catch (e) #f))
+                                    #f)))
+                        (if (eq? ok #t)
+                            (try (eval-current) (catch (e) #f))
+                            (pad:tx-show! "UNDO restore=no"))
+                        (try (workspace :switch 0) (catch (e) #f))
+                        (if (try pad:read-undo-page! (catch (e) #f))
+                            (pad:read-undo-page! text)
+                            (pad:tx-install! text))
+                        (let ((now (if (try pad:ux-who! (catch (e) #f))
+                                       (pad:ux-who!)
+                                       "")))
+                          (if (and (eq? ok #t)
+                                   (string=? (pad:tx-page) text)
+                                   (string=? now who))
+                              (begin
+                                (pad:tx-show! "UNDO ok=1")
+                                "undid one keep")
+                              (begin
+                                (pad:tx-show! "TX_UNDO_DISAGREE")
+                                "TX_UNDO_DISAGREE")))))))))))))
 
 (define (pad:tx-apply! name)
   (pad:tx-show! (string-append "APPLY live=" (pad:tx-live)))

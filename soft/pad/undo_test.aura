@@ -1,0 +1,78 @@
+;; Step 33. undo and byte 26 each take back one KEEP.
+;; The projection and the author match the page before that KEEP.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define page
+  (string-append ";; keep this\n\n"
+    (string-append "(define (hello x)\n  (+ x 1))\n"
+      "(define (main) (hello 3))\n")))
+
+(define (at-hello marker)
+  (set! *ux-point* (string-index (pad:v-src *ux-lines*) marker 0))
+  0)
+
+(define (who-now)
+  (set! *ux-line* "who")
+  (pad:say-run!))
+
+(set! *ux-lines* (pad:v-lines page))
+(define *read-proj* page)
+(at-hello "(define (hello")
+(define before-who (who-now))
+(say (string-append "CHECK who-before=" before-who))
+(define root0 (pad:q-code))
+
+(set! *ux-line* "apply keep-hello")
+(say (string-append "CHECK say=" (pad:say-run!)))
+(at-hello "(define hello")
+(say (string-append "CHECK who-kept=" (who-now)))
+
+(define n0 *ws-set-code-n*)
+(set! *ux-line* "undo")
+(say (string-append "CHECK undo=" (pad:say-run!)))
+(define page1 (pad:v-src *ux-lines*))
+(say (if (string=? page1 page) "CHECK page=before" "CHECK page=moved"))
+(at-hello "(define (hello")
+(define after-who (who-now))
+(say (string-append "CHECK who-after=" after-who))
+(say (if (string=? after-who before-who) "CHECK author=same" "CHECK author=moved"))
+(say (if (= *ws-set-code-n* n0) "CHECK set-code=same" "CHECK set-code=moved"))
+(say (if (string=? (pad:q-code) root0) "CHECK root=same" "CHECK root=moved"))
+
+(set! *ux-line* "undo")
+(say (string-append "CHECK undo2=" (pad:say-run!)))
+(say (if (string=? (pad:v-src *ux-lines*) page) "CHECK page2=before" "CHECK page2=moved"))
+
+(set! *ux-line* "apply keep-hello")
+(say (string-append "CHECK say2=" (pad:say-run!)))
+(at-hello "(define hello")
+(define n1 *ws-set-code-n*)
+(pad:ux-take! 26 (list) (list))
+(say (string-append "CHECK byte=" *pl-say*))
+(say (if (string=? (pad:v-src *ux-lines*) page) "CHECK byte-page=before" "CHECK byte-page=moved"))
+(at-hello "(define (hello")
+(say (string-append "CHECK byte-who=" (who-now)))
+(say (if (= *ws-set-code-n* n1) "CHECK byte-set-code=same" "CHECK byte-set-code=moved"))
+(say "UNDO_UNIT_OK")

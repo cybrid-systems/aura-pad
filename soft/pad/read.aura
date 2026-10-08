@@ -1104,6 +1104,19 @@
                                         (try (set! *tx-held* c) (catch (e) #f))
                                         (pad:read-ask-who!)))))))))))))))))
 
+;; Put the pre-KEEP projection back. This does not set-code the root.
+(define (pad:read-undo-page! text)
+  (if (not (string? text))
+      ""
+      (begin
+        (if (string? (try *read-proj* (catch (e) "")))
+            (set! *read-proj* text)
+            0)
+        (if (try *ux-lines* (catch (e) #f))
+            (set! *ux-lines* (pad:v-lines text))
+            0)
+        text)))
+
 (define (pad:read-check! L)
   (set! *read-report* "")
   (if (pad:read-guard? L)

@@ -68,12 +68,15 @@ kbody = tx[keep:] if nxt < 0 else tx[keep:nxt]
 aw = kbody.find("(pad:read-aw! c out)")
 hold = kbody.find("(pad:tx-hold! c)", aw if aw >= 0 else 0)
 if aw < 0 or hold < 0 or not (aw < hold):
-    sys.exit("smoke_aw: sidecar is not written before the held child is dropped")
+    sys.exit("smoke_aw: sidecar is not written while the file child is current")
+tail = kbody[aw:]
+if "workspace:delete" in tail or "workspace :delete" in tail:
+    sys.exit("smoke_aw: KEEP deletes the child it just serialized")
 hkey = tx.find("(define (pad:tx-hold! ")
 hnxt = tx.find("\n(define ", hkey + 1)
 hbody = tx[hkey:] if hnxt < 0 else tx[hkey:hnxt]
-if "workspace:delete" not in hbody and "workspace :delete" not in hbody:
-    sys.exit("smoke_aw: hold does not delete")
+if "workspace:delete" in hbody or "workspace :delete" in hbody:
+    sys.exit("smoke_aw: hold deletes the file child")
 PY
 
 AURA_PATH="$lib" AURA_PIPELINE_STRICT=0 AURA_SANDBOX=off \
