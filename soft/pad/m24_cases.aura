@@ -1,0 +1,73 @@
+;; Step 57. A generated closure is not a pass.
+;; Calling it through eval hangs or aborts (aura#4359). This file never
+;; calls that. The gate refuses the form, and the reason is aura#4359.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/tx.aura"))
+
+(define *m24-fail* 0)
+
+;; Same answer as hello=(lambda (x) (+ x 2)) on check hello 3 5.
+;; Wrapped so the only way to run it is the forbidden call.
+(define *m24-closure* "(lambda (x) (+ x 2))")
+(define *m24-trap*
+  (string-append "(lambda (x) (eval " (string-append *m24-closure* "))")))
+
+(define (m24:eval-form? code)
+  (and (string? code) (string-contains? code "(eval ")))
+
+;; A pass that comes from that call is a failure. The pointer is the issue.
+(define (m24:trap code)
+  (if (m24:eval-form? code) "aura#4359" "ok"))
+
+(define (m24:check tag ok)
+  (set! *m24-fail* (if ok *m24-fail* (+ *m24-fail* 1)))
+  (display "CHECK ")
+  (display tag)
+  (display "=")
+  (display (if ok "ok" "fail"))
+  (newline))
+
+(define (m24:run)
+  (let ((good (pad:tx-gate "helper" "hello" *m24-closure* #t 0))
+        (bad (pad:tx-gate "helper" "hello" *m24-trap* #t 0))
+        (why (m24:trap *m24-trap*)))
+    (m24:check "plain" (string=? good "ok"))
+    (m24:check "refused" (string=? bad "not-allowed"))
+    (m24:check "no-pass" (not (string=? bad "ok")))
+    (m24:check "issue" (string=? why "aura#4359"))
+    (if (string=? bad "ok")
+        (begin
+          (display "FAIL aura#4359")
+          (newline)
+          (set! *m24-fail* (+ *m24-fail* 1)))
+        (begin
+          (display "CHECK point=aura#4359")
+          (newline)))
+    (if (m24:eval-form? *m24-closure*)
+        (begin
+          (display "FAIL aura#4359")
+          (newline)
+          (set! *m24-fail* (+ *m24-fail* 1)))
+        0)))
+
+(m24:run)
+(if (= *m24-fail* 0)
+    (display "NO_EVAL_UNIT_OK\n")
+    (begin
+      (display "NO_EVAL_UNIT_FAIL ")
+      (display *m24-fail*)
+      (newline)))
