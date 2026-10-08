@@ -126,7 +126,8 @@
     (set! *pf-new* new)
     (set! *pf-ro* ro)
     (set! *pf-nl* nl)
-    (set! *pf-saved* (pad:v-src L))
+    ;; Bytes before decode. One trailing newline stays in *pf-nl*.
+    (set! *pf-saved* s)
     (set! *pf-cx* #f)
     (set! *pf-quit* #f)
     (set! *pl-title* (string-append "aura pad: " name (if ro " (look only)" "")))
@@ -150,14 +151,17 @@
         (set! *pl-say* (string-append *pf-name* " stays as it was: the pad only looks at this file"))
         "ro")
       (let* ((src (pad:play-src))
+             (clean (string=? src *pf-saved*))
+             ;; A clean page writes the bytes captured at open.
+             (text (if clean *pf-saved* src))
              (body (cond
                      ((and *pf-new* (string=? src "")) "")
-                     (*pf-nl* (string-append src "\n"))
-                     (#t src)))
+                     (*pf-nl* (string-append text "\n"))
+                     (#t text)))
              (r (write-file *pf-path* body)))
         (if (equal? r 1)
             (begin
-              (set! *pf-saved* src)
+              (if clean 0 (set! *pf-saved* src))
               (set! *pl-say* (string-append "saved " *pf-name* " ("
                                             (pad:pf-lines (length (car *pl-st*))) ")"))
               "saved")
