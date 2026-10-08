@@ -19,9 +19,14 @@ checks what lands in FILE and on the terminal. Scenarios:
   vi       FILE holds "ab\\ncd\\n": ctrl-f, ctrl-n, i, Z, Esc, q (must not
            insert), ctrl-x ctrl-s, ctrl-q -> FILE is "ab\\ncZd\\n" and the
            screen showed normal then insert then normal
+  sentence FILE holds a define and an em dash. ctrl-e, one letter, Tab,
+           save, Enter, quit, Enter. The letter is the only text change
+           and the em dash bytes stay. Open again, Tab, Enter: SAY has
+           "born line" and "used ". Then quit.
 
-Typing in open / new / unsaved / emergency presses i first, because the
-editor starts in vi normal mode.
+Typing in open / new / unsaved / emergency / vi presses i first. Those
+scenarios run with PAD_CLASSIC=1, because the editor starts in vi normal
+mode. sentence is the default binary: no PAD_CLASSIC.
 
 The pty is the child's controlling terminal, so ctrl-c / ctrl-\\ act as
 they would in a real terminal (aura-pad hands ctrl-c to Soft as a byte).
@@ -38,10 +43,131 @@ def fail(msg, out=b""):
     print("CLI_PTY_FAIL " + msg + "\n--- screen tail ---\n" + tail)
     sys.exit(1)
 
+def sentence_scenario(path, cmd):
+    """Default surface: one letter, sentence save, sentence quit, then check."""
+    raw = b"(define (mark x) x) ;; \xe2\x80\x94\n"
+    want = b"(define (mark x) x) ;; \xe2\x80\x94z\n"
+    name = os.path.basename(path)
+
+    def drive(actions):
+        m, s = os.openpty()
+        fcntl.ioctl(s, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+        before = termios.tcgetattr(s)
+        env = dict(os.environ, TERM="xterm-256color")
+        env.pop("NO_COLOR", None)
+        env.pop("PAD_CLASSIC", None)
+        def ctty():
+            os.setsid()
+            fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+        p = subprocess.Popen(cmd, stdin=s, stdout=s, stderr=s, env=env, preexec_fn=ctty)
+        out = bytearray()
+
+        def pump(t):
+            end = time.time() + t
+            while time.time() < end:
+                r, _, _ = select.select([m], [], [], 0.05)
+                if r:
+                    try:
+                        b = os.read(m, 65536)
+                    except OSError:
+                        return
+                    if not b:
+                        return
+                    out.extend(b)
+                elif p.poll() is not None:
+                    return
+
+        def wait_for(text, t=40.0):
+            end = time.time() + t
+            blob = text.encode() if isinstance(text, str) else text
+            while time.time() < end:
+                if blob in out:
+                    return True
+                if p.poll() is not None:
+                    pump(0.3)
+                    return blob in out
+                pump(0.1)
+            return blob in out
+
+        def key(bs, settle=0.25):
+            os.write(m, bytes(bs))
+            pump(settle)
+
+        actions(p, out, pump, wait_for, key)
+        try:
+            rc = p.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            fail("editor did not exit after quit", out)
+        pump(0.3)
+        after = termios.tcgetattr(s)
+        os.close(s)
+        os.close(m)
+        for flag, nm in ((termios.ICANON, "ICANON"), (termios.ECHO, "ECHO")):
+            if (after[3] & flag) != (before[3] & flag):
+                fail("terminal not restored (%s)" % nm, out)
+        if b"\x1b[?1049h" not in out or out.rfind(b"\x1b[?1049l") < out.rfind(b"\x1b[?1049h"):
+            fail("alternate screen not entered/left", out)
+        return rc, out
+
+    def letters(key, word):
+        for ch in word:
+            key([ord(ch)])
+
+    open(path, "wb").write(raw)
+
+    def edit(p, out, pump, wait_for, key):
+        if not wait_for(name):
+            fail("no first frame with the file name in the title", out)
+        pump(0.4)
+        key([5], 0.4)
+        key([ord("z")])
+        key([9], 0.4)
+        letters(key, "save")
+        key([13], 0.8)
+        if not wait_for("saved ", 20):
+            fail("no 'saved' say", out)
+        letters(key, "quit")
+        key([13], 0.2)
+
+    rc, out = drive(edit)
+    if rc != 0:
+        fail("exit code %d" % rc, out)
+    got = open(path, "rb").read()
+    if got == want.replace(b"\xe2\x80\x94", b"-"):
+        fail("em dash was written as a hyphen", out)
+    if got != want:
+        fail("file is %r, want %r" % (got, want), out)
+    if got.count(b"\xe2\x80\x94") != 1:
+        fail("em dash count is not 1", out)
+
+    def check(p, out, pump, wait_for, key):
+        if not wait_for(name):
+            fail("reopen had no first frame", out)
+        pump(0.4)
+        key([9], 0.4)
+        key([13], 0.5)
+        if not wait_for("born line", 45):
+            fail("empty Enter did not say the birth line", out)
+        if b"used " not in out:
+            fail("empty Enter did not say a use count", out)
+        letters(key, "quit")
+        key([13], 0.2)
+
+    rc, out = drive(check)
+    if rc != 0:
+        fail("reopen exit code %d" % rc, out)
+    if open(path, "rb").read() != want:
+        fail("check rewrote the file", out)
+    print("CLI_PTY_OK scenario=sentence bytes=%d file=%r" % (len(out), want))
+
 def main():
     if len(sys.argv) < 5 or sys.argv[3] != "--":
         print(__doc__); sys.exit(2)
     scen, path, cmd = sys.argv[1], sys.argv[2], sys.argv[4:]
+    if scen == "sentence":
+        sentence_scenario(path, cmd)
+        return
     name = os.path.basename(path)
     if scen == "open":
         open(path, "w").write("(hello 1)\nworld\n")

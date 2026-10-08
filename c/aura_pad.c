@@ -255,13 +255,19 @@ static int find_docker(Launch *L, char cand[][PATH_MAX], int nc) {
     return 1;
 }
 
-/* aura-pad is modal unless the caller already picked (PAD_VI=0 is the
- * old modeless map). */
+/* Direct play.aura, with no launcher, still sees this. aura-pad itself
+ * does not inject it. PAD_VI=0 is the old modeless map. */
 static const char *vi_flag(void) {
     const char *v = getenv("PAD_VI");
     if (v && *v)
         return v;
     return "1";
+}
+
+/* PAD_CLASSIC=1 is today's vi. Anything else is the sentence line. */
+static int classic_on(void) {
+    const char *v = getenv("PAD_CLASSIC");
+    return v && strcmp(v, "1") == 0;
 }
 
 /* Mutate type gate. An external value, including soft, is kept.
@@ -280,7 +286,15 @@ static void child_env(const Launch *L) {
     setenv("AURA_SANDBOX", "off", 1);
     setenv("AURA_BIN", L->soft, 1);
     setenv("AURA_PAD_HOME", L->home, 1);
-    setenv("PAD_VI", vi_flag(), 1);
+    if (classic_on()) {
+        setenv("PAD_VI", "1", 1);
+        unsetenv("PAD_SENTENCE");
+    } else {
+        setenv("PAD_SENTENCE", "1", 1);
+        /* Do not leave PAD_VI=1 in the child. An explicit 0 stays. */
+        if (strcmp(vi_flag(), "1") == 0)
+            unsetenv("PAD_VI");
+    }
     /* Copy first. setenv may rewrite the block getenv still points at.
      * A failed copy leaves an external value alone. */
     {
@@ -338,7 +352,14 @@ static int build_argv(const Launch *L, char *argv[], int max, char st[][2 * PATH
     argv[a++] = "-e"; argv[a++] = "AURA_SANDBOX=off";
     argv[a++] = "-e"; argv[a++] = "AURA_BIN=" BOX_AURA_SRC "/build/aura";
     argv[a++] = "-e"; fmt(st[s], sizeof(st[s]), "AURA_PAD_HOME=%s", L->home); argv[a++] = st[s++];
-    argv[a++] = "-e"; fmt(st[s], sizeof(st[s]), "PAD_VI=%s", vi_flag()); argv[a++] = st[s++];
+    if (classic_on()) {
+        argv[a++] = "-e"; argv[a++] = "PAD_VI=1";
+    } else {
+        argv[a++] = "-e"; argv[a++] = "PAD_SENTENCE=1";
+        if (strcmp(vi_flag(), "0") == 0) {
+            argv[a++] = "-e"; argv[a++] = "PAD_VI=0";
+        }
+    }
     argv[a++] = "-e"; fmt(st[s], sizeof(st[s]), "AURA_MUTATE_TYPE_GATE=%s", type_gate()); argv[a++] = st[s++];
     if (L->rows > 0) {
         argv[a++] = "-e";
@@ -399,7 +420,8 @@ static void usage(void) {
     fprintf(stderr,
             "usage: aura-pad [FILE]\n"
             "  Opens FILE in the aura pad (a new page if it does not exist yet).\n"
-            "  Starts in vi normal mode: i types, a appends, Esc returns.\n"
+            "  The sentence line is the default. Tab reaches it. save and quit are sentences.\n"
+            "  PAD_CLASSIC=1 starts in vi normal mode: i types, a appends, Esc returns.\n"
             "  Arrows, hjkl, and ctrl-b/f/p/n move in either mode.\n"
             "  ctrl-x ctrl-s saves, ctrl-q (or ctrl-x ctrl-c) quits.\n"
             "  dd deletes a line. :eval (or alt-x, then enter) runs the page.\n"

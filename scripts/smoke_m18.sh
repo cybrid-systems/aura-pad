@@ -139,3 +139,30 @@ fi
 echo "smoke_m18: PAD_PERF_EMACS_OK attempt=$eattempt"
 echo "smoke_m18: PERF_READ attempt=$rattempt"
 echo PAD_M18_PERF_OK
+
+# Direct play.aura, with no sentence variable, still shows the welcome card.
+printf 'QUIT\n' | env -u PAD_SENTENCE -u PAD_VI -u PAD_CLASSIC \
+  AURA_PATH="$lib" AURA_PIPELINE_STRICT=0 AURA_SANDBOX=off \
+  AURA_MUTATE_TYPE_GATE=hard AURA_PAD_HOME="$ROOT" PAD_POLL=0 PAD_DEFER=0 \
+  timeout 60 "$AURA" "$ROOT/soft/pad/play.aura" >"$OUT/welcome.txt" 2>"$OUT/welcome.err"
+grep -q 'welcome to aura pad' "$OUT/welcome.txt" || {
+  cat "$OUT/welcome.txt" "$OUT/welcome.err" >&2
+  fail "direct play.aura lost the welcome card"
+}
+
+echo "smoke_m18: sentence pty, then classic pty"
+PAD_C_DOCKER=0 bash "$ROOT/scripts/build_c.sh" >/dev/null
+AP="$ROOT/out/c/aura-pad"
+[[ -x "$AP" ]] || fail "aura-pad did not build"
+mkdir -p "$OUT/pty"
+env -u PAD_CLASSIC AURA_BIN="$AURA" timeout 180 python3 "$ROOT/scripts/cli_pty.py" \
+  sentence "$OUT/pty/sentence.txt" -- "$AP" "$OUT/pty/sentence.txt" \
+  | tee "$OUT/pty_sentence.txt"
+grep -q '^CLI_PTY_OK ' "$OUT/pty_sentence.txt" || fail "sentence pty"
+for sc in open new unsaved emergency vi; do
+  PAD_CLASSIC=1 AURA_BIN="$AURA" timeout 180 python3 "$ROOT/scripts/cli_pty.py" \
+    "$sc" "$OUT/pty/$sc.txt" -- "$AP" "$OUT/pty/$sc.txt" \
+    | tee "$OUT/pty_$sc.txt"
+  grep -q '^CLI_PTY_OK ' "$OUT/pty_$sc.txt" || fail "classic pty $sc"
+done
+echo PAD_M18_OK

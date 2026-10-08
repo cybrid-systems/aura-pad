@@ -93,8 +93,11 @@ grep -q '^CLI_SOFT_OK ' "$OUT/soft.txt" || exit 1
 
 # 6. pty, this host
 mkdir -p "$OUT/pty"
+env -u PAD_CLASSIC timeout 180 python3 "$ROOT/scripts/cli_pty.py" sentence \
+  "$OUT/pty/sentence.txt" -- "$AP" "$OUT/pty/sentence.txt" | tee "$OUT/pty_sentence.txt"
+grep -q '^CLI_PTY_OK ' "$OUT/pty_sentence.txt" || { echo "smoke_cli: pty sentence ($MODE)" >&2; exit 1; }
 for sc in open new unsaved emergency vi; do
-  timeout 180 python3 "$ROOT/scripts/cli_pty.py" "$sc" "$OUT/pty/$sc.txt" -- "$AP" "$OUT/pty/$sc.txt" | tee "$OUT/pty_$sc.txt"
+  PAD_CLASSIC=1 timeout 180 python3 "$ROOT/scripts/cli_pty.py" "$sc" "$OUT/pty/$sc.txt" -- "$AP" "$OUT/pty/$sc.txt" | tee "$OUT/pty_$sc.txt"
   grep -q '^CLI_PTY_OK ' "$OUT/pty_$sc.txt" || { echo "smoke_cli: pty $sc ($MODE)" >&2; exit 1; }
 done
 echo "smoke_cli: CLI_PTY_OK mode=$MODE"
@@ -114,11 +117,12 @@ export PATH=/tmp/inst/bin:$PATH
 if command -v docker >/dev/null; then echo "NATIVE_HAS_DOCKER"; fi
 aura-pad --where
 mkdir -p /tmp/t
-for sc in open new unsaved emergency vi; do timeout 180 python3 scripts/cli_pty.py $sc /tmp/t/$sc.txt -- aura-pad /tmp/t/$sc.txt; done
+env -u PAD_CLASSIC timeout 180 python3 scripts/cli_pty.py sentence /tmp/t/sentence.txt -- aura-pad /tmp/t/sentence.txt
+for sc in open new unsaved emergency vi; do PAD_CLASSIC=1 timeout 180 python3 scripts/cli_pty.py $sc /tmp/t/$sc.txt -- aura-pad /tmp/t/$sc.txt; done
 IN
   cat "$OUT/native.txt"
   grep -q '^mode=native$' "$OUT/native.txt" && ! grep -q NATIVE_HAS_DOCKER "$OUT/native.txt" \
-    && [[ "$(grep -c '^CLI_PTY_OK ' "$OUT/native.txt")" == 5 ]] \
+    && [[ "$(grep -c '^CLI_PTY_OK ' "$OUT/native.txt")" == 6 ]] \
     || { echo "smoke_cli: native pty in the dev container" >&2; exit 1; }
   echo "smoke_cli: CLI_PTY_OK mode=native-box (dev container, no docker inside)"
 else

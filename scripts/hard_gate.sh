@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Step 10. Both launch paths pass AURA_MUTATE_TYPE_GATE.
 # Unset or empty becomes hard. An external value is kept.
-# PAD_VI still comes from vi_flag(), whose default is "1".
+# vi_flag() still defaults to "1" for a direct play.aura.
+# The launcher: PAD_CLASSIC=1 sets PAD_VI=1 and clears PAD_SENTENCE.
+# Otherwise it sets PAD_SENTENCE=1 and does not leave PAD_VI=1.
 # A gate that is not hard makes the probe print GAPS type-gate.
 # Prints PAD_HARD_GATE_OK. Does not call docker.
 set -euo pipefail
@@ -58,8 +60,12 @@ if 'return "1";' not in vi:
     sys.exit("hard_gate: vi_flag default is not 1")
 if "AURA_MUTATE_TYPE_GATE" in vi or "PAD_SENTENCE" in vi:
     sys.exit("hard_gate: vi_flag changed")
-if "PAD_SENTENCE" in text:
-    sys.exit("hard_gate: aura_pad.c sets PAD_SENTENCE")
+if 'setenv("PAD_SENTENCE", "1", 1)' not in ch or "classic_on()" not in ch:
+    sys.exit("hard_gate: child_env does not set the sentence line")
+if 'unsetenv("PAD_SENTENCE")' not in ch or 'setenv("PAD_VI", "1", 1)' not in ch:
+    sys.exit("hard_gate: child_env does not keep classic as vi")
+if "PAD_SENTENCE=1" not in ba or '"PAD_VI=1"' not in ba or "classic_on()" not in ba:
+    sys.exit("hard_gate: build_argv does not set both surfaces")
 if 'getenv("AURA_MUTATE_TYPE_GATE")' not in tg or 'return "hard";' not in tg:
     sys.exit("hard_gate: type_gate does not default to hard")
 if "strcmp" in tg or "strncmp" in tg:
@@ -104,7 +110,8 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-e" ]; then
 fi
 out="${PAD_GATE_OUT:-}"
 if [ -n "$out" ]; then
-  printf 'GATE=%s\nVI=%s\n' "${AURA_MUTATE_TYPE_GATE-}" "${PAD_VI-}" >"$out"
+  printf 'GATE=%s\nVI=%s\nSENTENCE=%s\n' \
+    "${AURA_MUTATE_TYPE_GATE-}" "${PAD_VI-}" "${PAD_SENTENCE-}" >"$out"
 fi
 exit 0
 EOF
@@ -118,7 +125,7 @@ fail() { echo "hard_gate: $*" >&2; exit 1; }
 launch() {
   local dest="$1"
   shift
-  env -u AURA_MUTATE_TYPE_GATE -u PAD_VI \
+  env -u AURA_MUTATE_TYPE_GATE -u PAD_VI -u PAD_SENTENCE -u PAD_CLASSIC \
     AURA_PATH="$lib" AURA_PAD_HOME="$ROOT" AURA_BIN="$OUT/aura-wrap" \
     PAD_GATE_OUT="$dest" \
     "$@" \
@@ -131,14 +138,16 @@ launch() {
 
 launch "$OUT/unset.env"
 grep -qx 'GATE=hard' "$OUT/unset.env" || fail "unset gate was not hard: $(cat "$OUT/unset.env")"
-grep -qx 'VI=1' "$OUT/unset.env" || fail "default PAD_VI was not 1: $(cat "$OUT/unset.env")"
+grep -qx 'VI=' "$OUT/unset.env" || fail "default launch set PAD_VI: $(cat "$OUT/unset.env")"
+grep -qx 'SENTENCE=1' "$OUT/unset.env" || fail "default launch missed the sentence: $(cat "$OUT/unset.env")"
 
 launch "$OUT/empty.env" AURA_MUTATE_TYPE_GATE=
 grep -qx 'GATE=hard' "$OUT/empty.env" || fail "empty gate was not hard: $(cat "$OUT/empty.env")"
 
 launch "$OUT/soft.env" AURA_MUTATE_TYPE_GATE=soft
 grep -qx 'GATE=soft' "$OUT/soft.env" || fail "external soft was overwritten: $(cat "$OUT/soft.env")"
-grep -qx 'VI=1' "$OUT/soft.env" || fail "soft launch changed PAD_VI: $(cat "$OUT/soft.env")"
+grep -qx 'VI=' "$OUT/soft.env" || fail "soft launch set PAD_VI: $(cat "$OUT/soft.env")"
+grep -qx 'SENTENCE=1' "$OUT/soft.env" || fail "soft launch missed the sentence: $(cat "$OUT/soft.env")"
 
 launch "$OUT/hard.env" AURA_MUTATE_TYPE_GATE=hard
 grep -qx 'GATE=hard' "$OUT/hard.env" || fail "external hard was overwritten: $(cat "$OUT/hard.env")"
@@ -146,6 +155,12 @@ grep -qx 'GATE=hard' "$OUT/hard.env" || fail "external hard was overwritten: $(c
 launch "$OUT/vi0.env" PAD_VI=0
 grep -qx 'GATE=hard' "$OUT/vi0.env" || fail "PAD_VI=0 launch lost the gate: $(cat "$OUT/vi0.env")"
 grep -qx 'VI=0' "$OUT/vi0.env" || fail "PAD_VI=0 was overwritten: $(cat "$OUT/vi0.env")"
+grep -qx 'SENTENCE=1' "$OUT/vi0.env" || fail "PAD_VI=0 launch missed the sentence: $(cat "$OUT/vi0.env")"
+
+launch "$OUT/classic.env" PAD_CLASSIC=1
+grep -qx 'GATE=hard' "$OUT/classic.env" || fail "classic launch lost the gate: $(cat "$OUT/classic.env")"
+grep -qx 'VI=1' "$OUT/classic.env" || fail "classic launch did not set PAD_VI: $(cat "$OUT/classic.env")"
+grep -qx 'SENTENCE=' "$OUT/classic.env" || fail "classic launch left PAD_SENTENCE: $(cat "$OUT/classic.env")"
 
 # --where prints argv and does not apply child_env. Native argv is the
 # aura binary plus play.aura, so the gate is not visible there.
