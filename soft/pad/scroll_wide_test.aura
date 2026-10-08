@@ -1,0 +1,60 @@
+;; Step 16. A 500-column line scrolls inside the 400-column window.
+;; Column 450 stays on the slice. Insert is not stopped there.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/lc.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/file.aura"))
+(load (string-append *pad-home* "/soft/pad/screen.aura"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define (sw:after s tag)
+  (let ((i (string-index s tag 0)))
+    (if (< i 0)
+        ""
+        (substring s (+ i (string-length tag)) (string-length s)))))
+
+(define (sw:until-nl s)
+  (let ((j (string-index s "\n" 0)))
+    (if (< j 0) s (substring s 0 j))))
+
+(define *sw-path* (getenv "PAD_SCROLL_FILE"))
+(define *sw-open* (pad:pf-open! *sw-path*))
+(say (string-append "SCROLL open=" *sw-open*
+                    " ro=" (if *pf-ro* "true" "false")
+                    " len=" (number->string (length (car (car *pl-st*))))
+                    " max-col=" (number->string *max-col*)))
+(set! *pl-st* (pad:es-move *pl-st* 0 450))
+(define *sw-frame* (pad:vw-frame (pad:play-snap)))
+(define *sw-pay* (sw:until-nl (sw:after *sw-frame* "\nT ")))
+(define *sw-cols* (pad:vw-cols-now))
+(define *sw-width* (string-length *sw-pay*))
+(say (string-append "SCROLL cols=" (number->string *sw-cols*)
+                    " width=" (number->string *sw-width*)
+                    " left=" (number->string *vw-left*)))
+(say (if (and (> *sw-width* 0) (<= *sw-width* *sw-cols*) (<= *sw-width* 400))
+         "SCROLL fit=true"
+         "SCROLL fit=false"))
+(say (if (and (< *vw-left* 450)
+              (<= (- 450 *vw-left*) *sw-width*)
+              (= (string-ref *sw-pay* (- 450 *vw-left*)) 90))
+         "SCROLL at-col=Z"
+         "SCROLL at-col=other"))
+(define *sw-ins* (pad:play-cmd! 81))
+(say (string-append "SCROLL insert=" *sw-ins*
+                    " len-after=" (number->string (length (car (car *pl-st*))))))
+(say (string-append "SCROLL cap=" (number->string (pad:vw-cap 900 400 1))))
+(say "SCROLL_UNIT_OK")

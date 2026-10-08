@@ -113,6 +113,11 @@
     (set! *play-max-col* *pf-max-col*)
     (set! *play-max-lines* *pf-max-lines*)
     (pad:play-reset! "")
+    ;; The gate reads *max-col*. Reset copies *play-max-col*, then this
+    ;; writes the buffer cap again so a 400-column window cannot stop a
+    ;; shorter insert.
+    (set! *max-col* *pf-max-col*)
+    (set! *max-lines* *pf-max-lines*)
     (set! *pl-st* (pad:es-at L 0 0))
     (pad:utf-note-page! L)
     (set! *pf-on* #t)
