@@ -169,6 +169,16 @@
             #f
             (pad:tx-plain? s (+ i 1) n)))))
 
+;; A fixture may end with one reject line. That is a person saying no
+;; after the batch, not a second op.
+(define (pad:tx-reject-rest? rest)
+  (let ((n (string-length rest)))
+    (let ((nl (pad:tx-at rest 0 n 10)))
+      (let ((line (if (< nl 0) rest (substring rest 0 nl))))
+        (let ((more (if (< nl 0) "" (substring rest (+ nl 1) n))))
+          (and (string=? line "reject")
+               (pad:tx-blank? more 0 (string-length more))))))))
+
 ;; One fixture line: name=(lambda ...). A second op is refused.
 (define (pad:tx-op-line line)
   (let ((n (string-length line)))
@@ -188,9 +198,11 @@
         (let ((nl (pad:tx-at text 0 n 10)))
           (let ((line (if (< nl 0) text (substring text 0 nl)))
                 (rest (if (< nl 0) "" (substring text (+ nl 1) n))))
-            (if (pad:tx-blank? rest 0 (string-length rest))
-                (pad:tx-op-line line)
-                #f))))))
+            (let ((human (pad:tx-reject-rest? rest)))
+              (if (or human (pad:tx-blank? rest 0 (string-length rest)))
+                  (let ((op (pad:tx-op-line line)))
+                    (if op (list (car op) (cadr op) human) #f))
+                  #f)))))))
 
 (define (pad:tx-read path)
   (let ((raw (try (read-file path) (catch (e) #f))))
@@ -339,7 +351,31 @@
           (pad:tx-show! "TITLE snapshot restore left pad:play-cmd! invalid")
           #f))))
 
-(define (pad:tx-keep! name lam src)
+;; DROP heals the file child with restore. It does not set-code, does not
+;; write a sidecar, and does not push undo. The child stays: deleting a
+;; snapshotted child aborts. src is the projection from before this try.
+(define (pad:tx-fail! c snap why src)
+  (pad:tx-show! (string-append "DROP reason=" why))
+  (let ((here (pad:tx-current)))
+    (pad:tx-show! (string-append "DROP workspace=" (number->string here)))
+    (let ((ok (if (and (number? snap) (= here c))
+                  (try (ast:restore snap) (catch (e) #f))
+                  #f)))
+      (if (eq? ok #t)
+          (try (eval-current) (catch (e) #f))
+          (pad:tx-show! "DROP restore=no"))
+      (let ((probed (if (eq? ok #t) (pad:tx-probe!) #f)))
+        (try (workspace :switch 0) (catch (e) #f))
+        (pad:tx-install! src)
+        (if (and (eq? ok #t) probed)
+            (begin
+              (pad:tx-show! "DROP restore=1")
+              (list "DROP" "aura cannot change this page yet"))
+            (begin
+              (pad:tx-show! "GAPS snapshot-heal")
+              (list "DROP" "GAPS snapshot-heal")))))))
+
+(define (pad:tx-keep! name lam src human?)
   (pad:tx-aw-ready!)
   (let ((c (try (workspace :create "apply") (catch (e) #f))))
     (if (not (number? c))
@@ -415,11 +451,10 @@
                                                                 (if (eq? ok #t) "ok" "no")))
                                                             (pad:tx-fp! "kid")
                                                             (if (not (eq? ok #t))
-                                                                (begin
-                                                                  (pad:tx-leave! c)
-                                                                  (list "DROP"
-                                                                    "aura cannot change this page yet"))
-                                                                (let ((out (pad:proj-splice!
+                                                                (pad:tx-fail! c snap "type" src)
+                                                                (if (eq? human? #t)
+                                                                    (pad:tx-fail! c snap "human" src)
+                                                                    (let ((out (pad:proj-splice!
                                                                              src name lam)))
                                                                   (if (string=? out src)
                                                                       (begin
@@ -435,7 +470,7 @@
                                                                         (list "KEEP"
                                                                           (string-append
                                                                             "helper changed "
-                                                                            name))))))))))))))))))))))))))))
+                                                                            name)))))))))))))))))))))))))))))
 
 ;; One KEEP comes back. The file child is still here, so restore runs
 ;; on that workspace. Heal logs the workspace that is current.
@@ -497,4 +532,4 @@
         (let ((op (pad:tx-one-op text)))
           (if (not op)
               (list "DROP" "aura cannot change this page yet")
-              (pad:tx-keep! (car op) (cadr op) (pad:tx-page)))))))
+              (pad:tx-keep! (car op) (cadr op) (pad:tx-page) (caddr op)))))))
