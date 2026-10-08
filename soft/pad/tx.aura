@@ -856,3 +856,122 @@
   (if (not (pad:tx-scan-ready!))
       #t
       (pad:tx-scan-ops ops)))
+
+;; Three choices. The mark sits on one of them. Choosing closes the card.
+;; This step does not splice the projection.
+(define (pad:tx-card-say!)
+  (let ((i *tx-card*))
+    (set! *pl-say*
+      (string-append
+        (if (= i 0) "> keep" "keep")
+        (string-append "   "
+          (string-append
+            (if (= i 1) "> drop" "drop")
+            (string-append "   "
+              (if (= i 2) "> undo" "undo"))))))
+    *pl-say*))
+
+(define (pad:tx-card-show!)
+  (set! *tx-card* 0)
+  (pad:tx-card-say!)
+  (pad:tx-show! "CARD show=1")
+  *pl-say*)
+
+(define (pad:tx-card-at! i)
+  (set! *tx-card* i)
+  (pad:tx-card-say!)
+  (pad:tx-show! (string-append "CARD at=" (number->string *tx-card*)))
+  "go")
+
+(define (pad:tx-card-step! d)
+  (let ((n (+ *tx-card* d)))
+    (pad:tx-card-at!
+      (cond
+        ((< n 0) 2)
+        ((> n 2) 0)
+        (#t n)))))
+
+(define (pad:tx-card-block!)
+  (pad:tx-show! "CARD block=1")
+  (set! *pl-say* "finish this card first")
+  "go")
+
+(define (pad:tx-card-name)
+  (cond
+    ((= *tx-card* 1) "drop")
+    ((= *tx-card* 2) "undo")
+    (#t "keep")))
+
+(define (pad:tx-card-act!)
+  (let ((name (pad:tx-card-name)))
+    (set! *tx-card* #f)
+    (pad:tx-show! (string-append "CARD did=" name))
+    (if (string=? name "undo")
+        (set! *pl-say* (pad:tx-undo!))
+        (set! *pl-say* (string-append "did " name)))
+    "go"))
+
+(define (pad:tx-card-drop!)
+  (set! *tx-card* #f)
+  (pad:tx-show! "CARD drop=1")
+  (set! *pl-say* "dropped")
+  "go")
+
+(define (pad:tx-card-byte! b)
+  (cond
+    ((= b 13) (pad:tx-card-act!))
+    ((= b 27) (pad:tx-card-drop!))
+    ((= b 9) (pad:tx-card-step! 1))
+    (#t (pad:tx-card-block!))))
+
+(define (pad:tx-card-word! w)
+  (cond
+    ((or (string=? w "right") (string=? w "next-line"))
+     (pad:tx-card-step! 1))
+    ((or (string=? w "left") (string=? w "prev-line"))
+     (pad:tx-card-step! -1))
+    ((string=? w "home") (pad:tx-card-at! 0))
+    ((string=? w "end") (pad:tx-card-at! 2))
+    ((string=? w "enter") (pad:tx-card-act!))
+    (#t (pad:tx-card-block!))))
+
+(define (pad:tx-card-arrow! b)
+  (cond
+    ((or (= b 67) (= b 66)) (pad:tx-card-step! 1))
+    ((or (= b 68) (= b 65)) (pad:tx-card-step! -1))
+    ((= b 72) (pad:tx-card-at! 0))
+    ((= b 70) (pad:tx-card-at! 2))
+    (#t (pad:tx-card-block!))))
+
+(define (pad:tx-card-in! bs)
+  (cond
+    ((not bs) (pad:tx-card-block!))
+    ((null? (cdr bs)) (pad:tx-card-byte! (car bs)))
+    ((and (pair? (cdr bs))
+          (pair? (cdr (cdr bs)))
+          (null? (cdr (cdr (cdr bs))))
+          (= (car bs) 27)
+          (or (= (cadr bs) 91) (= (cadr bs) 79)))
+     (pad:tx-card-arrow! (caddr bs)))
+    (#t (pad:tx-card-block!))))
+
+;; Classic bytes. A whole arrow is not byte 9, so it does not move the mark.
+(define (pad:tx-card-line! line)
+  (let ((n (string-length line)))
+    (if (and (> n 3) (string=? (substring line 0 3) "IN "))
+        (let ((bs (pad:pi-parse line)))
+          (if (not bs)
+              (pad:tx-card-block!)
+              (if (null? (cdr bs))
+                  (pad:tx-card-byte! (car bs))
+                  (pad:tx-card-block!))))
+        (pad:tx-card-block!))))
+
+(define (pad:tx-card-ux! line)
+  (let ((n (string-length line)))
+    (cond
+      ((and (> n 4) (string=? (substring line 0 4) "KEY "))
+       (pad:tx-card-word! (substring line 4 n)))
+      ((and (> n 3) (string=? (substring line 0 3) "IN "))
+       (pad:tx-card-in! (pad:pi-parse line)))
+      (#t (pad:tx-card-block!)))))

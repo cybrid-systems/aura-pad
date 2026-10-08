@@ -195,8 +195,15 @@
 ;; pad:play-snap (try_cursor_movement, or pad:lc-line! for the edited
 ;; row, which needs no try_window_id check because only row l changed).
 ;; Everything else calls pad:play-cmd! + pad:play-snap as before.
+;; Proposal card. #f means none. 0, 1, and 2 are keep, drop, and undo.
+;; 0 is a real choice, so the key path tests number?. Defined once:
+;; a later load must not reset it.
+(define *tx-card* #f)
+
 (define (pad:play-step! line)
-  (let* ((n0 (string-length line))
+  (if (number? *tx-card*)
+      (pad:tx-card-line! line)
+      (let* ((n0 (string-length line))
          (in (and (> n0 3) (string=? (substring line 0 3) "IN ")))
          (idle (null? *pl-esc*))
          (b (and in idle (string->number (substring line 3 n0))))
@@ -559,4 +566,4 @@
        (if fast (set! *pi-fast* (+ *pi-fast* 1)) 0)
        (if *pi-collect* (set! *pi-out* (cons (pad:vw-frame (pad:play-snap)) *pi-out*)) (display (pad:vw-frame (pad:play-snap))))
        "go")
-      (#t r))))
+      (#t r)))))

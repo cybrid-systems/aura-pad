@@ -459,15 +459,18 @@
   "vi-do")
 
 (define (pad:vi-type! b)
-  (if (< (string-length *vi-line*) 160)
-      (set! *vi-line* (string-append *vi-line* (list->string (list b))))
-      0)
-  (cond
-    ((string=? *vi-op* "s") (pad:em-search-now!))
-    ((or (string=? *vi-op* "find") (string=? *vi-op* "buf")) (pad:em-hint!))
-    (#t
-     (set! *pl-say* (string-append *vi-prompt* *vi-line*))
-     "vi-do")))
+  (if (number? *tx-card*)
+      (pad:tx-card-byte! b)
+      (begin
+        (if (< (string-length *vi-line*) 160)
+            (set! *vi-line* (string-append *vi-line* (list->string (list b))))
+            0)
+        (cond
+          ((string=? *vi-op* "s") (pad:em-search-now!))
+          ((or (string=? *vi-op* "find") (string=? *vi-op* "buf")) (pad:em-hint!))
+          (#t
+           (set! *pl-say* (string-append *vi-prompt* *vi-line*))
+           "vi-do")))))
 
 (define (pad:vi-bs!)
   (let ((n (string-length *vi-line*)))
