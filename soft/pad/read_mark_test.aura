@@ -1,0 +1,97 @@
+;; Step 12. Birth marks come from pad:defs-for on the projection.
+;; A mismatched engine line is not the cursor. The page bytes stay.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+(define *pl-say* "")
+(define *read-ready* #f)
+(define *read-frame* #f)
+(define *pad-def-lookup* #f)
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/read.aura"))
+(pad:read-load!)
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(set! *pad-def-lookup* pad:define-lookup)
+(if (not (eq? string-join *read-join*))
+    (set! string-join *read-join*)
+    0)
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define (mark:nth xs i)
+  (cond
+    ((null? xs) #f)
+    ((= i 0) (car xs))
+    (#t (mark:nth (cdr xs) (- i 1)))))
+
+(define (mark:row rows name)
+  (cond
+    ((null? rows) #f)
+    ((and (pair? (car rows))
+          (string? (car (car rows)))
+          (string=? (car (car rows)) name))
+     (car rows))
+    (#t (mark:row (cdr rows) name))))
+
+(define (mark:on? src pt name)
+  (and (number? pt)
+       (>= pt 0)
+       (<= (+ pt (string-length name)) (string-length src))
+       (string=? (substring src pt (+ pt (string-length name))) name)))
+
+;; Line 1 is a comment longer than the 64-byte name window.
+;; The stub record is line 1 col 1, so it must not become the cursor.
+(define *mark-far*
+  (string-append
+    ";; "
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    "\n(define (hello x) x)\n"))
+(define *mark-far0* *mark-far*)
+(set! *pad-def-lookup* (lambda (name) (list (list 7 1 1))))
+(define *mark-miss* (pad:jump-d-at *mark-far* "hello"))
+(define *mark-eng* (pad:src-point *mark-far* 1 1))
+(say (string-append "MARK miss-src=" *pad-jump-src*))
+(say (string-append "MARK miss-letter="
+                    (pad:jump-mark-letter *mark-far* *mark-miss* "hello")))
+(say (if (mark:on? *mark-far* *mark-miss* "hello")
+         "MARK miss-on-name=true"
+         "MARK miss-on-name=false"))
+(say (if (and (number? *mark-eng*) (number? *mark-miss*)
+              (not (= *mark-miss* *mark-eng*)))
+         "MARK miss-not-col=true"
+         "MARK miss-not-col=false"))
+(say (if (string=? *mark-far* *mark-far0*)
+         "MARK miss-bytes=same"
+         "MARK miss-bytes=changed"))
+
+(set! *pad-def-lookup* pad:define-lookup)
+(define *mark-page* (pad:v-lines "(define (hello x) (+ x 1))\n"))
+(define *mark-before* (pad:v-src *mark-page*))
+(set! *pl-say* "before")
+(pad:read-check! *mark-page*)
+(define *mark-after* (pad:v-src *mark-page*))
+(define *mark-jsrc* *pad-jump-src*)
+(define *mark-hello* (mark:row *read-mean* "hello"))
+(define *mark-pts*
+  (if *mark-hello* (mark:nth *mark-hello* 5) #f))
+(define *mark-pt*
+  (if (and (pair? *mark-pts*) (number? (car *mark-pts*)))
+      (car *mark-pts*)
+      -1))
+(say (string-append "MARK status=" *read-status*))
+(say (string-append "MARK jump=" *mark-jsrc*))
+(say (string-append "MARK letter="
+                    (pad:jump-mark-letter *mark-after* *mark-pt* "hello")))
+(say (if (mark:on? *mark-after* *mark-pt* "hello")
+         "MARK on-name=true"
+         "MARK on-name=false"))
+(say (if (string=? *mark-before* *mark-after*)
+         "MARK bytes=same"
+         "MARK bytes=changed"))
+(say (if (string=? *pl-say* "before") "MARK say=clear" "MARK say=changed"))
+(say "MARK_UNIT_OK")

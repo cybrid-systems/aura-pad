@@ -255,6 +255,10 @@
               (if (string? rest) rest (cons row rest)))))))
 
 (define (pad:read-gather! c L n0 e0 code0 t0)
+  ;; query.aura sets this hook on the root. A child workspace keeps the
+  ;; initial #f, so pad:defs-for would ignore engine records. Install it
+  ;; here, after set-code, before the birth points are taken.
+  (set! *pad-def-lookup* pad:define-lookup)
   (let ((look (pad:read-lookup "hello")))
     (if (string? look)
         (begin
@@ -276,10 +280,12 @@
                   (if (string=? mean "gap-calls")
                       "GAPS query:calls"
                       "GAPS define-lookup")))
-              (begin
+              (let ((jsrc *pad-jump-src*))
                 (pad:read-back! c n0 e0 #t)
+                (set! *pad-jump-src* jsrc)
                 (set! *read-cache* cache)
                 (set! *read-mean* mean)
+                (pad:read-show! (string-append "READ jump=" jsrc))
                 (pad:read-finish! code0 t0 (car diff) (cadr diff))))))))
 
 (define (pad:read-switched! c L n0 e0 code0 t0)

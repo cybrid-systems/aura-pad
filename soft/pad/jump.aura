@@ -170,6 +170,22 @@
       ((pair? recs) (set! *pad-jump-src* "hl+engine") (pad:find-defs-in toks name))
       (#t (set! *pad-jump-src* "hl") (pad:find-defs-in toks name)))))
 
+;; Birth point on the projection. Uses pad:defs-for, so an engine line
+;; that does not land on the name is not returned.
+(define (pad:jump-d-at src name)
+  (let ((pts (pad:defs-for (pad:hl-tokens src) src name)))
+    (if (and (pair? pts) (number? (car pts))) (car pts) -1)))
+
+;; Letter d when that point is the name itself.
+(define (pad:jump-mark-letter src point name)
+  (if (and (number? point)
+           (>= point 0)
+           (string? name)
+           (<= (+ point (string-length name)) (string-length src))
+           (string=? (substring src point (+ point (string-length name))) name))
+      "d"
+      "."))
+
 ;; Result shape: (reason point stack refs) where reason "ok" or kid tag.
 ;; The -in forms take whole-page toks (M7 line cache hands them over so a
 ;; jump key does not re-tokenize); the plain forms tokenize src.
