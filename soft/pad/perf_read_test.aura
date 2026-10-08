@@ -1,0 +1,96 @@
+;; Step 20. Publish the sentence cursor before and after a check.
+;; The arrow reads the cache. It does not call define-lookup.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(define *pr-look* 0)
+(define *read-ready* #f)
+(define *read-frame* #f)
+(define *pad-def-lookup* #f)
+
+(define (pr:count-lookup name)
+  (set! *pr-look* (+ *pr-look* 1))
+  #f)
+
+(load (string-append *pad-home* "/soft/pad/utf.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/lc.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define (pr:rep n th)
+  (if (> n 0)
+      (begin (th) (pr:rep (- n 1) th))
+      0))
+
+(define (pr:us n th)
+  (let ((t0 (current-time-ms)))
+    (pr:rep n th)
+    (quotient (* 1000 (- (current-time-ms) t0)) n)))
+
+(define (pr:nop) 0)
+
+(define (pr:pair)
+  (pad:ux-move! "right")
+  (pad:ux-move! "left")
+  0)
+
+(define (pr:pos n)
+  (if (< n 0) 0 n))
+
+(define (pr:rights n)
+  (if (> n 0)
+      (begin (pad:ux-move! "right") (pr:rights (- n 1)))
+      0))
+
+(define (pr:one base)
+  (pr:pos (quotient (- (pr:us 30 pr:pair) base) 2)))
+
+(define *pr-page*
+  "(define (hello x) (+ x 1))\n(define (main) (hello 3))")
+
+(set! *pad-def-lookup* pr:count-lookup)
+(pad:play-reset! *pr-page*)
+(pr:rights 9)
+(define pr-base (pr:us 200 pr:nop))
+(set! *pr-look* 0)
+(define pr-cold (pr:one pr-base))
+(say (string-append "PERF_READ flag=" (if (pad:ux-on?) "on" "off")))
+(say (string-append "PERF_READ cold_cursor_us=" (number->string pr-cold)))
+(say (string-append "PERF_READ cold_cursor_ms=" (number->string (quotient pr-cold 1000))))
+(say (string-append "PERF_READ cold_lookup=" (number->string *pr-look*)))
+
+(load (string-append *pad-home* "/soft/pad/read.aura"))
+(pad:read-load!)
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(set! *pad-def-lookup* pad:define-lookup)
+(if (not (eq? string-join *read-join*))
+    (set! string-join *read-join*)
+    0)
+(pad:ux-check!)
+(say (string-append "PERF_READ check=" *read-status*))
+
+(define pr:lookup0 pad:define-lookup)
+(define (pad:define-lookup name)
+  (set! *pr-look* (+ *pr-look* 1))
+  (pr:lookup0 name))
+(set! *pad-def-lookup* pad:define-lookup)
+(set! *pr-look* 0)
+(define pr-post (pr:one pr-base))
+(say (string-append "PERF_READ post_check_cursor_us=" (number->string pr-post)))
+(say (string-append "PERF_READ post_check_cursor_ms=" (number->string (quotient pr-post 1000))))
+(say (string-append "PERF_READ post_lookup=" (number->string *pr-look*)))
+(say "PERF_READ_UNIT_OK")

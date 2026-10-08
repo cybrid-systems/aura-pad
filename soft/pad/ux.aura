@@ -37,6 +37,25 @@
 ;; buffer is used when the test did not.
 (define *ux-lines* (list))
 (define *ux-point* 0)
+;; Tokens for the sentence under the cursor. The same line list is
+;; reused until an edit replaces it, so an arrow does not scan again.
+(define *ux-page* #f)
+(define *ux-toks* (list))
+;; Byte span of the sentence already on SAY. An arrow inside it
+;; keeps that sentence. A different column scans once.
+(define *ux-say-a* -1)
+(define *ux-say-b* -1)
+(define *ux-say-s* "")
+
+(define (pad:ux-toks L)
+  (if (eq? L *ux-page*)
+      *ux-toks*
+      (begin
+        (set! *ux-page* L)
+        (set! *ux-say-a* -1)
+        (set! *ux-say-b* -1)
+        (set! *ux-toks* (pad:hl-tokens (pad:v-src L)))
+        *ux-toks*)))
 
 (define (pad:ux-nth xs i)
   (if (= i 0) (car xs) (pad:ux-nth (cdr xs) (- i 1))))
@@ -114,7 +133,7 @@
 
 ;; True when point sits on the birth token, not only on its first column.
 (define (pad:ux-at-def? p name L row)
-  (let ((tok (pad:sym-tok-at (pad:v-src L) p)))
+  (let ((tok (pad:sym-tok-in (pad:ux-toks L) p)))
     (and tok
          (string=? (pad:ux-nth tok 3) name)
          (pad:ux-hit? (cadr tok) (pad:ux-nth row 5)))))
@@ -128,26 +147,38 @@
         (string-append name " born line " line ", used " uses)
         (string-append name " used here, born line " line))))
 
+(define (pad:ux-say-slow L p rows)
+  (let ((tok (pad:sym-tok-in (pad:ux-toks L) p)))
+    (if tok
+        (begin (set! *ux-say-a* (cadr tok)) (set! *ux-say-b* (caddr tok)))
+        (begin (set! *ux-say-a* p) (set! *ux-say-b* (+ p 1))))
+    (let ((name (if tok (pad:ux-nth tok 3) ""))
+          (line (+ (car (pad:v-linecol L p)) 1)))
+      (let ((row (if (string=? name "")
+                     (pad:ux-on-line line rows)
+                     (let ((hit (pad:ux-find name rows)))
+                       (if hit hit (pad:ux-on-line line rows))))))
+        (if (not row)
+            (begin (set! *ux-say-a* -1) (set! *ux-say-b* -1) *pl-say*)
+            (begin
+              (set! *pl-say*
+                    (pad:ux-say-of row (if (string=? name "")
+                                           #t
+                                           (and tok
+                                                (string=? name (pad:ux-nth tok 3))
+                                                (pad:ux-hit? (cadr tok)
+                                                              (pad:ux-nth row 5))))))
+              (set! *ux-say-s* *pl-say*)
+              *pl-say*))))))
+
 (define (pad:ux-say-at)
   (let ((rows *read-mean*)
-        (L (pad:ux-page))
         (p *ux-point*))
     (if (null? rows)
         *pl-say*
-        (let ((name (pad:sym-at (pad:v-src L) p))
-              (line (+ (car (pad:v-linecol L p)) 1)))
-          (let ((row (if (string=? name "")
-                         (pad:ux-on-line line rows)
-                         (let ((hit (pad:ux-find name rows)))
-                           (if hit hit (pad:ux-on-line line rows))))))
-            (if (not row)
-                *pl-say*
-                (begin
-                  (set! *pl-say*
-                        (pad:ux-say-of row (if (string=? name "")
-                                               #t
-                                               (pad:ux-at-def? p name L row))))
-                  *pl-say*)))))))
+        (if (and (>= p *ux-say-a*) (< p *ux-say-b*) (string=? *pl-say* *ux-say-s*))
+            *pl-say*
+            (pad:ux-say-slow (pad:ux-page) p rows)))))
 
 (define (pad:ux-arrow! d)
   (set! *ux-point* (+ *ux-point* d))
@@ -190,7 +221,14 @@
   (if *read-ready*
       (begin
         (if (not *read-done*) (pad:read-load!) 0)
-        (pad:read-check! (pad:ux-page)))
+        (pad:read-check! (pad:ux-page))
+        (if (string=? *read-status* "checked")
+            (begin
+              (set! *ux-say-a* -1)
+              (set! *ux-say-b* -1)
+              (pad:ux-toks (pad:ux-page))
+              (pad:ux-say-at))
+            0))
       0))
 
 ;; where NAME, or where under the cursor. A checked cache is not checked
