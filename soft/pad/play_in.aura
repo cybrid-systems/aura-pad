@@ -203,6 +203,10 @@
 ;; the card was shown without a proposal.
 (define *tx-better* #f)
 (define *tx-card-ops* (list))
+;; Sentence shown before KEEP. #f until the blast check agrees.
+(define *tx-touches* #f)
+;; #t only when that check agrees. Anything else refuses the keep.
+(define *tx-blast-ok* #f)
 
 (define (pad:play-step! line)
   (if (number? *tx-card*)

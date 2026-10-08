@@ -732,6 +732,9 @@
                                                         (begin
                                                           (let ((child-n (pad:tx-score checks)))
                                                             (pad:tx-score-show! page-n child-n)
+                                                            (if (try pad:play-step! (catch (e) #f))
+                                                                (pad:tx-blast-take! ops src)
+                                                                0)
                                                             (try (workspace :switch 0)
                                                                  (catch (e) #f))
                                                             (pad:tx-show! "APPLY tried=1")
@@ -748,10 +751,14 @@
         (list "no" "aura cannot change this page yet"))
       (if (not (and (pad:tx-robot-ready!) (pad:tx-world-ready!)))
           (list "DROP" "aura cannot change this page yet")
-          (let ((c (pad:world-open! "try")))
-            (if (not (number? c))
-                (list "DROP" "aura cannot change this page yet")
-                (pad:tx-ops-child! c ops checks src))))))
+          (begin
+            (if (try pad:play-step! (catch (e) #f))
+                (pad:tx-blast-ready!)
+                0)
+            (let ((c (pad:world-open! "try")))
+              (if (not (number? c))
+                  (list "DROP" "aura cannot change this page yet")
+                  (pad:tx-ops-child! c ops checks src)))))))
 
 (define (pad:tx-dispatch! parsed)
   (let ((kind (car parsed)))
@@ -879,7 +886,8 @@
     "go"))
 
 ;; Three choices. The mark sits on one of them. Choosing closes the card.
-;; Keep writes the projection only when the score was strictly higher.
+;; Keep writes the projection only when the score was strictly higher
+;; and the blast count agreed.
 (define (pad:tx-card-say!)
   (let ((i *tx-card*))
     (set! *pl-say*
@@ -934,7 +942,11 @@
        (set! *pl-say* "did drop"))
       ((string=? name "keep")
        (if (eq? *tx-better* #t)
-           (pad:tx-card-keep!)
+           (if (eq? *tx-blast-ok* #t)
+               (pad:tx-card-keep!)
+               (begin
+                 (pad:tx-show! "TX_DISAGREE")
+                 (set! *pl-say* "TX_DISAGREE")))
            (if (pair? *tx-card-ops*)
                (set! *pl-say* "that one is not better")
                (set! *pl-say* "did keep"))))
@@ -1012,6 +1024,8 @@
   (pad:tx-show! "PROPOSE net=0")
   (let ((parsed (pad:tx-parse text)))
     (set! *tx-better* #f)
+    (set! *tx-touches* #f)
+    (set! *tx-blast-ok* #f)
     (set! *tx-card-ops*
       (if (and (pair? parsed)
                (string? (car parsed))
@@ -1021,6 +1035,11 @@
     (let ((kind (car (pad:tx-run! text))))
       (pad:tx-show! (string-append "PROPOSE kind=" kind))
       (pad:tx-card-show!)
+      (if (and (eq? *tx-better* #t) (string? *tx-touches*))
+          (set! *pl-say* *tx-touches*)
+          (if (and (eq? *tx-better* #t) (eq? *tx-blast-ok* #f))
+              (set! *pl-say* "TX_DISAGREE")
+              0))
       *pl-say*)))
 
 (define (pad:tx-propose!)
@@ -1113,3 +1132,110 @@
     (pad:tx-read
       (string-append (pad:tx-home)
         "/soft/pad/fixtures/propose_two.txt"))))
+
+;; Blast card before KEEP. Loaded beside the file child, then counted
+;; while that child is still current. Arrow keys do not enter here.
+(define (pad:tx-blast-ready!)
+  (if (try pad:blast-sites (catch (e) #f))
+      #t
+      (pad:tx-load-in! "tx-blast"
+        (string-append (pad:tx-home) "/soft/pad/blast.aura"))))
+
+(define (pad:tx-call-n name)
+  (try
+    (let ((r (query:calls name)))
+      (if (and (or (pair? r) (null? r)) (not (pad:eng-err? r)))
+          (length r)
+          -1))
+    (catch (e) -1)))
+
+(define (pad:tx-name-dirty? name)
+  (let ((ids (try (pad:q-defines-of name) (catch (e) #f))))
+    (if (and (pair? ids) (number? (car ids)))
+        (let ((d (try (query:dirty-nodes "general") (catch (e) #f))))
+          (if (and (pair? d) (member (number->string (car ids)) d))
+              #t
+              #f))
+        #f)))
+
+(define (pad:tx-blast-rows ops src)
+  (if (not (pair? ops))
+      (list)
+      (let ((name (car (car ops))))
+        (cons (list name
+                    (length (pad:blast-sites (pad:hl-tokens src) name #f #f (list)))
+                    (pad:tx-call-n name)
+                    (pad:blast-eng-calls name))
+              (pad:tx-blast-rows (cdr ops) src)))))
+
+(define (pad:tx-blast-row-ok? row)
+  (let ((soft (cadr row))
+        (eng (caddr row))
+        (wrap (car (cdr (cdr (cdr row))))))
+    (and (>= eng 0)
+         (= soft eng)
+         (= eng wrap)
+         (pad:tx-name-dirty? (car row)))))
+
+(define (pad:tx-blast-rows-ok? rows)
+  (cond
+    ((null? rows) #t)
+    ((pad:tx-blast-row-ok? (car rows)) (pad:tx-blast-rows-ok? (cdr rows)))
+    (#t #f)))
+
+(define (pad:tx-blast-soft-sum rows acc)
+  (if (null? rows)
+      acc
+      (pad:tx-blast-soft-sum (cdr rows) (+ acc (cadr (car rows))))))
+
+(define (pad:tx-blast-eng-sum rows acc)
+  (if (null? rows)
+      acc
+      (pad:tx-blast-eng-sum (cdr rows) (+ acc (caddr (car rows))))))
+
+(define (pad:tx-blast-dots rows)
+  (cond
+    ((null? rows) "")
+    ((null? (cdr rows)) (car (car rows)))
+    (#t (string-append (car (car rows))
+          (string-append "." (pad:tx-blast-dots (cdr rows)))))))
+
+(define (pad:tx-blast-names rows)
+  (if (null? rows)
+      (list)
+      (cons (car (car rows)) (pad:tx-blast-names (cdr rows)))))
+
+(define (pad:tx-blast-show! rows soft eng)
+  (pad:tx-show!
+    (string-append "BLAST names="
+      (string-append (pad:tx-blast-dots rows)
+        (string-append " calls="
+          (string-append (number->string soft)
+            (string-append "/" (number->string eng)))))))
+  0)
+
+(define (pad:tx-blast-take! ops src)
+  (if (not (try pad:blast-sites (catch (e) #f)))
+      (begin
+        (set! *tx-touches* #f)
+        (set! *tx-blast-ok* #f)
+        (pad:tx-show! "TX_DISAGREE")
+        0)
+      (let ((kept (pad:tx-card-splice! ops src)))
+        (let ((rows (pad:tx-blast-rows ops kept)))
+          (let ((soft (pad:tx-blast-soft-sum rows 0))
+                (eng (pad:tx-blast-eng-sum rows 0)))
+            (pad:tx-blast-show! rows soft eng)
+            (if (and (pair? rows)
+                     (pad:tx-blast-rows-ok? rows)
+                     (= soft eng))
+                (begin
+                  (set! *tx-touches*
+                    (string-append "touches "
+                      (pad:blast-commas (pad:tx-blast-names rows))))
+                  (set! *tx-blast-ok* #t))
+                (begin
+                  (set! *tx-touches* #f)
+                  (set! *tx-blast-ok* #f)
+                  (pad:tx-show! "TX_DISAGREE")))
+            0)))))

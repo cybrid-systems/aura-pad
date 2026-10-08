@@ -1,6 +1,6 @@
-;; Step 42. One fixture proposal, sentence mode and classic mode.
-;; Esc leaves the projection. Enter keeps it only when the score is
-;; strictly higher. Soft reserved: never bind quote.
+;; Step 45. Before KEEP, SAY names the define the change touches.
+;; The BLAST count is query:calls. A mismatch leaves the projection.
+;; Soft reserved: never bind quote.
 (define *pad-home*
   (let ((h (getenv "AURA_PAD_HOME")))
     (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
@@ -33,9 +33,11 @@
     (string-append "(define (hello x)\n  (+ x 1))\n"
       "(define (main) (hello 3))\n")))
 
-(define same-t
-  (string-append "hello=(lambda (x) (+ x 1))\n"
-    "check hello 3 4\n"))
+;; The parameter uses the define's name, so the soft site count is
+;; one higher than the engine's call list. The score is still higher.
+(define shadow
+  (string-append "hello=(lambda (hello) (+ hello 2))\n"
+    "check hello 3 5\n"))
 
 (define (say s)
   (display s)
@@ -45,7 +47,7 @@
 (define (mark m)
   (say (string-append "MARK " m)))
 
-(define (pad:m21-classic?)
+(define (pad:blast-classic?)
   (let ((v (getenv "PAD_CLASSIC")))
     (and (string? v) (string=? v "1"))))
 
@@ -61,23 +63,11 @@
       0)
   (set! *vi-on* #t)
   (set! *vi-mode* "normal")
-  (set! *vi-vanchor* -1)
-  (set! *vi-op* "")
-  (set! *vi-line* "")
-  (set! *vi-cx* #f)
-  (set! *vi-base* "t")
-  (set! *vi-num* 0)
-  (set! *vi-num-op* 0)
-  (set! *vi-seek* "")
-  (set! *vi-obj* "")
-  (set! *em-hit* #f)
-  (set! *em-anchor* #f)
   (set! *tx-card* #f)
   (set! *tx-better* #f)
   (set! *tx-card-ops* (list))
   (set! *tx-touches* #f)
   (set! *tx-blast-ok* #f)
-  (set! *ai-sets* 0)
   0)
 
 (define (shot! ev)
@@ -94,10 +84,6 @@
     (say (string-append "CHECK " (string-append tag
           (if (string=? src page) " page=same" " page=moved"))))
     (say (string-append "CHECK " (string-append tag
-          (if (string=? (pad:play-src) src) " buf=page" " buf=other"))))
-    (say (string-append "CHECK " (string-append tag
-          (string-append " sets=" (number->string *ai-sets*)))))
-    (say (string-append "CHECK " (string-append tag
           (string-append " comment=" (yn (string-contains? src ";; keep this"))))))
     (say (string-append "CHECK " (string-append tag
           (string-append " old=" (yn (string-contains? src "(define (hello x)"))))))
@@ -108,56 +94,48 @@
           (string-append " main=" (yn (string-contains? src "(define (main)"))))))
     0))
 
-(define (classic!)
+(define (enter!)
+  (if (pad:blast-classic?)
+      (pad:play-step! "IN 13")
+      (pad:ux-key! "IN 13")))
+
+(define (step!)
+  (if (pad:blast-classic?)
+      (pad:play-step! "IN 9")
+      (pad:ux-key! "KEY right")))
+
+(define (run!)
   (set! *ux-keys* 0)
   (arm!)
-  (mark "esc-start")
-  (shot! "M21_BEFORE")
-  (say (string-append "CHECK rewrite=" (pad:ai-run! "rewrite" "kinder")))
-  (see! "esc-ready")
-  (pad:play-step! "IN 27")
-  (shot! "M21_AFTER")
-  (mark "esc")
-  (see! "esc")
+  (shot! "BLAST_ARROW_BEFORE")
+  (mark "arrow-start")
+  (pad:tx-propose!)
+  (see! "arrow-ready")
+  (step!)
+  (shot! "BLAST_ARROW_AFTER")
+  (see! "arrow")
+  (mark "arrow")
   (arm!)
+  (shot! "BLAST_KEEP_BEFORE")
   (mark "keep-start")
-  (pad:ai-run! "rewrite" "kinder")
-  (pad:play-step! "IN 13")
-  (mark "keep")
+  (pad:tx-propose!)
+  (see! "keep-ready")
+  (enter!)
+  (shot! "BLAST_KEEP_AFTER")
   (see! "keep")
+  (mark "keep")
   (arm!)
-  (mark "same-start")
-  (pad:tx-propose-text! same-t)
-  (pad:play-step! "IN 13")
-  (mark "same")
-  (see! "same")
+  (shot! "BLAST_BAD_BEFORE")
+  (mark "bad-start")
+  (pad:tx-propose-text! shadow)
+  (see! "bad-ready")
+  (enter!)
+  (shot! "BLAST_BAD_AFTER")
+  (see! "bad")
+  (mark "bad")
   (say (string-append "CHECK ux-keys=" (number->string *ux-keys*)))
-  (say "CARD_CLASSIC_OK"))
+  (if (pad:blast-classic?)
+      (say "BLAST_CLASSIC_OK")
+      (say "BLAST_SENTENCE_OK")))
 
-(define (sentence!)
-  (arm!)
-  (mark "esc-start")
-  (shot! "M21_BEFORE")
-  (pad:tx-propose!)
-  (see! "esc-ready")
-  (pad:ux-key! "IN 27")
-  (shot! "M21_AFTER")
-  (mark "esc")
-  (see! "esc")
-  (arm!)
-  (mark "keep-start")
-  (pad:tx-propose!)
-  (pad:ux-key! "IN 13")
-  (mark "keep")
-  (see! "keep")
-  (arm!)
-  (mark "same-start")
-  (pad:tx-propose-text! same-t)
-  (pad:ux-key! "IN 13")
-  (mark "same")
-  (see! "same")
-  (say "CARD_SENTENCE_OK"))
-
-(if (pad:m21-classic?)
-    (classic!)
-    (sentence!))
+(run!)

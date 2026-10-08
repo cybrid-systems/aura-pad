@@ -140,7 +140,7 @@ def forbid(part, line):
         sys.exit("smoke_m21: unexpected " + line)
 
 ready = (
-    "CHECK esc-ready say=> keep   drop   undo",
+    "CHECK esc-ready say=touches hello",
     "CHECK esc-ready card=on",
     "CHECK esc-ready page=same",
     "CHECK esc-ready buf=page",
