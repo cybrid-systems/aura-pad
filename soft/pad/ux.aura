@@ -357,6 +357,15 @@
         (set! *pl-say* (cadr r))
         *pl-say*)))
 
+;; A sentence is not model text on the page. The typed line is
+;; received and dropped. Classic rewrite still writes the page
+;; when the sentence flag is off.
+(define (pad:ux-propose! text)
+  (set! *ux-line* "")
+  (if (string? text) 0 0)
+  (set! *pl-say* "aura cannot change this page yet")
+  *pl-say*)
+
 ;; Empty sentence Enter. Arrows stay on pad:ux-arrow! / pad:ux-say-at.
 (define (pad:say-run!)
   (if (not (pad:ux-on?))
@@ -385,10 +394,7 @@
             ((string=? intent "apply") (pad:ux-apply! (cadr hit)))
             ((string=? intent "who") (pad:ux-who!))
             ((string=? intent "undo") (pad:ux-undo!))
-            (#t
-             (begin
-               (set! *pl-say* "aura cannot change this page yet")
-               *pl-say*)))))))
+            (#t (pad:ux-propose! (cadr hit))))))))
 
 (define (pad:ux-legend!)
   (set! *view-legend* (string-append "> " *ux-line*))

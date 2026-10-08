@@ -1,0 +1,66 @@
+;; Step 37. A sentence proposal does not paste model text.
+;; Classic rewrite still writes the page when the sentence flag is off.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/lc.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+(load (string-append *pad-home* "/soft/pad/ai.aura"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define page "hello")
+
+(define (arm!)
+  (set! *pl-st* (pad:es-at (pad:v-lines page) 0 0))
+  (set! *ux-lines* (pad:v-lines page))
+  (set! *ux-line* "")
+  (set! *ai-fake* "hello aura")
+  (set! *ai-sets* 0)
+  (set! *ai-hist* (list))
+  0)
+
+(define (page-now) (pad:play-src))
+
+(arm!)
+(define src0 (page-now))
+
+(if (pad:ux-on?)
+    (begin
+      (set! *ux-line* "make hello kinder")
+      (say (string-append "CHECK say-later=" (pad:say-run!)))
+      (say (if (= *ai-sets* 0) "CHECK later-sets=0" "CHECK later-sets=moved"))
+      (say (if (string=? (page-now) src0) "CHECK later-page=same" "CHECK later-page=moved"))
+      (say (if (string=? (pad:v-src *ux-lines*) src0)
+               "CHECK later-ux=same"
+               "CHECK later-ux=moved"))
+      (say (if (string=? *ux-line* "") "CHECK later-line=clear" "CHECK later-line=kept"))
+      (arm!)
+      (say (string-append "CHECK rewrite-do=" (pad:ai-rewrite! "kinder")))
+      (say (string-append "CHECK say-rewrite=" *pl-say*))
+      (say (if (= *ai-sets* 0) "CHECK rewrite-sets=0" "CHECK rewrite-sets=moved"))
+      (say (if (string=? (page-now) src0)
+               "CHECK rewrite-page=same"
+               "CHECK rewrite-page=moved"))
+      (say "PASTE_SENTENCE_OK"))
+    (begin
+      (say (string-append "CHECK classic-do=" (pad:ai-rewrite! "kinder")))
+      (say (string-append "CHECK say-classic=" *pl-say*))
+      (say (if (= *ai-sets* 1) "CHECK classic-sets=1" "CHECK classic-sets=other"))
+      (say (if (string=? (page-now) "hello aura")
+               "CHECK classic-page=wrote"
+               "CHECK classic-page=same"))
+      (say "PASTE_CLASSIC_OK")))

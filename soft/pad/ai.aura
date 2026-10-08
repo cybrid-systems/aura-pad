@@ -133,7 +133,14 @@
         *wn-live*)
       ""))
 
+(define *ai-sets* 0)
+
+(define (pad:ai-sentence?)
+  (let ((v (getenv "PAD_SENTENCE")))
+    (and (string? v) (string=? v "1"))))
+
 (define (pad:ai-set-text! src)
+  (set! *ai-sets* (+ *ai-sets* 1))
   (let* ((st *pl-st*)
          (L2 (pad:v-lines src))
          (U (pad:push-undo (list-ref st 5) (list (car st) (cadr st) (caddr st)))))
@@ -306,10 +313,14 @@
              (let ((ans (pad:ai-unfence (pad:ai-plain-s (cadr r)))))
                (if (string=? ans "")
                    (begin (set! *pl-say* "the chat had nothing to say") "vi-do")
-                   (begin
-                     (pad:ai-set-text! ans)
-                     (set! *pl-say* "the chat rewrote this page. press u to put yours back")
-                     "vi-do")))))))))
+                   (if (pad:ai-sentence?)
+                       (begin
+                         (set! *pl-say* "aura cannot change this page yet")
+                         "vi-do")
+                       (begin
+                         (pad:ai-set-text! ans)
+                         (set! *pl-say* "the chat rewrote this page. press u to put yours back")
+                         "vi-do"))))))))))
 
 (define (pad:ai-run! w rest)
   (cond
