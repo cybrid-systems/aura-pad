@@ -732,12 +732,12 @@
                                                         (begin
                                                           (let ((child-n (pad:tx-score checks)))
                                                             (pad:tx-score-show! page-n child-n)
-                                                            0)
-                                                          (try (workspace :switch 0)
-                                                               (catch (e) #f))
-                                                          (pad:tx-show! "APPLY tried=1")
-                                                          (list "tried"
-                                                            "aura cannot change this page yet")))))))))))))))))))))
+                                                            (try (workspace :switch 0)
+                                                                 (catch (e) #f))
+                                                            (pad:tx-show! "APPLY tried=1")
+                                                            (list "tried"
+                                                              "aura cannot change this page yet"
+                                                              child-n page-n))))))))))))))))))))))
 
 (define (pad:tx-ops! ops checks src)
   (set! *tx-exec* 0)
@@ -1028,3 +1028,88 @@
     (pad:tx-read
       (string-append (pad:tx-home)
         "/soft/pad/fixtures/propose_ok.txt"))))
+
+;; Two ideas from one reply. A second separator is a third idea, refused.
+(define (pad:tx-two-walk s i n)
+  (if (>= i n)
+      #f
+      (let ((nl (pad:tx-at s i n 10)))
+        (let ((line (if (< nl 0) (substring s i n) (substring s i nl)))
+              (j (if (< nl 0) n (+ nl 1))))
+          (if (string=? line "---")
+              (list (substring s 0 i) (substring s j n))
+              (if (< nl 0) #f (pad:tx-two-walk s j n)))))))
+
+(define (pad:tx-two-parts s)
+  (if (not (string? s))
+      #f
+      (let ((cut (pad:tx-two-walk s 0 (string-length s))))
+        (if (not (pair? cut))
+            #f
+            (if (pad:tx-two-walk (cadr cut) 0 (string-length (cadr cut)))
+                #f
+                cut)))))
+
+(define (pad:tx-child-score text)
+  (let ((r (pad:tx-run! text)))
+    (if (and (pair? r)
+             (pair? (cdr r))
+             (pair? (cdr (cdr r)))
+             (number? (car (cdr (cdr r)))))
+        (car (cdr (cdr r)))
+        -1)))
+
+(define (pad:tx-rules-ready!)
+  (if (try pad:stamp-world! (catch (e) #f))
+      #t
+      (pad:tx-load-in! "tx-rules"
+                       (string-append (pad:tx-home) "/soft/pad/rules.aura"))))
+
+(define (pad:tx-num-pair? p)
+  (and (pair? p)
+       (number? (car p))
+       (pair? (cdr p))
+       (number? (cadr p))))
+
+;; Submitted with the two-proposal sentence. The key loop does not call it.
+;; fiber_live only when both joins return the same scores as the host.
+(define (pad:tx-world-race! a b)
+  (if (not (pad:tx-rules-ready!))
+      (list -1 -1)
+      (begin
+        (set! *race-backend* 0)
+        (set! *race-spawned* 0)
+        (set! *race-joined* 0)
+        (set! *world-line* "host-sequential")
+        (let ((host (list (pad:tx-child-score a) (pad:tx-child-score b))))
+          (let ((raced (pad:race-thunks!
+                         (lambda () (pad:tx-child-score a))
+                         (lambda () (pad:tx-child-score b)))))
+            (if (not (and (pad:tx-num-pair? raced)
+                          (= (car raced) (car host))
+                          (= (cadr raced) (cadr host))))
+                (set! *race-joined* 0))
+            (pad:stamp-world!)
+            (pad:tx-show! (string-append "SCORE a=" (number->string (car host))))
+            (pad:tx-show! (string-append "SCORE b=" (number->string (cadr host))))
+            (pad:tx-show!
+              (string-append "RACE a="
+                (number->string
+                  (if (pad:tx-num-pair? raced) (car raced) -1))))
+            (pad:tx-show!
+              (string-append "RACE b="
+                (number->string
+                  (if (pad:tx-num-pair? raced) (cadr raced) -1))))
+            host)))))
+
+(define (pad:tx-world-text! text)
+  (let ((parts (pad:tx-two-parts text)))
+    (if (not (pair? parts))
+        (list -1 -1)
+        (pad:tx-world-race! (car parts) (cadr parts)))))
+
+(define (pad:tx-world!)
+  (pad:tx-world-text!
+    (pad:tx-read
+      (string-append (pad:tx-home)
+        "/soft/pad/fixtures/propose_two.txt"))))

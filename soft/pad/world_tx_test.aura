@@ -1,0 +1,48 @@
+;; Step 44. Two proposals race when the sentence is submitted.
+;; The key loop does not call this. Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+(load (string-append *pad-home* "/soft/pad/tx.aura"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define page
+  (string-append ";; keep this\n\n"
+    (string-append "(define (hello x)\n  (+ x 1))\n"
+      "(define (main) (hello 3))\n")))
+
+(set! *ux-lines* (pad:v-lines page))
+(define *read-proj* page)
+
+(say (if (pair? (pad:tx-two-parts "hello=(lambda (x) x)\ncheck hello 1 1\n"))
+         "CHECK one=split"
+         "CHECK one=whole"))
+(say (if (pad:tx-two-parts
+           (string-append "hello=(lambda (x) x)\n---\n"
+             "hello=(lambda (x) x)\n---\nhello=(lambda (x) x)\n"))
+         "CHECK three=split"
+         "CHECK three=refused"))
+
+(define before (pad:v-src *ux-lines*))
+(pad:tx-world!)
+(say (if (string=? (pad:v-src *ux-lines*) before)
+         "CHECK page=same"
+         "CHECK page=moved"))
