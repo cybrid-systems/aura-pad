@@ -26,6 +26,19 @@
 ;; (name id line col uses points). line is 1-based. uses may be 0.
 ;; Filled in the child, copied to the root after the switch.
 (define *read-mean* (list))
+;; Last checked projection. Empty until the first check succeeds.
+;; The next check compares define bodies with this text.
+(define *read-proj* "")
+;; Sentence set by a re-check. Empty means the cursor sentence stands.
+(define *read-report* "")
+(define *read-dirty-ids* "none")
+;; A child created from the root has no parent flat, and mutate:rebind
+;; then refuses the copy. One anchor holds a flat so the read child can
+;; rebind. The anchor is not the page, and it is not deleted.
+(define *read-anchor* #f)
+;; Slot so a test can stand in an unbound query:dirty-nodes.
+(define *read-dirty-fn*
+  (lambda (reason) (query:dirty-nodes reason)))
 
 (define (pad:read-bool b)
   (if b "true" "false"))
@@ -288,7 +301,9 @@
                 (pad:read-show! (string-append "READ jump=" jsrc))
                 (pad:read-finish! code0 t0 (car diff) (cadr diff))))))))
 
-(define (pad:read-switched! c L n0 e0 code0 t0)
+;; Dirty names are a sentence after the check. They never skip the
+;; page set-code or the eval. The whole page is still lowered once.
+(define (pad:read-switched! c L n0 e0 code0 t0 plan)
   (try (workspace :switch c) (catch (e) #f))
   (pad:read-show! (string-append "READ child=" (number->string c)))
   (let ((r1 (pad:ws-set-code! (pad:read-src L))))
@@ -301,7 +316,15 @@
               (begin
                 (pad:read-back! c n0 e0 #t)
                 (pad:read-note! "READ eval-fail"))
-              (pad:read-gather! c L n0 e0 code0 t0))))))
+              (let ((box (pad:read-ask! plan)))
+                (if (and (pair? box) (string? (car box))
+                         (string=? (car box) "gap"))
+                    (begin
+                      (pad:read-back! c n0 e0 #t)
+                      (pad:read-note! "GAPS query:dirty-nodes"))
+                    (begin
+                      (pad:read-gather! c L n0 e0 code0 t0)
+                      (pad:read-publish! box (pad:v-src L))))))))))
 
 ;; Call-head scan. Flat pad:hl-tokens, nested again with paren kind "P".
 ;; A comment or a string is not a call head. The pen word list is not this scan.
@@ -470,17 +493,331 @@
   (pad:read-note! *pl-say*)
   0)
 
+(define (pad:read-current)
+  (let ((id (try (workspace :current) (catch (e) #f))))
+    (if (number? id) id -1)))
+
+(define (pad:read-ws? c)
+  (or (= c 32) (= c 9) (= c 10) (= c 13)))
+
+(define (pad:read-back-ws s i)
+  (if (or (< i 0) (not (pad:read-ws? (string-ref s i))))
+      i
+      (pad:read-back-ws s (- i 1))))
+
+;; The '(' that opens a define sits just left of the define keyword.
+(define (pad:read-open-left s i)
+  (let ((j (pad:read-back-ws s (- i 1))))
+    (if (and (>= j 0) (= (string-ref s j) 40)) j -1)))
+
+(define (pad:read-skip-ws s i n)
+  (if (or (>= i n) (not (pad:read-ws? (string-ref s i))))
+      i
+      (pad:read-skip-ws s (+ i 1) n)))
+
+(define (pad:read-toks-at toks at)
+  (cond
+    ((null? toks) (list))
+    ((>= (cadr (car toks)) at) toks)
+    (#t (pad:read-toks-at (cdr toks) at))))
+
+;; Exclusive end of the form whose '(' starts at open. Strings and
+;; comments are not paren tokens, so a mark inside them does not count.
+(define (pad:read-match-from toks d)
+  (if (null? toks)
+      -1
+      (let ((t (car toks)))
+        (if (not (string=? (car t) "P"))
+            (pad:read-match-from (cdr toks) d)
+            (if (string=? (pad:read-tok-text t) "(")
+                (pad:read-match-from (cdr toks) (+ d 1))
+                (if (<= d 1)
+                    (caddr t)
+                    (pad:read-match-from (cdr toks) (- d 1))))))))
+
+(define (pad:read-match toks open)
+  (if (< open 0) -1 (pad:read-match-from (pad:read-toks-at toks open) 0)))
+
+(define (pad:read-lam? s)
+  (and (string? s)
+       (>= (string-length s) 7)
+       (string=? (substring s 0 7) "(lambda")))
+
+;; (define (name args) body) -> (lambda (args) body). The name is dropped
+;; and the define's own closing paren is replaced by the lambda's.
+(define (pad:read-sugar src toks prev prev2 name-tok)
+  (if (not prev2)
+      ""
+      (let* ((n (string-length src))
+             (open (pad:read-open-left src (cadr prev2)))
+             (end (pad:read-match toks open))
+             (param (cadr prev))
+             (name-at (cadr name-tok))
+             (after (pad:read-skip-ws src (caddr name-tok) n)))
+        (if (or (< open 0) (< end 0) (>= param name-at) (> after (- end 1)))
+            ""
+            (string-append
+              "(lambda "
+              (string-append
+                (substring src param name-at)
+                (string-append (substring src after (- end 1)) ")")))))))
+
+;; (define name <init>). A lambda init is already the rebind text.
+(define (pad:read-value src toks prev name-tok)
+  (if (not prev)
+      ""
+      (let* ((n (string-length src))
+             (open (pad:read-open-left src (cadr prev)))
+             (end (pad:read-match toks open))
+             (at (pad:read-skip-ws src (caddr name-tok) n)))
+        (if (or (< open 0) (< end 0) (> at (- end 1)))
+            ""
+            (substring src at (- end 1))))))
+
+(define (pad:read-lam-of src toks prev prev2 name-tok)
+  (if (and prev (string=? (car prev) "P"))
+      (pad:read-sugar src toks prev prev2 name-tok)
+      (pad:read-value src toks prev name-tok)))
+
+;; Same hit as pad:ws-soft-defs. A comment between define and the name
+;; is a miss, so that page stays a name-set change and does not rebind.
+(define (pad:read-lam-walk all xs src prev prev2 acc)
+  (if (null? xs)
+      (reverse acc)
+      (let* ((t (car xs))
+             (k (car t))
+             (hit (and (or (string=? k "S") (string=? k "Q") (string=? k "M"))
+                       (or (and prev (string=? (car prev) "K")
+                                (string=? (pad:read-tok-text prev) "define"))
+                           (and prev (string=? (car prev) "P")
+                                (string=? (pad:read-tok-text prev) "(")
+                                prev2 (string=? (car prev2) "K")
+                                (string=? (pad:read-tok-text prev2) "define"))))))
+        (pad:read-lam-walk all (cdr xs) src t prev
+          (if hit
+              (cons (list (pad:read-tok-text t)
+                          (pad:read-lam-of src all prev prev2 t))
+                    acc)
+              acc)))))
+
+(define (pad:read-lams src)
+  (let ((toks (pad:hl-tokens src)))
+    (pad:read-lam-walk toks toks src #f #f (list))))
+
+(define (pad:read-names=? a b)
+  (cond
+    ((and (null? a) (null? b)) #t)
+    ((or (null? a) (null? b)) #f)
+    ((string=? (car a) (car b)) (pad:read-names=? (cdr a) (cdr b)))
+    (#t #f)))
+
+(define (pad:read-forms=? a b)
+  (cond
+    ((and (null? a) (null? b)) #t)
+    ((or (null? a) (null? b)) #f)
+    ((string=? (cadr (car a)) (cadr (car b)))
+     (pad:read-forms=? (cdr a) (cdr b)))
+    (#t #f)))
+
+;; (pairs bad?). bad means a changed init is not a lambda, so do not rebind.
+(define (pad:read-body-pairs a b acc bad)
+  (cond
+    ((or (null? a) (null? b)) (list (reverse acc) bad))
+    ((string=? (cadr (car a)) (cadr (car b)))
+     (pad:read-body-pairs (cdr a) (cdr b) acc bad))
+    ((pad:read-lam? (cadr (car b)))
+     (pad:read-body-pairs (cdr a) (cdr b)
+       (cons (list (car (car b)) (cadr (car b))) acc)
+       bad))
+    (#t (pad:read-body-pairs (cdr a) (cdr b) acc #t))))
+
+;; (kind pairs). pairs is empty unless a lambda body actually changed.
+;; fresh / same / other / comment do not rebind. comment still asks
+;; the engine, which may report no dirty define.
+(define (pad:read-plan prev src)
+  (if (string=? prev "")
+      (list "fresh" (list))
+      (if (string=? prev src)
+          (list "same" (list))
+          (let ((na (pad:ws-soft-defs (pad:hl-tokens prev)))
+                (nb (pad:ws-soft-defs (pad:hl-tokens src))))
+            (if (not (pad:read-names=? na nb))
+                (list "other" (list))
+                (let ((fa (pad:read-lams prev))
+                      (fb (pad:read-lams src)))
+                  (if (pad:read-forms=? fa fb)
+                      (list "comment" (list))
+                      (let ((got (pad:read-body-pairs fa fb (list) #f)))
+                        (if (cadr got)
+                            (list "other" (list))
+                            (list "body" (car got)))))))))))
+
+(define (pad:read-save-one pair)
+  (let ((ids (pad:read-plain (pad:q-defines-of (car pair)))))
+    (list (car pair)
+          (if (and (pair? ids) (number? (car ids))) (car ids) -1))))
+
+(define (pad:read-save-ids pairs)
+  (if (null? pairs)
+      (list)
+      (cons (pad:read-save-one (car pairs))
+            (pad:read-save-ids (cdr pairs)))))
+
+(define (pad:read-rebind-all pairs)
+  (if (null? pairs)
+      0
+      (begin
+        (let ((v (pad:m-rebind! (car (car pairs)) (cadr (car pairs)) "dirty")))
+          (if (eq? v #t)
+              0
+              (pad:read-show!
+                (string-append "READ rebind-skip " (car (car pairs))))))
+        (pad:read-rebind-all (cdr pairs)))))
+
+(define (pad:read-id-strs xs)
+  (cond
+    ((or (null? xs) (not (pair? xs))) (list))
+    ((string? (car xs)) (cons (car xs) (pad:read-id-strs (cdr xs))))
+    ((number? (car xs))
+     (cons (number->string (car xs)) (pad:read-id-strs (cdr xs))))
+    (#t (pad:read-id-strs (cdr xs)))))
+
+(define (pad:read-dot xs)
+  (cond
+    ((null? xs) "none")
+    ((null? (cdr xs)) (car xs))
+    (#t (string-append (car xs) (string-append "." (pad:read-dot (cdr xs)))))))
+
+(define (pad:read-mem? s xs)
+  (cond
+    ((null? xs) #f)
+    ((string=? (car xs) s) #t)
+    (#t (pad:read-mem? s (cdr xs)))))
+
+(define (pad:read-sub-hot? id)
+  (let ((c (try (query:dirty-subtree id) (catch (e) 0))))
+    (and (number? c) (> c 0))))
+
+;; Rebind can renumber a define. The id from before the rebind and the id
+;; from after it are both checked against the dirty list.
+(define (pad:read-hot? n ids)
+  (and (number? n) (>= n 0)
+       (or (pad:read-mem? (number->string n) ids)
+           (pad:read-sub-hot? n))))
+
+(define (pad:read-id-named name rows)
+  (cond
+    ((null? rows) -1)
+    ((string=? (car (car rows)) name) (cadr (car rows)))
+    (#t (pad:read-id-named name (cdr rows)))))
+
+(define (pad:read-picked before after ids)
+  (if (null? before)
+      (list)
+      (let ((name (car (car before)))
+            (rest (pad:read-picked (cdr before) after ids)))
+        (if (or (pad:read-hot? (cadr (car before)) ids)
+                (pad:read-hot? (pad:read-id-named name after) ids))
+            (cons name rest)
+            rest))))
+
+(define (pad:read-comma xs)
+  (if (null? (cdr xs))
+      (car xs)
+      (string-append (car xs) (string-append ", " (pad:read-comma (cdr xs))))))
+
+(define (pad:read-dirty-say names)
+  (cond
+    ((null? names) "nothing is dirty")
+    ((null? (cdr names)) (string-append (car names) " is dirty"))
+    (#t (string-append (pad:read-comma names) " are dirty"))))
+
+;; Runs in the child. Returns a list. Root sentences are written after
+;; the switch back, because a set! in the child is not the root binding.
+;; Ids are captured before rebind: a name lookup can come back empty after.
+(define (pad:read-dirty-box kind before pairs)
+  (let ((raw (try (*read-dirty-fn* "general")
+                  (catch (e)
+                    (if (pad:unbound-msg? e) "gap" (list))))))
+    (cond
+      ((string? raw) (list "gap"))
+      ((pad:eng-err? raw) (list "gap"))
+      (#t
+       (let* ((ids (pad:read-id-strs (if (pair? raw) (pad:read-plain raw) (list))))
+              (after (pad:read-save-ids pairs)))
+         (list "ok" (pad:read-dot ids)
+               (pad:read-picked before after ids) kind))))))
+
+(define (pad:read-ask! plan)
+  (let ((pairs (cadr plan))
+        (before (pad:read-save-ids (cadr plan))))
+    (pad:read-rebind-all pairs)
+    (pad:read-dirty-box (car plan) before pairs)))
+
+(define (pad:read-publish! box src)
+  (if (not (string=? *read-status* "checked"))
+      0
+      (let ((ids (cadr box))
+            (names (car (cdr (cdr box))))
+            (kind (car (cdr (cdr (cdr box))))))
+        (set! *read-proj* src)
+        (set! *read-dirty-ids* ids)
+        (pad:read-show! (string-append "READ query:dirty-nodes=" ids))
+        (if (or (string=? kind "body") (string=? kind "comment"))
+            (let ((say (pad:read-dirty-say names)))
+              (set! *pl-say* say)
+              (set! *read-report* say)
+              0)
+            0))))
+
+;; One anchor per process. Its flat is the parent of every "read" child.
+;; A child created while the root flat is empty cannot rebind. The anchor
+;; is not the page and it is not deleted.
+(define (pad:read-anchor!)
+  (if (number? *read-anchor*)
+      *read-anchor*
+      (let ((c (try (workspace :create "anchor") (catch (e) #f))))
+        (if (not (number? c))
+            #f
+            (begin
+              (try (workspace :switch c) (catch (e) #f))
+              (if (not (= (pad:read-current) c))
+                  (begin
+                    (try (workspace :switch 0) (catch (e) #f))
+                    #f)
+                  (let ((ok (try (set-code "(define (boot) 1)\n#t\n")
+                                 (catch (e) #f))))
+                    (try (workspace :switch 0) (catch (e) #f))
+                    (if (eq? ok #t)
+                        (begin (set! *read-anchor* c) c)
+                        (begin
+                          (try (workspace:delete c) (catch (e) #f))
+                          #f)))))))))
+
 (define (pad:read-check! L)
+  (set! *read-report* "")
   (if (pad:read-guard? L)
       (pad:read-refuse!)
       (let ((code0 (pad:q-code))
             (t0 (current-time-ms))
             (n0 *ws-set-code-n*)
-            (e0 *ws-eval-n*))
-        (let ((c (try (workspace :create "read") (catch (e) #f))))
-          (if (not (pad:read-id? c))
+            (e0 *ws-eval-n*)
+            (plan (pad:read-plan *read-proj* (pad:v-src L))))
+        (let ((a (pad:read-anchor!)))
+          (if (not (number? a))
               (pad:read-note! "READ no-world")
-              (pad:read-switched! c L n0 e0 code0 t0))))))
+              (begin
+                (try (workspace :switch a) (catch (e) #f))
+                (if (not (= (pad:read-current) a))
+                    (begin
+                      (try (workspace :switch 0) (catch (e) #f))
+                      (pad:read-note! "READ no-world"))
+                    (let ((c (try (workspace :create "read") (catch (e) #f))))
+                      (if (not (pad:read-id? c))
+                          (begin
+                            (try (workspace :switch 0) (catch (e) #f))
+                            (pad:read-note! "READ no-world"))
+                          (pad:read-switched! c L n0 e0 code0 t0 plan))))))))))
 
 (pad:read-show! "READ loaded")
 (set! *read-ready* #t)

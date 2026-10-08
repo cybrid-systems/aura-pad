@@ -1,0 +1,89 @@
+;; Step 22. The next check reports query:dirty-nodes.
+;; A body edit names the define. A comment edit says nothing is dirty.
+;; A stand-in for an unbound query returns GAPS and the check fails.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+(define *pl-say* "")
+(define *read-ready* #f)
+(define *read-frame* #f)
+(define *pad-def-lookup* #f)
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/read.aura"))
+(pad:read-load!)
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(set! *pad-def-lookup* pad:define-lookup)
+(if (not (eq? string-join *read-join*))
+    (set! string-join *read-join*)
+    0)
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define (lam-of name rows)
+  (cond
+    ((null? rows) "")
+    ((string=? (car (car rows)) name) (cadr (car rows)))
+    (#t (lam-of name (cdr rows)))))
+
+(define (note-at? src i n)
+  (if (> (+ i 7) n)
+      #f
+      (if (string=? (substring src i (+ i 7)) ";; note")
+          #t
+          (note-at? src (+ i 1) n))))
+
+(define (has-note? src)
+  (and (>= (string-length src) 7)
+       (note-at? src 0 (string-length src))))
+
+(define src-a "(define (hello x) (+ x 1))\n(define (main) (hello 3))")
+(define src-b ";; note\n(define (hello x) (+ x 1))\n(define (main) (hello 3))")
+(define src-c ";; note\n(define (hello x) (+ x 2))\n(define (main) (hello 3))")
+
+(say (string-append "CHECK lam=" (lam-of "hello" (pad:read-lams src-a))))
+(say (if (string=? (lam-of "hello" (pad:read-lams src-a))
+                   (lam-of "hello" (pad:read-lams src-b)))
+         "CHECK lam_same=true"
+         "CHECK lam_same=false"))
+(say (string-append "CHECK lam2=" (lam-of "hello" (pad:read-lams src-c))))
+
+(define say0 *pl-say*)
+(define code-before (pad:q-code))
+
+(define (one tag src)
+  (let ((L (pad:v-lines src))
+        (n0 *ws-set-code-n*)
+        (e0 *ws-eval-n*))
+    (say (string-append "DIRTY " tag))
+    (pad:read-check! L)
+    (say (string-append "CHECK " tag "_status=" *read-status*))
+    (say (string-append "CHECK " tag "_set="
+                        (number->string (- *ws-set-code-n* n0))))
+    (say (string-append "CHECK " tag "_eval="
+                        (number->string (- *ws-eval-n* e0))))
+    (say (string-append "CHECK " tag "_say=" *pl-say*))
+    (say (string-append "CHECK " tag "_ids=" *read-dirty-ids*))
+    (say (string-append "CHECK " tag "_note="
+                        (if (has-note? (pad:v-src L)) "kept" "lost")))
+    0))
+
+(one "fresh" src-a)
+(say (if (string=? *pl-say* say0) "CHECK fresh_kept=same" "CHECK fresh_kept=changed"))
+(one "comment" src-b)
+(one "body" src-c)
+
+(set! *read-dirty-fn*
+  (lambda (reason) (if (string=? reason "general") "gap" "gap")))
+(one "gap" src-c)
+
+(say (if (string=? (pad:q-code) code-before) "CHECK root=same" "READ_DISAGREE"))
+(let ((rows (try (workspace :list) (catch (e) #f))))
+  (say (if (and (or (null? rows) (pair? rows))
+                (not (pad:read-has-name? rows "read")))
+           "CHECK child_gone=true"
+           "CHECK child_gone=false")))

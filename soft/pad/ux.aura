@@ -223,11 +223,13 @@
         (if (not *read-done*) (pad:read-load!) 0)
         (pad:read-check! (pad:ux-page))
         (if (string=? *read-status* "checked")
-            (begin
-              (set! *ux-say-a* -1)
-              (set! *ux-say-b* -1)
-              (pad:ux-toks (pad:ux-page))
-              (pad:ux-say-at))
+            (if (and (string? *read-report*) (> (string-length *read-report*) 0))
+                *pl-say*
+                (begin
+                  (set! *ux-say-a* -1)
+                  (set! *ux-say-b* -1)
+                  (pad:ux-toks (pad:ux-page))
+                  (pad:ux-say-at)))
             0))
       0))
 
@@ -267,6 +269,10 @@
              (begin
                (pad:ux-check!)
                (cond
+                 ((and (string=? *read-status* "checked")
+                       (string? *read-report*)
+                       (> (string-length *read-report*) 0))
+                  *pl-say*)
                  ((string=? *read-status* "checked") (pad:ux-say-at))
                  ((string=? *pl-say*
                             "aura did not check this file: it loads other code")
