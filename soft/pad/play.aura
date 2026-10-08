@@ -79,6 +79,8 @@
            (set! *pi-pending* pad:pi-test-pending))
     0)
 ;; The read stack stays off arrow keys. The first "KEY check" loads it.
+;; A tab sentence loads the rule file. A repair proposal loads the
+;; intend file. Arrows do not load either one.
 ;; This file's load list does not include the notebook or the query pad.
 (define *read-ready* #f)
 

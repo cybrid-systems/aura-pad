@@ -1,0 +1,113 @@
+;; Step 59. Scripted arrows do not load the rule file or the intend file.
+;; The first tab sentence loads the rule. A repair proposal loads intend.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/lc.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/who.aura"))
+(load (string-append *pad-home* "/soft/pad/who_pen.aura"))
+(load (string-append *pad-home* "/soft/pad/eng_who.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/blast.aura"))
+(load (string-append *pad-home* "/soft/pad/robot.aura"))
+(load (string-append *pad-home* "/soft/pad/time.aura"))
+(load (string-append *pad-home* "/soft/pad/world.aura"))
+(load (string-append *pad-home* "/soft/pad/play_in.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+(load (string-append *pad-home* "/soft/pad/hot.aura"))
+(load (string-append *pad-home* "/soft/pad/tx.aura"))
+
+(define *read-ready* #f)
+(define *read-mean* (list))
+(define *read-status* "none")
+(define *lz-fail* 0)
+
+(define *lz-rules*
+  (string-append
+    "(define (tab-size) 2)\n"
+    "(define (say-max) 120)\n"
+    "(define (indent n) (* n (tab-size)))\n"))
+
+(define *lz-hello* "(define (hello x) (+ x 1))\n")
+
+(define *lz-goal*
+  (list (list "hello 3 is 4" (lambda () (hello 3)) 4)))
+
+(define (lz:fixer ops err) (list))
+
+(define (lz:check tag ok)
+  (set! *lz-fail* (if ok *lz-fail* (+ *lz-fail* 1)))
+  (display "CHECK ")
+  (display tag)
+  (display "=")
+  (display (if ok "ok" "fail"))
+  (newline))
+
+(define (lz:bound-kr?)
+  (if (try pad:kr-cmd! (catch (e) #f)) #t #f))
+
+(define (lz:bound-fx?)
+  (if (try pad:fx-tx! (catch (e) #f)) #t #f))
+
+(define (lz:keys ks)
+  (if (null? ks)
+      0
+      (begin
+        (pad:ux-key! (car ks))
+        (lz:keys (cdr ks)))))
+
+(define (lz:run)
+  (pad:play-reset! *lz-hello*)
+  (pad:who-reset!)
+  (set! *ux-focus* "page")
+  (set! *ux-point* 0)
+  (lz:keys (list "IN 27 91 65" "IN 27 91 66" "IN 27 91 67" "IN 27 91 68"
+                 "KEY prev-line" "KEY next-line" "KEY left" "KEY right"
+                 "KEY h" "KEY j" "KEY k" "KEY l"))
+  (pad:ux-arrow! 1)
+  (pad:ux-arrow! -1)
+  (lz:check "arrows-kr" (not (lz:bound-kr?)))
+  (lz:check "arrows-fx" (not (lz:bound-fx?)))
+  (display "set_code=")
+  (display (number->string *ws-set-code-n*))
+  (newline)
+  (lz:check "set_code" (= *ws-set-code-n* 0))
+  (pad:play-reset! *lz-rules*)
+  (pad:who-reset!)
+  (set! *robot-undo* (list))
+  (set! *who-keep-codes* (list))
+  (lz:check "rules" (string=? (car (pad:who-check!)) "ok"))
+  (set! *ux-focus* "line")
+  (set! *ux-line* "tab 4")
+  (pad:say-run!)
+  (lz:check "tab-kr" (lz:bound-kr?))
+  (lz:check "tab-fx" (not (lz:bound-fx?)))
+  (lz:check "tab-value" (= (try (tab-size) (catch (e) -1)) 4))
+  (pad:play-reset! *lz-hello*)
+  (pad:who-reset!)
+  (set! *robot-undo* (list))
+  (lz:check "hello" (string=? (car (pad:who-check!)) "ok"))
+  (pad:tx-fix! *lz-goal* (list) lz:fixer)
+  (lz:check "fix-fx" (lz:bound-fx?))
+  (lz:check "fix-tag" (and (pair? *fx-last*) (string=? (car *fx-last*) "ALREADY"))))
+
+(lz:run)
+(if (= *lz-fail* 0)
+    (display "LAZY_RULE_UNIT_OK\n")
+    (begin
+      (display "LAZY_RULE_UNIT_FAIL ")
+      (display *lz-fail*)
+      (newline)))
