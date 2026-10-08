@@ -297,15 +297,184 @@
                 (pad:read-note! "READ eval-fail"))
               (pad:read-gather! c L n0 e0 code0 t0))))))
 
+;; Call-head scan. Flat pad:hl-tokens, nested again with paren kind "P".
+;; A comment or a string is not a call head. The pen word list is not this scan.
+;; The five names are refused at the top of a file and anywhere a define's
+;; init actually calls them, including inside begin, lambda, and let.
+(define (pad:read-tok-text t)
+  (car (cdr (cdr (cdr t)))))
+
+(define (pad:read-open? t)
+  (and (string=? (car t) "P") (string=? (pad:read-tok-text t) "(")))
+
+(define (pad:read-close? t)
+  (and (string=? (car t) "P") (string=? (pad:read-tok-text t) ")")))
+
+(define (pad:read-atom? f)
+  (and (pair? f) (string? (car f)) (string=? (car f) "a")))
+
+(define (pad:read-nest? f)
+  (and (pair? f) (string? (car f)) (string=? (car f) "n")))
+
+(define (pad:read-comment? f)
+  (and (pad:read-atom? f) (string=? (cadr f) "C")))
+
+(define (pad:read-atom-text f)
+  (if (pad:read-atom? f) (car (cdr (cdr f))) ""))
+
+(define (pad:read-skip-c xs)
+  (cond
+    ((null? xs) xs)
+    ((pad:read-comment? (car xs)) (pad:read-skip-c (cdr xs)))
+    (#t xs)))
+
+(define (pad:read-form toks)
+  (if (pad:read-open? (car toks))
+      (pad:read-nest (cdr toks) (list))
+      (cons (list "a" (car (car toks)) (pad:read-tok-text (car toks)))
+            (cdr toks))))
+
+(define (pad:read-nest toks acc)
+  (cond
+    ((null? toks) (cons (cons "n" (reverse acc)) (list)))
+    ((pad:read-close? (car toks))
+     (cons (cons "n" (reverse acc)) (cdr toks)))
+    (#t
+     (let ((got (pad:read-form toks)))
+       (pad:read-nest (cdr got) (cons (car got) acc))))))
+
+(define (pad:read-top toks acc)
+  (cond
+    ((null? toks) (cons "n" (reverse acc)))
+    ((pad:read-close? (car toks))
+     (pad:read-top (cdr toks) (cons (list "a" "P" ")") acc)))
+    (#t
+     (let ((got (pad:read-form toks)))
+       (pad:read-top (cdr got) (cons (car got) acc))))))
+
+(define (pad:read-head-in xs)
+  (cond
+    ((null? xs) "")
+    ((pad:read-comment? (car xs)) (pad:read-head-in (cdr xs)))
+    ((pad:read-atom? (car xs)) (pad:read-atom-text (car xs)))
+    (#t "")))
+
+(define (pad:read-head form)
+  (if (pad:read-nest? form) (pad:read-head-in (cdr form)) ""))
+
+(define (pad:read-after-head xs)
+  (let ((ys (pad:read-skip-c xs)))
+    (if (null? ys) ys (pad:read-skip-c (cdr ys)))))
+
+(define (pad:read-bad-head? s)
+  (or (string=? s "require")
+      (string=? s "load")
+      (string=? s "display")
+      (string=? s "write-file")
+      (string=? s "set-code")))
+
+(define (pad:read-let-head? s)
+  (or (string=? s "let") (string=? s "let*") (string=? s "letrec")))
+
+(define (pad:read-exprs-bad? xs)
+  (cond
+    ((null? xs) #f)
+    ((pad:read-expr-bad? (car xs)) #t)
+    (#t (pad:read-exprs-bad? (cdr xs)))))
+
+;; The first form is a name, a signature, or an arg list. It is not a call.
+(define (pad:read-tail-bad? xs)
+  (if (null? xs) #f (pad:read-exprs-bad? (cdr xs))))
+
+(define (pad:read-one-bind-bad? form)
+  (if (not (pad:read-nest? form))
+      #f
+      (pad:read-tail-bad? (pad:read-skip-c (cdr form)))))
+
+(define (pad:read-bind-list-bad? xs)
+  (cond
+    ((null? xs) #f)
+    ((pad:read-one-bind-bad? (car xs)) #t)
+    (#t (pad:read-bind-list-bad? (cdr xs)))))
+
+(define (pad:read-bindings-bad? form)
+  (if (pad:read-nest? form)
+      (pad:read-bind-list-bad? (cdr form))
+      #f))
+
+(define (pad:read-let-rest-bad? xs)
+  (if (null? xs)
+      #f
+      (if (pad:read-atom? (car xs))
+          (pad:read-let-binds-bad? (cdr xs))
+          (pad:read-let-binds-bad? xs))))
+
+(define (pad:read-let-binds-bad? xs)
+  (if (null? xs)
+      #f
+      (or (pad:read-bindings-bad? (car xs))
+          (pad:read-exprs-bad? (cdr xs)))))
+
+(define (pad:read-call-bad? form)
+  (pad:read-exprs-bad? (pad:read-skip-c (cdr form))))
+
+(define (pad:read-inside-bad? h form)
+  (let ((xs (pad:read-after-head (cdr form))))
+    (cond
+      ((string=? h "begin") (pad:read-exprs-bad? xs))
+      ((string=? h "lambda") (pad:read-tail-bad? xs))
+      ((string=? h "define") (pad:read-tail-bad? xs))
+      ((pad:read-let-head? h) (pad:read-let-rest-bad? xs))
+      (#t (pad:read-call-bad? form)))))
+
+(define (pad:read-expr-bad? form)
+  (cond
+    ((not (pad:read-nest? form)) #f)
+    (#t
+     (let ((h (pad:read-head form)))
+       (if (pad:read-bad-head? h)
+           #t
+           (pad:read-inside-bad? h form))))))
+
+(define (pad:read-top-ok? form)
+  (cond
+    ((not (pad:read-nest? form)) #t)
+    (#t
+     (let ((h (pad:read-head form)))
+       (or (string=? h "define") (string=? h "export"))))))
+
+(define (pad:read-forms-bad? xs)
+  (cond
+    ((null? xs) #f)
+    ((not (pad:read-top-ok? (car xs))) #t)
+    ((and (pad:read-nest? (car xs))
+          (string=? (pad:read-head (car xs)) "define")
+          (pad:read-tail-bad? (pad:read-after-head (cdr (car xs)))))
+     #t)
+    (#t (pad:read-forms-bad? (cdr xs)))))
+
+(define (pad:read-guard-src? src)
+  (pad:read-forms-bad? (cdr (pad:read-top (pad:hl-tokens src) (list)))))
+
+(define (pad:read-guard? L)
+  (pad:read-guard-src? (pad:v-src L)))
+
+(define (pad:read-refuse!)
+  (set! *pl-say* "aura did not check this file: it loads other code")
+  (pad:read-note! *pl-say*)
+  0)
+
 (define (pad:read-check! L)
-  (let ((code0 (pad:q-code))
-        (t0 (current-time-ms))
-        (n0 *ws-set-code-n*)
-        (e0 *ws-eval-n*))
-    (let ((c (try (workspace :create "read") (catch (e) #f))))
-      (if (not (pad:read-id? c))
-          (pad:read-note! "READ no-world")
-          (pad:read-switched! c L n0 e0 code0 t0)))))
+  (if (pad:read-guard? L)
+      (pad:read-refuse!)
+      (let ((code0 (pad:q-code))
+            (t0 (current-time-ms))
+            (n0 *ws-set-code-n*)
+            (e0 *ws-eval-n*))
+        (let ((c (try (workspace :create "read") (catch (e) #f))))
+          (if (not (pad:read-id? c))
+              (pad:read-note! "READ no-world")
+              (pad:read-switched! c L n0 e0 code0 t0))))))
 
 (pad:read-show! "READ loaded")
 (set! *read-ready* #t)

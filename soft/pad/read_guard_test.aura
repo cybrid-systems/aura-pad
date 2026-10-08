@@ -1,0 +1,80 @@
+;; Step 11. Unsafe forms never reach set-code.
+;; The lib count is printed. It is not compared to a fixed total.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+(define *pl-say* "")
+(define *read-ready* #f)
+(define *read-frame* #f)
+(define *pad-def-lookup* #f)
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/read.aura"))
+(pad:read-load!)
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(set! *pad-def-lookup* pad:define-lookup)
+(if (not (eq? string-join *read-join*))
+    (set! string-join *read-join*)
+    0)
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define *guard-say* "aura did not check this file: it loads other code")
+
+(say (if (pad:read-guard-src? "(define (display x) x)")
+         "GUARD fn-name=bad" "GUARD fn-name=ok"))
+(say (if (pad:read-guard-src? "(define x (let ((display 1)) display))")
+         "GUARD bind-name=bad" "GUARD bind-name=ok"))
+(say (if (pad:read-guard-src? "(define x (lambda (require) require))")
+         "GUARD arg-name=bad" "GUARD arg-name=ok"))
+(say (if (pad:read-guard-src?
+          ";; require\n(define note \"display\")\n(define tcp-connect tcp-connect)\n")
+         "GUARD text=bad" "GUARD text=ok"))
+
+(define (rg:bad label src)
+  (let ((n0 *ws-set-code-n*))
+    (set! *pl-say* "before")
+    (pad:read-check! (pad:v-lines src))
+    (say (string-append "BAD " label
+                        " set=" (number->string (- *ws-set-code-n* n0))
+                        " status=" *read-status*
+                        " say=" *pl-say*))))
+
+(rg:bad "top-require" "(require \"std/string\")\n")
+(rg:bad "top-display" "(display \"hi\")\n")
+(rg:bad "def-display" "(define x (display \"hi\"))\n")
+(rg:bad "def-require" "(define x (require \"std/string\"))\n")
+(rg:bad "def-load" "(define x (load \"a\"))\n")
+(rg:bad "def-write" "(define x (write-file \"a\" \"b\"))\n")
+(rg:bad "def-set" "(define x (set-code \"(define y 1)\"))\n")
+(rg:bad "def-begin" "(define x (begin (display \"hi\") 1))\n")
+(rg:bad "def-lambda" "(define x ((lambda () (require \"std/string\"))))\n")
+(rg:bad "let-require" "(define x (let ((a 1)) (require \"std/string\")))\n")
+(rg:bad "let-load" "(define x (let ((a 1)) (load \"a\")))\n")
+(rg:bad "let-display" "(define x (let ((a 1)) (display \"hi\")))\n")
+(rg:bad "let-write" "(define x (let ((a 1)) (write-file \"a\" \"b\")))\n")
+(rg:bad "let-set" "(define x (let ((a 1)) (set-code \"(define y 1)\")))\n")
+(rg:bad "let-init" "(define x (let ((a (display 1))) a))\n")
+
+(define *guard-safe*
+  (string-append
+    ";; require display load write-file set-code\n"
+    "(define (hello x) (+ x 1))\n"
+    "(define tcp-connect tcp-connect)\n"
+    "(define note \"require display load write-file set-code\")\n"
+    "(export hello)\n"))
+
+(define *guard-n0* *ws-set-code-n*)
+(define *guard-code0* (pad:q-code))
+(set! *pl-say* "before")
+(pad:read-check! (pad:v-lines *guard-safe*))
+(say (string-append "SAFE set=" (number->string (- *ws-set-code-n* *guard-n0*))))
+(say (string-append "SAFE status=" *read-status*))
+(say (if (string=? (pad:q-code) *guard-code0*) "SAFE root=same" "SAFE root=changed"))
+(say (if (string=? *pl-say* *guard-say*) "SAFE say=refused" "SAFE say=clear"))
+
+(say "GUARD_UNIT_OK")

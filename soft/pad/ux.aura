@@ -200,9 +200,12 @@
             ((string=? intent "check")
              (begin
                (pad:ux-check!)
-               (if (string=? *read-status* "checked")
-                   (pad:ux-say-at)
-                   (set! *pl-say* "aura could not read this page, keep typing"))
+               (cond
+                 ((string=? *read-status* "checked") (pad:ux-say-at))
+                 ((string=? *pl-say*
+                            "aura did not check this file: it loads other code")
+                  *pl-say*)
+                 (#t (set! *pl-say* "aura could not read this page, keep typing")))
                *pl-say*))
             ((string=? intent "save") (pad:ux-file-save!))
             ((string=? intent "open") (pad:ux-file-open! (cadr hit)))
