@@ -1,0 +1,81 @@
+;; Step 52. The card keeps one story sentence, and undo puts it back.
+;; Drop writes nothing. Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/lc.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/card.aura"))
+(load (string-append *pad-home* "/soft/pad/who.aura"))
+(load (string-append *pad-home* "/soft/pad/play_in.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+(load (string-append *pad-home* "/soft/pad/tx.aura"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define page
+  (string-append "the cat sat\n"
+    (string-append "the cat ran\n" "the cat slept")))
+
+(define kept
+  (string-append "the cat sat\n"
+    (string-append "the cat ran\n" "the cat purred")))
+
+(define (src)
+  (pad:v-src *ux-lines*))
+
+(define (same? text)
+  (if (string=? (src) text) "same" "moved"))
+
+(pad:tx-story-ready!)
+(set! *ux-lines* (pad:v-lines page))
+(set! *pl-st* (pad:es-at *ux-lines* 0 0))
+(pad:who-reset!)
+(set! *tx-pair* #f)
+(set! *tx-card-ops*
+  (list (list "s3" "(lambda () \"the cat purred\")")))
+
+(say (string-append "CHECK before-bytes=" (same? page)))
+(say (string-append "CHECK before-who=" (pad:sp-authors)))
+
+(set! *tx-better* #f)
+(set! *tx-blast-ok* #f)
+(set! *tx-card* 1)
+(pad:tx-card-act!)
+(say (string-append "CHECK drop-say=" *pl-say*))
+(say (string-append "CHECK drop-bytes=" (same? page)))
+(say (string-append "CHECK drop-who=" (pad:sp-authors)))
+
+(set! *tx-better* #t)
+(set! *tx-blast-ok* #t)
+(set! *tx-card* 0)
+(pad:tx-card-act!)
+(say (string-append "CHECK keep-say=" *pl-say*))
+(say (string-append "CHECK keep-bytes=" (same? kept)))
+(say (string-append "CHECK keep-who=" (pad:sp-authors)))
+(say (string-append "CHECK shown="
+      (if (or (string-contains? (src) "(define")
+              (string-contains? (src) "lambda"))
+          "code"
+          "sentences")))
+
+(set! *tx-card* 2)
+(pad:tx-card-act!)
+(say (string-append "CHECK undo-say=" *pl-say*))
+(say (string-append "CHECK undo-bytes=" (same? page)))
+(say (string-append "CHECK undo-who=" (pad:sp-authors)))

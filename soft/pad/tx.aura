@@ -569,7 +569,11 @@
       (begin
         (pad:tx-show! "UNDO none=1")
         "nothing to undo")
-      (let ((rec (car *tx-undos*)))
+      (if (and (pair? (car *tx-undos*))
+               (string? (car (car *tx-undos*)))
+               (string=? (car (car *tx-undos*)) "story"))
+          (pad:tx-story-undo!)
+          (let ((rec (car *tx-undos*)))
         (set! *tx-undos* (cdr *tx-undos*))
         (let ((snap (car rec)))
           (let ((text (cadr rec)))
@@ -605,7 +609,7 @@
                                 "undid one keep")
                               (begin
                                 (pad:tx-show! "TX_UNDO_DISAGREE")
-                                "TX_UNDO_DISAGREE")))))))))))))
+                                "TX_UNDO_DISAGREE"))))))))))))))
 
 (define (pad:tx-apply! name)
   (pad:tx-show! (string-append "APPLY live=" (pad:tx-live)))
@@ -876,14 +880,16 @@
         (pad:proj-splice! src (car (car ops)) (cadr (car ops))))))
 
 (define (pad:tx-card-keep!)
-  (let ((out (pad:tx-card-splice! *tx-card-ops* (pad:tx-page))))
-    (pad:tx-install! out)
-    (if (try *pl-st* (catch (e) #f))
-        (set! *pl-st* (pad:es-at (pad:v-lines out) 0 0))
-        0)
-    (pad:tx-show! "CARD keep=1")
-    (set! *pl-say* "kept")
-    "go"))
+  (if (pad:tx-story-page?)
+      (pad:tx-story-kept!)
+      (let ((out (pad:tx-card-splice! *tx-card-ops* (pad:tx-page))))
+        (pad:tx-install! out)
+        (if (try *pl-st* (catch (e) #f))
+            (set! *pl-st* (pad:es-at (pad:v-lines out) 0 0))
+            0)
+        (pad:tx-show! "CARD keep=1")
+        (set! *pl-say* "kept")
+        "go")))
 
 ;; Three choices. The mark sits on one of them. Choosing closes the card.
 ;; Keep writes the projection only when the score was strictly higher
@@ -1384,3 +1390,60 @@
             (pad:tx-card-keep!))
           (set! *pl-say* "that one is not better")))
     "go"))
+
+;; A story KEEP writes one sentence. Undo restores that record.
+;; A sexp page is decided here, before any workspace switch.
+(define (pad:tx-digits? s i n)
+  (or (>= i n)
+      (and (let ((c (string-ref s i)))
+             (and (>= c 48) (<= c 57)))
+           (pad:tx-digits? s (+ i 1) n))))
+
+(define (pad:tx-sname? name)
+  (and (string? name)
+       (> (string-length name) 1)
+       (= (string-ref name 0) 115)
+       (pad:tx-digits? name 1 (string-length name))))
+
+(define (pad:tx-has-paren? s i n)
+  (and (string? s)
+       (< i n)
+       (or (= (string-ref s i) 40)
+           (pad:tx-has-paren? s (+ i 1) n))))
+
+(define (pad:tx-story-ish?)
+  (if (not (pair? (try *ux-lines* (catch (e) #f))))
+      #f
+      (if (not (pair? (try *tx-card-ops* (catch (e) #f))))
+          #f
+          (if (not (pair? (car *tx-card-ops*)))
+              #f
+              (if (pad:tx-has-paren? (pad:tx-page) 0 (string-length (pad:tx-page)))
+                  #f
+                  (pad:tx-sname? (car (car *tx-card-ops*))))))))
+
+(define (pad:tx-story-undo!)
+  (if (pad:tx-story-ready!)
+      (pad:sp-undo!)
+      "nothing to undo"))
+
+(define (pad:tx-story-page?)
+  (if (not (pad:tx-story-ish?))
+      #f
+      (let ((lines *ux-lines*))
+        (let ((undos *tx-undos*))
+          (let ((ops *tx-card-ops*))
+            (if (not (pad:tx-story-ready!))
+                #f
+                (begin
+                  (set! *ux-lines* lines)
+                  (set! *tx-undos* undos)
+                  (set! *tx-card-ops* ops)
+                  (and (pad:sp-page? lines)
+                       (pad:sp-ops? ops)))))))))
+
+(define (pad:tx-story-kept!)
+  (pad:sp-keep! *tx-card-ops*)
+  (pad:tx-show! "CARD keep=1")
+  (set! *pl-say* "kept")
+  "go")

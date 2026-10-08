@@ -153,3 +153,156 @@
 
 (define (pad:sp-gate-say! proj lam)
   (pad:sp-say! proj (pad:tx-gate "kid" "s1" lam #t 0)))
+
+;; s3 is the third sentence. The screen keeps the sentence, not the lambda.
+(define (pad:sp-digits? s i n)
+  (or (>= i n)
+      (and (let ((c (string-ref s i)))
+             (and (>= c 48) (<= c 57)))
+           (pad:sp-digits? s (+ i 1) n))))
+
+(define (pad:sp-sname? name)
+  (and (string? name)
+       (> (string-length name) 1)
+       (= (string-ref name 0) 115)
+       (pad:sp-digits? name 1 (string-length name))))
+
+(define (pad:sp-index name)
+  (if (pad:sp-sname? name)
+      (let ((n (string->number (substring name 1 (string-length name)))))
+        (if (number? n) (- n 1) -1))
+      -1))
+
+(define (pad:sp-ops? ops)
+  (if (null? ops)
+      #t
+      (and (pair? (car ops))
+           (pad:sp-sname? (car (car ops)))
+           (pad:sp-ops? (cdr ops)))))
+
+(define (pad:sp-texts lines)
+  (if (null? lines)
+      (list)
+      (cons (pad:utf-line-str (car lines)) (pad:sp-texts (cdr lines)))))
+
+(define (pad:sp-page? lines)
+  (and (pair? lines) (pad:sp-sentences? (pad:sp-texts lines))))
+
+(define (pad:sp-qat s i n)
+  (if (>= i n)
+      -1
+      (if (= (string-ref s i) 34)
+          i
+          (pad:sp-qat s (+ i 1) n))))
+
+(define (pad:sp-qend s i)
+  (if (< i 0)
+      -1
+      (if (= (string-ref s i) 34)
+          i
+          (pad:sp-qend s (- i 1)))))
+
+(define (pad:sp-ch c)
+  (list->string (list c)))
+
+(define (pad:sp-unesc s i n)
+  (if (>= i n)
+      ""
+      (if (and (= (string-ref s i) 92) (< (+ i 1) n))
+          (string-append (pad:sp-ch (string-ref s (+ i 1)))
+                         (pad:sp-unesc s (+ i 2) n))
+          (string-append (pad:sp-ch (string-ref s i))
+                         (pad:sp-unesc s (+ i 1) n)))))
+
+(define (pad:sp-sentence-of lam)
+  (if (not (string? lam))
+      ""
+      (let ((n (string-length lam)))
+        (let ((a (pad:sp-qat lam 0 n)))
+          (let ((b (pad:sp-qend lam (- n 1))))
+            (if (or (< a 0) (<= b a))
+                ""
+                (pad:sp-unesc lam (+ a 1) b)))))))
+
+(define (pad:sp-set lines i text)
+  (if (null? lines)
+      (list)
+      (if (= i 0)
+          (cons (pad:v-codes text) (cdr lines))
+          (cons (car lines) (pad:sp-set (cdr lines) (- i 1) text)))))
+
+(define (pad:sp-apply lines ops)
+  (if (null? ops)
+      lines
+      (let ((i (pad:sp-index (car (car ops)))))
+        (if (< i 0)
+            (pad:sp-apply lines (cdr ops))
+            (pad:sp-apply (pad:sp-set lines i (pad:sp-sentence-of (cadr (car ops))))
+                          (cdr ops))))))
+
+(define (pad:sp-mark ss i st)
+  (if (null? ss)
+      (list)
+      (if (= i 0)
+          (cons st (cdr ss))
+          (cons (car ss) (pad:sp-mark (cdr ss) (- i 1) st)))))
+
+(define (pad:sp-mark-ops ss ops)
+  (if (null? ops)
+      ss
+      (let ((i (pad:sp-index (car (car ops)))))
+        (if (< i 0)
+            (pad:sp-mark-ops ss (cdr ops))
+            (pad:sp-mark-ops (pad:sp-mark ss i (list "helper" "closer" 1))
+                             (cdr ops))))))
+
+(define (pad:sp-who-bit st)
+  (if (pair? st) (car st) "nobody"))
+
+(define (pad:sp-who-join ss)
+  (if (null? ss)
+      ""
+      (string-append (pad:sp-who-bit (car ss))
+        (if (null? (cdr ss))
+            ""
+            (string-append "." (pad:sp-who-join (cdr ss)))))))
+
+(define (pad:sp-authors)
+  (pad:sp-who-join (try *who-S* (catch (e) (list)))))
+
+(define (pad:sp-keep! ops)
+  (let ((lines (try *ux-lines* (catch (e) (list)))))
+    (let ((stamps (try *who-S* (catch (e) (list)))))
+      (let ((wl (try *who-L* (catch (e) (list)))))
+        (set! *tx-undos* (cons (list "story" lines stamps wl) *tx-undos*))
+        (let ((nl (pad:sp-apply lines ops)))
+          (set! *ux-lines* nl)
+          (if (try *pl-st* (catch (e) #f))
+              (set! *pl-st* (pad:es-at nl 0 0))
+              0)
+          (set! *who-L* nl)
+          (set! *who-S* (pad:sp-mark-ops stamps ops))
+          (if (string? (try *read-proj* (catch (e) #f)))
+              (set! *read-proj* (pad:v-src nl))
+              0)
+          nl)))))
+
+(define (pad:sp-undo!)
+  (if (or (null? *tx-undos*)
+          (not (pair? (car *tx-undos*)))
+          (not (string? (car (car *tx-undos*))))
+          (not (string=? (car (car *tx-undos*)) "story")))
+      "nothing to undo"
+      (let ((rec (car *tx-undos*)))
+        (set! *tx-undos* (cdr *tx-undos*))
+        (let ((lines (cadr rec)))
+          (set! *ux-lines* lines)
+          (set! *who-S* (caddr rec))
+          (set! *who-L* (car (cdr (cdr (cdr rec)))))
+          (if (try *pl-st* (catch (e) #f))
+              (set! *pl-st* (pad:es-at lines 0 0))
+              0)
+          (if (string? (try *read-proj* (catch (e) #f)))
+              (set! *read-proj* (pad:v-src lines))
+              0)
+          "undid one keep"))))
