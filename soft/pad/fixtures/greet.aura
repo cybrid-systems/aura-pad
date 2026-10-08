@@ -1,0 +1,6 @@
+;; The rule — keep this note.
+(define (greet name)
+  (string-append "hi " name))
+
+(define (main)
+  (greet "ada"))

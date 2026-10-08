@@ -1,0 +1,79 @@
+;; Step 23. A real module round-trips as the projection.
+;; A clean save writes the opened bytes. A comment edit stays in the
+;; page, and query:code is not that text. Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+(define *pl-say* "")
+(define *read-ready* #f)
+(define *read-frame* #f)
+(define *pad-def-lookup* #f)
+
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/lc.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/file.aura"))
+(load (string-append *pad-home* "/soft/pad/read.aura"))
+(pad:read-load!)
+(if (not (eq? string-join *read-join*))
+    (set! string-join *read-join*)
+    0)
+(set! *pad-def-lookup* pad:define-lookup)
+
+(define (pad:em-other-dirty) "")
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define *m19-dash* (list->string (list 226 128 148)))
+
+(define (m19-has? src needle)
+  (and (string? src) (>= (string-index src needle 0) 0)))
+
+;; A byte string is not a scalar line. 8212 is the em dash code point.
+(define (m19-codes-at s i n)
+  (if (>= i n)
+      (list)
+      (cons (string-ref s i) (m19-codes-at s (+ i 1) n))))
+
+(define (m19-codes s)
+  (m19-codes-at s 0 (string-length s)))
+
+(define (m19-line)
+  (append (m19-codes ";; The rule ")
+          (cons 8212 (m19-codes " keep the edited note."))))
+
+(define path (getenv "PAD_M19_FILE"))
+(define before (read-file path))
+(define opened (pad:pf-open! path))
+(say (string-append "CHECK open=" opened))
+(say (if *pf-ro* "CHECK ro=true" "CHECK ro=false"))
+(say (if (m19-has? *pf-saved* *m19-dash*) "CHECK dash=bytes" "CHECK dash=folded"))
+
+(pad:read-check! (pad:es-L *pl-st*))
+(say (string-append "CHECK first=" *read-status*))
+(say (string-append "CHECK save=" (pad:pf-save!)))
+(define after (read-file path))
+(say (if (and (string? before) (string? after) (string=? before after))
+         "CHECK clean=same"
+         "CHECK clean=changed"))
+
+(set! *pl-st*
+      (pad:es-at (cons (m19-line) (cdr (pad:es-L *pl-st*))) 0 0))
+(pad:read-check! (pad:es-L *pl-st*))
+(say (string-append "CHECK status=" *read-status*))
+(say (string-append "CHECK say=" *pl-say*))
+(say (if (and (m19-has? (pad:play-src) *m19-dash*)
+              (m19-has? (pad:play-src) "edited note")
+              (m19-has? (pad:play-src) "(define (greet name)"))
+         "CHECK proj=kept"
+         "CHECK proj=lost"))
+(say (string-append "CHECK dirty-save=" (pad:pf-save!)))
+(say "M19_UNIT_OK")
