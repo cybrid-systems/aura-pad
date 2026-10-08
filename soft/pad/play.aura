@@ -97,6 +97,8 @@
         ;; "WIRE ..." (87 = W) is C's wire offer. File keys (ctrl-x /
         ;; ctrl-q / ctrl-s, file mode only) go to file.aura, unless a
         ;; prompt is open (search uses ctrl-s for the next match).
+        ;; PAD_SENTENCE=1 takes the key first: ctrl-x is not a prefix.
+        ;; The flag off leaves that prefix on pad:pf-line!.
         (if (string=? (cond
                         ((and (> (string-length line) 3)
                               (= (string-ref line 0) 87)
@@ -106,11 +108,13 @@
                          (pad:vw-win! line))
                         ((and (> (string-length line) 5) (= (string-ref line 0) 87))
                          (pad:w2-line! line))
+                        ((string=? line "KEY check")
+                         (pad:play-check!))
+                        ((pad:ux-on?)
+                         (pad:ux-key! line))
                         ((and *pf-on* (string=? *vi-op* "")
                               (or *pf-cx* *pf-quit* (member line *pf-keys*)))
                          (pad:pf-line! line))
-                        ((string=? line "KEY check")
-                         (pad:play-check!))
                         (#t (pad:play-step! line)))
                       "quit")
             0

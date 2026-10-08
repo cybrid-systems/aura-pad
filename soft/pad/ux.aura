@@ -1,12 +1,14 @@
-;; Sentence line. The flag chooses the frame. Typing the line is later.
+;; Sentence line. The flag chooses the frame and, when it is on, the keys.
 ;; Soft reserved: never bind quote.
 
 (define (pad:ux-on?)
   (let ((v (getenv "PAD_SENTENCE")))
     (and (string? v) (string=? v "1"))))
 
-;; Words typed on the sentence line. Empty until a later step reads keys.
+;; Words typed on the sentence line. Page focus is where letters land
+;; until Tab. "line" is the sentence. Arrows move the page either way.
 (define *ux-line* "")
+(define *ux-focus* "page")
 
 (define (pad:ux-ends? name suf)
   (let ((n (string-length name))
@@ -163,3 +165,158 @@
             (begin
               (set! *pl-say* "aura cannot change this page yet")
               *pl-say*)))))
+
+(define (pad:ux-legend!)
+  (set! *view-legend* (string-append "> " *ux-line*))
+  0)
+
+(define (pad:ux-draw!)
+  (pad:ux-legend!)
+  (pad:play-emit!)
+  "go")
+
+;; A page edit after a check expires the cache. Arrows do not.
+;; *read-ready* is false until read.aura loads, so this does not
+;; touch *read-status* on a movement or a first draft.
+(define (pad:ux-note-edit!)
+  (if *read-ready*
+      (if (or (string=? *read-status* "checked")
+              (string=? *read-status* "stale"))
+          (begin
+            (set! *read-status* "stale")
+            (set! *pl-say* "check again to ask aura"))
+          0)
+      0))
+
+;; Page text goes through pad:play-cmd!. The 32-126 gate stays there.
+(define (pad:ux-edit! cmd)
+  (let ((say *pl-say*)
+        (r (pad:play-cmd! cmd)))
+    (set! *ux-point* (pad:play-point))
+    (if (and (string? r) (string=? r "ok"))
+        (pad:ux-note-edit!)
+        (if (not *read-ready*) (set! *pl-say* say) 0))
+    (pad:ux-draw!)
+    (if (and (string? r) (string=? r "quit")) "quit" "go")))
+
+(define (pad:ux-move! cmd)
+  (let ((say *pl-say*)
+        (r (pad:play-cmd! cmd)))
+    (set! *ux-point* (pad:play-point))
+    (if *read-ready*
+        (if (string=? *read-status* "checked") (pad:ux-say-at) 0)
+        (if (and (string? r) (string=? r "ok")) 0 (set! *pl-say* say)))
+    (pad:ux-draw!)
+    "go"))
+
+(define (pad:ux-add! ch)
+  (set! *ux-line* (string-append *ux-line* (list->string (list ch))))
+  (pad:ux-draw!))
+
+(define (pad:ux-tab!)
+  (if (string=? *ux-focus* "page")
+      (set! *ux-focus* "line")
+      (set! *ux-focus* "page"))
+  (pad:ux-draw!))
+
+;; Page: Esc does nothing to SAY. Line: clear a draft, or leave the line.
+(define (pad:ux-esc!)
+  (if (string=? *ux-focus* "line")
+      (if (string=? *ux-line* "")
+          (set! *ux-focus* "page")
+          (set! *ux-line* ""))
+      0)
+  (pad:ux-draw!))
+
+(define (pad:ux-enter!)
+  (if (string=? *ux-focus* "line")
+      (begin
+        (pad:say-run!)
+        (pad:ux-draw!))
+      (pad:ux-edit! "enter")))
+
+(define (pad:ux-back!)
+  (if (string=? *ux-focus* "line")
+      (let ((n (string-length *ux-line*)))
+        (if (> n 0)
+            (set! *ux-line* (substring *ux-line* 0 (- n 1)))
+            0)
+        (pad:ux-draw!))
+      (pad:ux-edit! "back")))
+
+;; ctrl-x is not a prefix here. SAY stays. *pf-cx* stays clear.
+(define (pad:ux-ignore!)
+  (set! *pf-cx* #f)
+  (pad:ux-draw!))
+
+(define (pad:ux-one! cmd)
+  (cond
+    ((number? cmd)
+     (if (and (>= cmd 32) (<= cmd 126))
+         (if (string=? *ux-focus* "line")
+             (pad:ux-add! cmd)
+             (pad:ux-edit! cmd))
+         (pad:ux-ignore!)))
+    ((string=? cmd "enter") (pad:ux-enter!))
+    ((string=? cmd "back") (pad:ux-back!))
+    ((or (string=? cmd "left") (string=? cmd "right")
+         (string=? cmd "prev-line") (string=? cmd "next-line")
+         (string=? cmd "home") (string=? cmd "end"))
+     (pad:ux-move! cmd))
+    (#t (pad:ux-ignore!))))
+
+;; One read()'s bytes. A lone 27 is Esc. An arrow is the whole
+;; "IN 27 91 N" line, decoded by pad:key-step. Byte 9 never inserts.
+(define (pad:ux-feed! bs esc)
+  (if (null? bs)
+      (begin (set! *pl-esc* esc) "go")
+      (pad:ux-take! (car bs) (cdr bs) esc)))
+
+(define (pad:ux-take! b rest esc)
+  (if (and (null? esc) (or (= b 9) (= b 26)))
+      (begin
+        (if (= b 9)
+            (pad:ux-tab!)
+            (begin
+              (set! *pl-say* "aura cannot change this page yet")
+              (pad:ux-draw!)))
+        (if (null? rest) "go" (pad:ux-feed! rest (list))))
+      (let ((step (pad:key-step esc b)))
+        (let ((cmd (car step)))
+          (if (and (string? cmd) (string=? cmd "pending"))
+              (pad:ux-feed! rest (cadr step))
+              (begin
+                (set! *pl-esc* (list))
+                (let ((r (pad:ux-one! cmd)))
+                  (if (or (string=? r "quit") (null? rest))
+                      r
+                      (pad:ux-feed! rest (list))))))))))
+
+;; Scripted hjkl move the page. They are not letters on the sentence.
+(define (pad:ux-word! w)
+  (cond
+    ((string=? w "h") (pad:ux-move! "left"))
+    ((string=? w "j") (pad:ux-move! "next-line"))
+    ((string=? w "k") (pad:ux-move! "prev-line"))
+    ((string=? w "l") (pad:ux-move! "right"))
+    ((or (string=? w "left") (string=? w "right")
+         (string=? w "home") (string=? w "end")
+         (string=? w "prev-line") (string=? w "next-line"))
+     (pad:ux-move! w))
+    ((string=? w "enter") (pad:ux-enter!))
+    ((string=? w "back") (pad:ux-back!))
+    (#t (pad:play-step! (string-append "KEY " w)))))
+
+(define (pad:ux-key! line)
+  (cond
+    ((string=? line "QUIT") "quit")
+    ((and (string-prefix? line "KEY ") (> (string-length line) 4))
+     (pad:ux-word! (substring line 4 (string-length line))))
+    ((string-prefix? line "IN ")
+     (let ((bs (pad:pi-parse line)))
+       (if (not bs)
+           (begin (pad:play-reject! "unknown") (pad:ux-draw!))
+           (if (and (null? *pl-esc*) (null? (cdr bs)) (= (car bs) 27))
+               (pad:ux-esc!)
+               (pad:ux-feed! bs *pl-esc*)))))
+    (#t (pad:play-step! line))))
