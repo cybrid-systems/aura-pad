@@ -1,0 +1,84 @@
+;; Step 25. A file rebind stamps helper, then kid.
+;; The stand-in paths fail closed and leave the page alone.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+(define *fp-mode*
+  (let ((v (getenv "PAD_FP_MODE")))
+    (if (string? v) v "ok")))
+(define *pl-say* "")
+(define *read-ready* #f)
+(define *read-frame* #f)
+(define *pad-def-lookup* #f)
+
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/read.aura"))
+(pad:read-load!)
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(set! *pad-def-lookup* pad:define-lookup)
+(if (not (eq? string-join *read-join*))
+    (set! string-join *read-join*)
+    0)
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define src-a "(define (hello x) (+ x 1))\n(define (main) (hello 3))")
+(define src-c "(define (hello x) (+ x 2))\n(define (main) (hello 3))")
+(define src-d "(define (hello x) (+ x 3))\n(define (main) (hello 3))")
+(define src-e "(define (hello x) (+ x 4))\n(define (main) (hello 3))")
+
+(define (page-of src)
+  (pad:v-src (pad:v-lines src)))
+
+(define (one tag src)
+  (let ((L (pad:v-lines src))
+        (n0 *ws-set-code-n*)
+        (say0 *pl-say*)
+        (proj0 *read-proj*))
+    (let ((before (pad:v-src L)))
+      (pad:read-check! L)
+      (say (string-append "CHECK " tag "_status=" *read-status*))
+      (say (string-append "CHECK " tag "_set="
+                          (number->string (- *ws-set-code-n* n0))))
+      (say (string-append "CHECK " tag "_say=" *pl-say*))
+      (say (string-append "CHECK " tag "_page="
+                          (if (string=? (pad:v-src L) before) "same" "changed")))
+      (say (string-append "CHECK " tag "_proj="
+                          (if (string=? *read-proj* proj0) "kept" "moved")))
+      (say (string-append "CHECK " tag "_voice="
+                          (if (string=? *pl-say* say0) "same" "new")))
+      0)))
+
+(define code0 (pad:q-code))
+
+(define (fp-soft)
+  (one "fresh" src-a)
+  (one "gate" src-c)
+  (say (if (string=? (pad:q-code) code0) "CHECK root=same" "READ_DISAGREE"))
+  (say "FP_UNIT_OK"))
+
+(define (fp-ok)
+  (one "fresh" src-a)
+  (one "body" src-c)
+  (say (if (string=? *read-proj* (page-of src-c))
+           "CHECK body_proj=src"
+           "CHECK body_proj=lost"))
+  (set! *read-rebind-fn* (lambda (name code) #f))
+  (one "miss" src-d)
+  (set! *read-rebind-fn* #f)
+  (set! *read-fp-fn* (lambda (who) #f))
+  (one "gap" src-e)
+  (say (if (string=? *read-proj* (page-of src-c))
+           "CHECK kept_proj=src"
+           "CHECK kept_proj=lost"))
+  (say (if (string=? (pad:q-code) code0) "CHECK root=same" "READ_DISAGREE"))
+  (say "FP_UNIT_OK"))
+
+(if (string=? *fp-mode* "soft")
+    (fp-soft)
+    (fp-ok))

@@ -39,6 +39,12 @@
 ;; Slot so a test can stand in an unbound query:dirty-nodes.
 (define *read-dirty-fn*
   (lambda (reason) (query:dirty-nodes reason)))
+;; eng_who.aura is loaded on the first body rebind, not at startup.
+;; A test may install a stand-in before that load. #f means use pad:ew-set!.
+(define *read-ew-loaded* #f)
+(define *read-fp-fn* #f)
+;; #f means pad:m-rebind!. A stand-in can return non-success.
+(define *read-rebind-fn* #f)
 
 (define (pad:read-bool b)
   (if b "true" "false"))
@@ -333,14 +339,26 @@
                 (pad:read-back! c n0 e0 #t)
                 (pad:read-note! "READ eval-fail"))
               (let ((box (pad:read-ask! plan)))
-                (if (and (pair? box) (string? (car box))
-                         (string=? (car box) "gap"))
-                    (begin
-                      (pad:read-back! c n0 e0 #t)
-                      (pad:read-note! "GAPS query:dirty-nodes"))
-                    (begin
-                      (pad:read-gather! c L n0 e0 code0 t0)
-                      (pad:read-publish! box (pad:v-src L))))))))))
+                (cond
+                  ((and (pair? box) (string? (car box))
+                        (string=? (car box) "gap"))
+                   (begin
+                     (pad:read-back! c n0 e0 #t)
+                     (pad:read-note! "GAPS query:dirty-nodes")))
+                  ((and (pair? box) (string? (car box))
+                        (string=? (car box) "fp"))
+                   (begin
+                     (pad:read-back! c n0 e0 #t)
+                     (pad:read-note! "GAPS mutate:set-agent-fingerprint")))
+                  ((and (pair? box) (string? (car box))
+                        (string=? (car box) "rebind"))
+                   (begin
+                     (pad:read-back! c n0 e0 #t)
+                     (pad:read-note! "READ rebind-fail")))
+                  (#t
+                   (begin
+                     (pad:read-gather! c L n0 e0 code0 t0)
+                     (pad:read-publish! box (pad:v-src L)))))))))))
 
 ;; Call-head scan. Flat pad:hl-tokens, nested again with paren kind "P".
 ;; A comment or a string is not a call head. The pen word list is not this scan.
@@ -679,16 +697,19 @@
       (cons (pad:read-save-one (car pairs))
             (pad:read-save-ids (cdr pairs)))))
 
+;; #t only when every rebind landed. A miss stops. The page is not rewritten.
 (define (pad:read-rebind-all pairs)
   (if (null? pairs)
-      0
-      (begin
-        (let ((v (pad:m-rebind! (car (car pairs)) (cadr (car pairs)) "dirty")))
-          (if (eq? v #t)
-              0
-              (pad:read-show!
-                (string-append "READ rebind-skip " (car (car pairs))))))
-        (pad:read-rebind-all (cdr pairs)))))
+      #t
+      (let ((name (car (car pairs))))
+        (let ((v (pad:read-rebind-one! name (cadr (car pairs)))))
+        (if (eq? v #t)
+            (begin
+              (pad:read-show! (string-append "READ rebind " name))
+              (pad:read-rebind-all (cdr pairs)))
+            (begin
+              (pad:read-show! (string-append "READ rebind-skip " name))
+              #f))))))
 
 (define (pad:read-id-strs xs)
   (cond
@@ -764,11 +785,32 @@
          (list "ok" (pad:read-dot ids)
                (pad:read-picked before after ids) kind))))))
 
+;; Helper is 42, kid is 1. The number is the table in eng_who, and the
+;; call returns true only when the engine accepted it.
+(define (pad:read-fp-on! who)
+  (let ((ok (and *read-fp-fn* (*read-fp-fn* who))))
+    (if ok
+        (pad:read-show!
+          (string-append "READ mutate:set-agent-fingerprint="
+                         (number->string (pad:ew-fp who))))
+        0)
+    ok))
+
+;; Stamp helper, rebind, then put the fingerprint back to kid.
+;; "fp"     the stamp did not bind
+;; "rebind" a rebind returned non-success; the page is left alone
 (define (pad:read-ask! plan)
   (let ((pairs (cadr plan))
         (before (pad:read-save-ids (cadr plan))))
-    (pad:read-rebind-all pairs)
-    (pad:read-dirty-box (car plan) before pairs)))
+    (if (null? pairs)
+        (pad:read-dirty-box (car plan) before pairs)
+        (if (not (pad:read-fp-on! "helper"))
+            (list "fp")
+            (let ((ok (pad:read-rebind-all pairs)))
+              (pad:read-fp-on! "kid")
+              (if ok
+                  (pad:read-dirty-box (car plan) before pairs)
+                  (list "rebind")))))))
 
 (define (pad:read-publish! box src)
   (if (not (string=? *read-status* "checked"))
@@ -785,6 +827,65 @@
               (set! *read-report* say)
               0)
             0))))
+
+;; Proposals rebind only when the process gate is exactly hard.
+(define (pad:read-hard?)
+  (let ((v (getenv "AURA_MUTATE_TYPE_GATE")))
+    (and (string? v) (string=? v "hard"))))
+
+;; load replaces the current workspace program. Do that in a scratch
+;; workspace so the root query:code stays the caller's program.
+;; Defines land in the shared top environment. A stand-in installed
+;; first is left in place.
+(define (pad:read-ew-load!)
+  (if *read-ew-loaded*
+      #t
+      (let ((c (try (workspace :create "ew") (catch (e) #f))))
+        (if (not (number? c))
+            #f
+            (begin
+              (try (workspace :switch c) (catch (e) #f))
+              (let ((ok (if (= (pad:read-current) c)
+                            (try
+                              (begin
+                                (load (string-append *pad-home*
+                                                     "/soft/pad/eng_who.aura"))
+                                #t)
+                              (catch (e) #f))
+                            #f)))
+                (try (workspace :switch 0) (catch (e) #f))
+                (try (workspace:delete c) (catch (e) #f))
+                (if ok
+                    (begin
+                      (if *read-fp-fn* 0 (set! *read-fp-fn* pad:ew-set!))
+                      (set! *read-ew-loaded* #t)
+                      #t)
+                    #f)))))))
+
+;; Quote a rebind operand. 34 is the quote mark, 92 the escape.
+(define (pad:read-q-at s i acc)
+  (if (< i 0)
+      (list->string (cons 34 acc))
+      (let ((c (string-ref s i)))
+        (pad:read-q-at s (- i 1)
+                       (if (or (= c 34) (= c 92))
+                           (cons 92 (cons c acc))
+                           (cons c acc))))))
+
+(define (pad:read-q s)
+  (pad:read-q-at s (- (string-length s) 1) (list 34)))
+
+;; The fingerprint is copied onto a typed batch, not a bare rebind.
+(define (pad:read-rebind-one! name code)
+  (if *read-rebind-fn*
+      (*read-rebind-fn* name code)
+      (try
+        (typed-mutate-atomic
+          (list (string-append "(mutate:rebind "
+                               (pad:read-q name) " "
+                               (pad:read-q code) " "
+                               (pad:read-q "dirty") ")")))
+        (catch (e) #f))))
 
 ;; One anchor per process. Its flat is the parent of every "read" child.
 ;; A child created while the root flat is empty cannot rebind. The anchor
@@ -819,21 +920,25 @@
             (n0 *ws-set-code-n*)
             (e0 *ws-eval-n*)
             (plan (pad:read-plan *read-proj* (pad:v-src L))))
-        (let ((a (pad:read-anchor!)))
-          (if (not (number? a))
-              (pad:read-note! "READ no-world")
-              (begin
-                (try (workspace :switch a) (catch (e) #f))
-                (if (not (= (pad:read-current) a))
+        (if (and (pair? (cadr plan)) (not (pad:read-hard?)))
+            (pad:read-note! "GAPS type-gate")
+            (begin
+              (if (pair? (cadr plan)) (pad:read-ew-load!) 0)
+              (let ((a (pad:read-anchor!)))
+                (if (not (number? a))
+                    (pad:read-note! "READ no-world")
                     (begin
-                      (try (workspace :switch 0) (catch (e) #f))
-                      (pad:read-note! "READ no-world"))
-                    (let ((c (try (workspace :create "read") (catch (e) #f))))
-                      (if (not (pad:read-id? c))
+                      (try (workspace :switch a) (catch (e) #f))
+                      (if (not (= (pad:read-current) a))
                           (begin
                             (try (workspace :switch 0) (catch (e) #f))
                             (pad:read-note! "READ no-world"))
-                          (pad:read-switched! c L n0 e0 code0 t0 plan))))))))))
+                          (let ((c (try (workspace :create "read") (catch (e) #f))))
+                            (if (not (pad:read-id? c))
+                                (begin
+                                  (try (workspace :switch 0) (catch (e) #f))
+                                  (pad:read-note! "READ no-world"))
+                                (pad:read-switched! c L n0 e0 code0 t0 plan))))))))))))
 
 (pad:read-show! "READ loaded")
 (set! *read-ready* #t)
