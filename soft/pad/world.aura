@@ -186,3 +186,16 @@
                  " children=" (number->string *world-children*)
                  " deleted=" (number->string *world-deleted*)
                  " wdisagree=" (number->string *world-disagree*)))
+
+;; Sentence try. The caller already decided the id is a number, switches
+;; the file child in, and heals with pad:tx-snap!. One batch, then back.
+(define (pad:world-open! tag)
+  (let ((c (try (workspace :create tag) (catch (e) #f))))
+    (if (number? c)
+        (begin
+          (try (workspace :switch c) (catch (e) #f))
+          c)
+        #f)))
+
+(define (pad:world-batch! sexprs)
+  (try (typed-mutate-atomic sexprs) (catch (e) #f)))

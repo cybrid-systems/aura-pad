@@ -623,3 +623,141 @@
           (if (not op)
               (list "DROP" "aura cannot change this page yet")
               (pad:tx-keep! (car op) (cadr op) (pad:tx-page) (caddr op)))))))
+
+;; A parsed proposal is one typed batch in a file child. robot.aura and
+;; world.aura load on this path only. The heal is pad:tx-snap!. A type
+;; failure restores that child and leaves the projection alone.
+(define *tx-robot* #f)
+(define *tx-world* #f)
+
+(define (pad:tx-robot-ready!)
+  (if *tx-robot*
+      #t
+      (if (pad:tx-load-in! "tx-robot"
+                           (string-append (pad:tx-home) "/soft/pad/robot.aura"))
+          (begin (set! *tx-robot* #t) #t)
+          #f)))
+
+(define (pad:tx-world-ready!)
+  (if *tx-world*
+      #t
+      (if (pad:tx-load-in! "tx-world"
+                           (string-append (pad:tx-home) "/soft/pad/world.aura"))
+          (begin (set! *tx-world* #t) #t)
+          #f)))
+
+(define (pad:tx-gate-ops ops)
+  (if (null? ops)
+      "ok"
+      (let ((op (car ops)))
+        (let ((name (car op)))
+          (let ((lam (cadr op)))
+            (let ((born (if (pair? (pad:define-lookup name)) #t #f)))
+              (let ((g (pad:tx-gate "helper" name lam born 0)))
+                (if (string=? g "ok")
+                    (pad:tx-gate-ops (cdr ops))
+                    g))))))))
+
+(define (pad:tx-ops-child! c ops src)
+  (if (not (= (pad:tx-current) c))
+      (begin
+        (pad:tx-leave! c)
+        (list "DROP" "aura cannot change this page yet"))
+      (begin
+        (pad:tx-show! (string-append "APPLY child=" (number->string c)))
+        (pad:tx-own!)
+        (let ((wrote (try (set-code (string-append src "\n#t\n")) (catch (e) #f))))
+          (if (not (eq? wrote #t))
+              (begin
+                (pad:tx-leave! c)
+                (list "DROP" "aura cannot change this page yet"))
+              (begin
+                (pad:tx-show! "APPLY set-code")
+                (let ((gate (pad:tx-gate-ops ops)))
+                  (pad:tx-show! (string-append "APPLY gate=" gate))
+                  (if (not (string=? gate "ok"))
+                      (begin
+                        (pad:tx-leave! c)
+                        (list "DROP" gate))
+                      (let ((snap (pad:tx-snap!)))
+                        (pad:tx-show!
+                          (string-append "APPLY workspace="
+                                         (number->string (pad:tx-current))))
+                        (if (not (number? snap))
+                            (begin
+                              (pad:tx-leave! c)
+                              (list "DROP" "aura cannot change this page yet"))
+                            (begin
+                              (pad:tx-show!
+                                (string-append "APPLY snap=" (number->string snap)))
+                              (if (not (pad:tx-probe!))
+                                  (begin
+                                    (pad:tx-leave! c)
+                                    (list "DROP" "GAPS snapshot-heal"))
+                                  (if (not (pad:tx-ew-ready!))
+                                      (begin
+                                        (pad:tx-show!
+                                          "GAPS mutate:set-agent-fingerprint")
+                                        (pad:tx-leave! c)
+                                        (list "DROP"
+                                          "GAPS mutate:set-agent-fingerprint"))
+                                      (begin
+                                        (try (workspace :switch c) (catch (e) #f))
+                                        (if (not (= (pad:tx-current) c))
+                                            (begin
+                                              (pad:tx-leave! c)
+                                              (list "DROP"
+                                                "aura cannot change this page yet"))
+                                            (if (not (pad:tx-fp! "helper"))
+                                                (begin
+                                                  (pad:tx-show!
+                                                    "GAPS mutate:set-agent-fingerprint")
+                                                  (pad:tx-leave! c)
+                                                  (list "DROP"
+                                                    "GAPS mutate:set-agent-fingerprint"))
+                                                (let ((ok (pad:world-batch!
+                                                            (pad:robot-tx-sexprs ops))))
+                                                  (pad:tx-show!
+                                                    (string-append
+                                                      "APPLY ops="
+                                                      (number->string (length ops))))
+                                                  (pad:tx-show!
+                                                    (string-append
+                                                      "APPLY typed-mutate-atomic="
+                                                      (if (eq? ok #t) "ok" "no")))
+                                                  (pad:tx-fp! "kid")
+                                                  (if (not (eq? ok #t))
+                                                      (pad:tx-fail! c snap "type" src)
+                                                      (begin
+                                                        (try (workspace :switch 0)
+                                                             (catch (e) #f))
+                                                        (pad:tx-show! "APPLY tried=1")
+                                                        (list "tried"
+                                                          "aura cannot change this page yet"))))))))))))))))))))
+
+(define (pad:tx-ops! ops src)
+  (if (not (and (pad:tx-robot-ready!) (pad:tx-world-ready!)))
+      (list "DROP" "aura cannot change this page yet")
+      (let ((c (pad:world-open! "try")))
+        (if (not (number? c))
+            (list "DROP" "aura cannot change this page yet")
+            (pad:tx-ops-child! c ops src)))))
+
+(define (pad:tx-dispatch! parsed)
+  (let ((kind (car parsed)))
+    (cond
+      ((string=? kind "prose") (list "prose" (cadr parsed)))
+      ((string=? kind "gate")
+       (pad:tx-show! (string-append "APPLY gate=" (cadr parsed)))
+       (list "DROP" (cadr parsed)))
+      ((string=? kind "ops") (pad:tx-ops! (cadr parsed) (pad:tx-page)))
+      (#t (list "DROP" "aura cannot change this page yet")))))
+
+(define (pad:tx-run! text)
+  (if (not (pad:tx-hard?))
+      (begin
+        (pad:tx-show! "GAPS type-gate")
+        (list "DROP" "GAPS type-gate"))
+      (if (not (string? text))
+          (list "DROP" "aura cannot change this page yet")
+          (pad:tx-dispatch! (pad:tx-parse text)))))

@@ -1,0 +1,109 @@
+;; Step 39. One proposal is one typed batch in a file child.
+;; A type failure leaves the projection, the canary, and the root.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+(load (string-append *pad-home* "/soft/pad/tx.aura"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define (slurp name)
+  (let ((p (string-append *pad-home*
+             (string-append "/soft/pad/fixtures/" name))))
+    (let ((raw (try (read-file p) (catch (e) #f))))
+      (if (string? raw) raw ""))))
+
+(define (op-line name)
+  (string-append name "=(lambda (x) x)\n"))
+
+(define page
+  (string-append ";; keep this\n\n"
+    (string-append "(define (hello x)\n  (+ x 1))\n"
+      "(define (main) (hello 3))\n")))
+
+(define five
+  (string-append (op-line "a")
+    (string-append (op-line "b")
+      (string-append (op-line "c")
+        (string-append (op-line "d") (op-line "e"))))))
+
+(define two
+  (string-append "hello=(lambda (x) (+ x 2))\n"
+    "main=(lambda () (hello 3))\n"))
+
+(set! *ux-lines* (pad:v-lines page))
+(define *read-proj* page)
+(define code0 (pad:q-code))
+
+(define (page-same? tag)
+  (say (string-append "CHECK "
+         (string-append tag
+           (if (string=? (pad:v-src *ux-lines*) page) " page=same" " page=moved"))))
+  0)
+
+(define (code-same? tag)
+  (say (string-append "CHECK "
+         (string-append tag
+           (if (string=? (pad:q-code) code0) " code=same" " code=moved"))))
+  0)
+
+(define (canary! tag)
+  (let ((s (try (string-join (list "a" "b") ",") (catch (e) ""))))
+    (say (string-append "CHECK "
+           (string-append tag
+             (string-append " canary=" (if (string? s) s "no"))))))
+  0)
+
+(define (sane! tag)
+  (say (string-append "CHECK "
+         (string-append tag
+           (if (eq? (try (pad:q-sane?) (catch (e) #f)) #t) " sane=yes" " sane=no"))))
+  0)
+
+(define (after! tag)
+  (page-same? tag)
+  (code-same? tag)
+  (canary! tag)
+  (sane! tag)
+  0)
+
+(if (pad:tx-hard?)
+    (begin
+      (say "MARK gate")
+      (say (string-append "CHECK gate kind=" (car (pad:tx-run! five))))
+      (after! "gate")
+      (say "MARK bad")
+      (say (string-append "CHECK bad kind=" (car (pad:tx-run! (slurp "propose_bad_type.txt")))))
+      (after! "bad")
+      (say "MARK ok")
+      (say (string-append "CHECK ok kind=" (car (pad:tx-run! (slurp "propose_ok.txt")))))
+      (after! "ok")
+      (say "MARK two")
+      (say (string-append "CHECK two kind=" (car (pad:tx-run! two))))
+      (after! "two")
+      (say "MARK end"))
+    (begin
+      (say "MARK soft")
+      (say (string-append "CHECK soft kind=" (car (pad:tx-run! (slurp "propose_ok.txt")))))
+      (after! "soft")
+      (say "MARK end")))
+
+(say "BATCH_UNIT_OK")

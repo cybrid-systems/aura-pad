@@ -51,6 +51,11 @@
 (define (pad:robot-sexprs ops why)
   (if (null? ops) (list) (cons (pad:robot-sexpr (car ops) why) (pad:robot-sexprs (cdr ops) why))))
 
+;; One sentence proposal is one list of rebind forms. The notebook gate
+;; stays on pad:robot-gate. This builder does not run the forms.
+(define (pad:robot-tx-sexprs ops)
+  (pad:robot-sexprs ops "closer"))
+
 (define (pad:robot-names ops)
   (if (null? ops) (list) (cons (car (car ops)) (pad:robot-names (cdr ops)))))
 
