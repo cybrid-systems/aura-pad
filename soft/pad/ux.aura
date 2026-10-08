@@ -45,11 +45,50 @@
       *ux-lines*
       (try (pad:es-L *pl-st*) (catch (e) (list)))))
 
-;; Empty sentence is check. Any other sentence waits for its own step.
+;; Empty sentence is check. save, open, and quit call the file pad.
+;; They are not M-x words. Anything else waits for its own step.
 (define (pad:say-intent line)
-  (if (string=? line "")
-      (list "check" "")
-      (list "later" line)))
+  (let ((n (string-length line)))
+    (cond
+      ((string=? line "") (list "check" ""))
+      ((string=? line "save") (list "save" ""))
+      ((string=? line "quit") (list "quit" ""))
+      ((and (> n 5) (string=? (substring line 0 5) "open "))
+       (list "open" (substring line 5 n)))
+      (#t (list "later" line)))))
+
+;; Directory of the open file, with the trailing slash.
+(define (pad:ux-dir path)
+  (let ((n (string-length path))
+        (m (string-length (pad:pf-base path))))
+    (if (= n m)
+        ""
+        (substring path 0 (- n m)))))
+
+(define (pad:ux-file-save!)
+  (pad:pf-save!)
+  (set! *ux-line* "")
+  *pl-say*)
+
+(define (pad:ux-file-open! rel)
+  (pad:pf-open! (string-append (pad:ux-dir *pf-path*) rel))
+  (set! *ux-line* "")
+  (set! *ux-focus* "page")
+  (set! *ux-point* 0)
+  (if *read-ready*
+      (begin
+        (set! *read-status* "none")
+        (set! *read-mean* (list)))
+      0)
+  (pad:ux-chrome!)
+  *pl-say*)
+
+(define (pad:ux-file-quit!)
+  (let ((armed *pf-quit*))
+    (set! *pf-quit* #f)
+    (set! *ux-line* "")
+    (pad:ux-legend!)
+    (pad:pf-quit! armed)))
 
 (define (pad:ux-find name rows)
   (cond
@@ -154,17 +193,23 @@
 (define (pad:say-run!)
   (if (not (pad:ux-on?))
       0
-      (let ((intent (car (pad:say-intent *ux-line*))))
-        (if (string=? intent "check")
-            (begin
-              (pad:ux-check!)
-              (if (string=? *read-status* "checked")
-                  (pad:ux-say-at)
-                  (set! *pl-say* "aura could not read this page, keep typing"))
-              *pl-say*)
-            (begin
-              (set! *pl-say* "aura cannot change this page yet")
-              *pl-say*)))))
+      (let ((hit (pad:say-intent *ux-line*)))
+        (let ((intent (car hit)))
+          (cond
+            ((string=? intent "check")
+             (begin
+               (pad:ux-check!)
+               (if (string=? *read-status* "checked")
+                   (pad:ux-say-at)
+                   (set! *pl-say* "aura could not read this page, keep typing"))
+               *pl-say*))
+            ((string=? intent "save") (pad:ux-file-save!))
+            ((string=? intent "open") (pad:ux-file-open! (cadr hit)))
+            ((string=? intent "quit") (pad:ux-file-quit!))
+            (#t
+             (begin
+               (set! *pl-say* "aura cannot change this page yet")
+               *pl-say*)))))))
 
 (define (pad:ux-legend!)
   (set! *view-legend* (string-append "> " *ux-line*))
@@ -230,9 +275,10 @@
 
 (define (pad:ux-enter!)
   (if (string=? *ux-focus* "line")
-      (begin
-        (pad:say-run!)
-        (pad:ux-draw!))
+      (let ((r (pad:say-run!)))
+        (if (and (string? r) (string=? r "quit"))
+            "quit"
+            (pad:ux-draw!)))
       (pad:ux-edit! "enter")))
 
 (define (pad:ux-back!)

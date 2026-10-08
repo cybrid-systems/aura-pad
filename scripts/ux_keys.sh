@@ -108,15 +108,15 @@ if ! grep -q 'T a(define' "$OUT/cx.txt"; then
   fail "page insert after ctrl-x did not land"
 fi
 
-# Non-empty Enter is not save. Esc clears the draft, then leaves the line.
-printf '%s\n' 'IN 9' 'IN 115' 'IN 97' 'IN 118' 'IN 101' 'IN 13' 'QUIT' | \
+# A sentence this step does not know. Esc still clears the draft "save".
+printf '%s\n' 'IN 9' 'IN 119' 'IN 104' 'IN 111' 'IN 13' 'QUIT' | \
   PAD_VI=1 PAD_SENTENCE=1 PAD_FILE="$OUT/hello.aura" \
   run_play >"$OUT/later.txt" 2>"$OUT/later.err" || { cat "$OUT/later.err" >&2; exit 1; }
 grep -q 'aura cannot change this page yet' "$OUT/later.txt" || fail "Enter did not run the sentence"
 if grep -q 'set_code=' "$OUT/later.txt"; then
   fail "a later sentence set-code"
 fi
-cmp -s "$OUT/hello.orig" "$OUT/hello.aura" || fail "save ran before its step"
+cmp -s "$OUT/hello.orig" "$OUT/hello.aura" || fail "an unknown sentence wrote the file"
 
 printf '%s\n' 'IN 9' 'IN 115' 'IN 97' 'IN 118' 'IN 101' 'IN 27' 'IN 27' 'IN 97' 'QUIT' | \
   PAD_VI=1 PAD_SENTENCE=1 PAD_FILE="$OUT/hello.aura" \
