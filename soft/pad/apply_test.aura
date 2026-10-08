@@ -1,0 +1,53 @@
+;; Step 28. The sentence apply FIXTURE keeps one define.
+;; PAD_LIVE does not open the network. An unknown sentence stays put.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define page
+  (string-append ";; keep this\n\n"
+    (string-append "(define (hello x)\n  (+ x 1))\n"
+      "(define (main) (hello 3))\n")))
+(define prefix ";; keep this\n\n")
+(define want "(define hello (lambda (x) (+ x 2)))")
+
+(set! *ux-lines* (pad:v-lines page))
+(define *read-proj* page)
+(set! *ux-line* "apply keep-hello")
+(say (string-append "CHECK say=" (pad:say-run!)))
+(define out (pad:v-src *ux-lines*))
+(say (if (and (>= (string-length out) (string-length prefix))
+              (string=? (substring out 0 (string-length prefix)) prefix))
+         "CHECK comment=same"
+         "CHECK comment=changed"))
+(say (if (string-contains? out want) "CHECK body=new" "CHECK body=old"))
+(say (if (string-contains? out "(define (hello x)")
+         "CHECK old=kept"
+         "CHECK old=gone"))
+(say (if (string=? *read-proj* out) "CHECK proj=page" "CHECK proj=split"))
+(set! *ux-line* "nope")
+(say (string-append "CHECK later=" (pad:say-run!)))
+(say (if (string=? (pad:v-src *ux-lines*) out)
+         "CHECK later-page=same"
+         "CHECK later-page=changed"))
+(say "APPLY_UNIT_OK")

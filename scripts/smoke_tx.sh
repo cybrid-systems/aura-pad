@@ -48,7 +48,10 @@ if "*pen-whos*" in tx:
     sys.exit("smoke_tx: tx gate reads the pen who list")
 if "4096" not in tx:
     sys.exit("smoke_tx: missing 4096 cap")
-if "ast:snapshot" in tx:
+gi = tx.find("(define (pad:tx-gate ")
+gj = tx.find("\n(define ", gi + 1)
+gate = tx[gi:] if gj < 0 else tx[gi:gj]
+if "ast:snapshot" in gate:
     sys.exit("smoke_tx: gate takes a snapshot")
 if '(define *pen-max-len* 120)' not in pen:
     sys.exit("smoke_tx: pen max length changed")

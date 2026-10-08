@@ -122,3 +122,276 @@
           (if (null? hits)
               src
               (pad:tx-replace src toks (car hits) name lam))))))
+
+(define *tx-ew* #f)
+
+(define (pad:tx-show! s)
+  (display s)
+  (newline)
+  0)
+
+(define (pad:tx-home)
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(define (pad:tx-live)
+  (let ((v (getenv "PAD_LIVE")))
+    (if (and (string? v) (string=? v "1")) "1" "0")))
+
+(define (pad:tx-hard?)
+  (let ((v (getenv "AURA_MUTATE_TYPE_GATE")))
+    (and (string? v) (string=? v "hard"))))
+
+(define (pad:tx-current)
+  (let ((id (try (workspace :current) (catch (e) #f))))
+    (if (number? id) id -1)))
+
+(define (pad:tx-at s i n c)
+  (if (>= i n)
+      -1
+      (if (= (string-ref s i) c)
+          i
+          (pad:tx-at s (+ i 1) n c))))
+
+(define (pad:tx-blank? s i n)
+  (if (>= i n)
+      #t
+      (let ((c (string-ref s i)))
+        (if (or (= c 10) (= c 13) (= c 32))
+            (pad:tx-blank? s (+ i 1) n)
+            #f))))
+
+(define (pad:tx-plain? s i n)
+  (if (>= i n)
+      (> n 0)
+      (let ((c (string-ref s i)))
+        (if (or (= c 47) (= c 92))
+            #f
+            (pad:tx-plain? s (+ i 1) n)))))
+
+;; One fixture line: name=(lambda ...). A second op is refused.
+(define (pad:tx-op-line line)
+  (let ((n (string-length line)))
+    (let ((eq (pad:tx-at line 0 n 61)))
+      (if (< eq 1)
+          #f
+          (let ((name (substring line 0 eq))
+                (lam (substring line (+ eq 1) n)))
+            (if (string-prefix? lam "(lambda")
+                (list name lam)
+                #f))))))
+
+(define (pad:tx-one-op text)
+  (if (not (string? text))
+      #f
+      (let ((n (string-length text)))
+        (let ((nl (pad:tx-at text 0 n 10)))
+          (let ((line (if (< nl 0) text (substring text 0 nl)))
+                (rest (if (< nl 0) "" (substring text (+ nl 1) n))))
+            (if (pad:tx-blank? rest 0 (string-length rest))
+                (pad:tx-op-line line)
+                #f))))))
+
+(define (pad:tx-read path)
+  (let ((raw (try (read-file path) (catch (e) #f))))
+    (if (string? raw) raw "")))
+
+;; Same heal as pad:time-snap. 0 is a real id. eval-current runs in
+;; whatever workspace is current, which the caller keeps as the child.
+(define (pad:tx-snap!)
+  (let ((snap (try (ast:snapshot "tx") (catch (e) #f))))
+    (if (number? snap)
+        (begin
+          (try (ast:restore snap) (catch (e) #f))
+          (try (eval-current) (catch (e) #f))
+          snap)
+        #f)))
+
+(define (pad:tx-q-at s i acc)
+  (if (< i 0)
+      (list->string (cons 34 acc))
+      (let ((c (string-ref s i)))
+        (pad:tx-q-at s (- i 1)
+          (if (or (= c 34) (= c 92))
+              (cons 92 (cons c acc))
+              (cons c acc))))))
+
+(define (pad:tx-q s)
+  (pad:tx-q-at s (- (string-length s) 1) (list 34)))
+
+(define (pad:tx-load-in! tag path)
+  (let ((c (try (workspace :create tag) (catch (e) #f))))
+    (if (not (number? c))
+        #f
+        (begin
+          (try (workspace :switch c) (catch (e) #f))
+          (let ((ok (if (= (pad:tx-current) c)
+                        (try (begin (load path) #t) (catch (e) #f))
+                        #f)))
+            (try (workspace :switch 0) (catch (e) #f))
+            (try (workspace:delete c) (catch (e) #f))
+            ok)))))
+
+(define (pad:tx-ew-ready!)
+  (if *tx-ew*
+      #t
+      (if (pad:tx-load-in! "tx-ew"
+                          (string-append (pad:tx-home) "/soft/pad/eng_who.aura"))
+          (begin (set! *tx-ew* #t) #t)
+          #f)))
+
+(define (pad:tx-fp! who)
+  (let ((ok (and (try pad:ew-set! (catch (e) #f)) (pad:ew-set! who))))
+    (if ok
+        (pad:tx-show!
+          (string-append "APPLY mutate:set-agent-fingerprint="
+                         (number->string (pad:ew-fp who))))
+        0)
+    ok))
+
+(define (pad:tx-rebind! name lam)
+  (try
+    (typed-mutate-atomic
+      (list (string-append "(mutate:rebind "
+                           (pad:tx-q name) " "
+                           (pad:tx-q lam) " "
+                           (pad:tx-q "closer") ")")))
+    (catch (e) #f)))
+
+(define (pad:tx-leave! c)
+  (try (workspace :switch 0) (catch (e) #f))
+  (if (number? c) (try (workspace:delete c) (catch (e) #f)) 0)
+  0)
+
+(define (pad:tx-page)
+  (let ((u (try *ux-lines* (catch (e) #f))))
+    (if (pair? u)
+        (pad:v-src u)
+        (let ((p (try *read-proj* (catch (e) #f))))
+          (if (and (string? p) (> (string-length p) 0)) p "")))))
+
+(define (pad:tx-install! src)
+  (if (string? (try *read-proj* (catch (e) #f)))
+      (set! *read-proj* src)
+      0)
+  (if (try *ux-lines* (catch (e) #f))
+      (set! *ux-lines* (pad:v-lines src))
+      0)
+  src)
+
+;; The next key must still enter pad:play-cmd!. A dead closure stops
+;; the KEEP and names the aura issue to file.
+(define (pad:tx-probe!)
+  (let ((r (try (pad:play-cmd! "home") (catch (e) e))))
+    (if (string? r)
+        (begin
+          (pad:tx-show! (string-append "APPLY play-cmd=" r))
+          #t)
+        (begin
+          (pad:tx-show! "GAPS snapshot-heal")
+          (pad:tx-show! "TITLE snapshot restore left pad:play-cmd! invalid")
+          #f))))
+
+(define (pad:tx-keep! name lam src)
+  (let ((c (try (workspace :create "apply") (catch (e) #f))))
+    (if (not (number? c))
+        (list "DROP" "aura cannot change this page yet")
+        (begin
+          (try (workspace :switch c) (catch (e) #f))
+          (if (not (= (pad:tx-current) c))
+              (begin
+                (pad:tx-leave! c)
+                (list "DROP" "aura cannot change this page yet"))
+              (begin
+                (pad:tx-show! (string-append "APPLY child=" (number->string c)))
+                (let ((wrote (try (set-code (string-append src "\n#t\n"))
+                                  (catch (e) #f))))
+                  (if (not (eq? wrote #t))
+                      (begin
+                        (pad:tx-leave! c)
+                        (list "DROP" "aura cannot change this page yet"))
+                      (begin
+                        (pad:tx-show! "APPLY set-code")
+                        (let ((born (pair? (pad:define-lookup name))))
+                          (let ((gate (pad:tx-gate "helper" name lam
+                                                   (if born #t #f) 0)))
+                            (pad:tx-show! (string-append "APPLY gate=" gate))
+                            (if (not (string=? gate "ok"))
+                                (begin
+                                  (pad:tx-leave! c)
+                                  (list "DROP" gate))
+                                (let ((snap (pad:tx-snap!)))
+                                  (pad:tx-show!
+                                    (string-append "APPLY workspace="
+                                      (number->string (pad:tx-current))))
+                                  (if (not (number? snap))
+                                      (begin
+                                        (pad:tx-leave! c)
+                                        (list "DROP" "aura cannot change this page yet"))
+                                      (begin
+                                        (pad:tx-show!
+                                          (string-append "APPLY snap="
+                                                         (number->string snap)))
+                                        (if (not (pad:tx-probe!))
+                                            (begin
+                                              (pad:tx-leave! c)
+                                              (list "DROP" "GAPS snapshot-heal"))
+                                            (if (not (pad:tx-ew-ready!))
+                                                (begin
+                                                  (pad:tx-show!
+                                                    "GAPS mutate:set-agent-fingerprint")
+                                                  (pad:tx-leave! c)
+                                                  (list "DROP"
+                                                    "GAPS mutate:set-agent-fingerprint"))
+                                                (begin
+                                                  (try (workspace :switch c) (catch (e) #f))
+                                                  (if (not (= (pad:tx-current) c))
+                                                      (begin
+                                                        (pad:tx-leave! c)
+                                                        (list "DROP"
+                                                          "aura cannot change this page yet"))
+                                                      (if (not (pad:tx-fp! "helper"))
+                                                          (begin
+                                                            (pad:tx-show!
+                                                              "GAPS mutate:set-agent-fingerprint")
+                                                            (pad:tx-leave! c)
+                                                            (list "DROP"
+                                                              "GAPS mutate:set-agent-fingerprint"))
+                                                          (let ((ok (pad:tx-rebind! name lam)))
+                                                            (pad:tx-show!
+                                                              (string-append
+                                                                "APPLY typed-mutate-atomic="
+                                                                (if (eq? ok #t) "ok" "no")))
+                                                            (pad:tx-fp! "kid")
+                                                            (pad:tx-leave! c)
+                                                            (if (not (eq? ok #t))
+                                                                (list "DROP"
+                                                                  "aura cannot change this page yet")
+                                                                (let ((out (pad:proj-splice!
+                                                                             src name lam)))
+                                                                  (if (string=? out src)
+                                                                      (list "DROP" "no-row")
+                                                                      (begin
+                                                                        (pad:tx-install! out)
+                                                                        (pad:tx-show! "APPLY splice")
+                                                                        (list "KEEP"
+                                                                          (string-append
+                                                                            "helper changed "
+                                                                            name)))))))))))))))))))))))))))
+
+(define (pad:tx-apply! name)
+  (pad:tx-show! (string-append "APPLY live=" (pad:tx-live)))
+  (pad:tx-show! "APPLY net=0")
+  (if (or (not (string? name))
+          (not (pad:tx-plain? name 0 (string-length name)))
+          (not (pad:tx-hard?)))
+      (begin
+        (if (pad:tx-hard?) 0 (pad:tx-show! "GAPS type-gate"))
+        (list "DROP" "aura cannot change this page yet"))
+      (let ((text (pad:tx-read
+                    (string-append (pad:tx-home)
+                      (string-append "/soft/pad/fixtures/" name)))))
+        (let ((op (pad:tx-one-op text)))
+          (if (not op)
+              (list "DROP" "aura cannot change this page yet")
+              (pad:tx-keep! (car op) (cadr op) (pad:tx-page)))))))

@@ -78,6 +78,8 @@
        (list "where" (substring line 6 n)))
       ((and (> n 5) (string=? (substring line 0 5) "open "))
        (list "open" (substring line 5 n)))
+      ((and (> n 6) (string=? (substring line 0 6) "apply "))
+       (list "apply" (substring line 6 n)))
       (#t (list "later" line)))))
 
 ;; Directory of the open file, with the trailing slash.
@@ -258,6 +260,47 @@
       (pad:ux-where-say asked)
       *pl-say*))
 
+;; load swaps the current workspace program. Bring tx.aura in on a
+;; scratch workspace so the root program stays the editor.
+(define (pad:ux-current)
+  (let ((id (try (workspace :current) (catch (e) #f))))
+    (if (number? id) id -1)))
+
+(define (pad:ux-load-tx!)
+  (let ((c (try (workspace :create "tx-load") (catch (e) #f))))
+    (if (not (number? c))
+        #f
+        (begin
+          (try (workspace :switch c) (catch (e) #f))
+          (let ((ok (if (= (pad:ux-current) c)
+                        (try
+                          (begin
+                            (load (string-append *pad-home*
+                                                 "/soft/pad/tx.aura"))
+                            #t)
+                          (catch (e) #f))
+                        #f)))
+            (try (workspace :switch 0) (catch (e) #f))
+            (try (workspace:delete c) (catch (e) #f))
+            ok)))))
+
+(define (pad:ux-tx-ready!)
+  (if (try pad:tx-apply! (catch (e) #f))
+      #t
+      (pad:ux-load-tx!)))
+
+;; apply NAME reads a fixture in the repo. It does not open the network
+;; and it does not call M-x.
+(define (pad:ux-apply! name)
+  (set! *ux-line* "")
+  (if (not (pad:ux-tx-ready!))
+      (begin
+        (set! *pl-say* "aura cannot change this page yet")
+        *pl-say*)
+      (let ((r (pad:tx-apply! name)))
+        (set! *pl-say* (cadr r))
+        *pl-say*)))
+
 ;; Empty sentence Enter. Arrows stay on pad:ux-arrow! / pad:ux-say-at.
 (define (pad:say-run!)
   (if (not (pad:ux-on?))
@@ -283,6 +326,7 @@
             ((string=? intent "save") (pad:ux-file-save!))
             ((string=? intent "open") (pad:ux-file-open! (cadr hit)))
             ((string=? intent "quit") (pad:ux-file-quit!))
+            ((string=? intent "apply") (pad:ux-apply! (cadr hit)))
             (#t
              (begin
                (set! *pl-say* "aura cannot change this page yet")
