@@ -162,8 +162,22 @@
 (define (pad:who-iota i n)
   (if (>= i n) (list) (cons i (pad:who-iota (+ i 1) n))))
 
+;; view.aura lines 17-18 say the std cuts hang. docs/ISSUES.md
+;; lines 29, 56, and 73 do not list #4372 in the 18b48dc still-broken
+;; table. The trim hang is recorded on a newer commit. This step does
+;; not measure a return on 18b48dc.
+(define (pad:who-cut-at s sep i n acc)
+  (let ((j (if (< i n) (string-index s sep i) -1)))
+    (if (< j 0)
+        (reverse (cons (substring s i n) acc))
+        (pad:who-cut-at s sep (+ j (string-length sep)) n
+                        (cons (substring s i j) acc)))))
+
+(define (pad:who-cut s sep)
+  (pad:who-cut-at s sep 0 (string-length s) (list)))
+
 (define (pad:who-csv-nums s)
-  (map string->number (string-split s ",")))
+  (map string->number (pad:who-cut s ",")))
 
 (define (pad:who-dirty-line xs)
   (cond
@@ -172,7 +186,7 @@
     (#t (pad:who-dirty-line (cdr xs)))))
 
 (define (pad:who-frame-dirty frame n)
-  (let ((d (pad:who-dirty-line (string-split frame "\n"))))
+  (let ((d (pad:who-dirty-line (pad:who-cut frame "\n"))))
     (if (not d)
         (pad:who-iota 0 n)
         (pad:who-csv-nums (substring d 12 (string-length d))))))

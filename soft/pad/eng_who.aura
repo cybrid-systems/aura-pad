@@ -64,9 +64,23 @@
      (pad:ew-sum (cdr ts) #t (cons (substring (car ts) 4 (string-length (car ts))) acc)))
     (on (pad:ew-sum (cdr ts) #t (cons (car ts) acc)))
     (#t (pad:ew-sum (cdr ts) #f acc))))
+;; view.aura lines 17-18 say the std cuts hang. docs/ISSUES.md
+;; lines 29, 56, and 73 do not list #4372 in the 18b48dc still-broken
+;; table. The trim hang is recorded on a newer commit. This step does
+;; not measure a return on 18b48dc.
+(define (pad:ew-cut-at s sep i n acc)
+  (let ((j (if (< i n) (string-index s sep i) -1)))
+    (if (< j 0)
+        (reverse (cons (substring s i n) acc))
+        (pad:ew-cut-at s sep (+ j (string-length sep)) n
+                       (cons (substring s i j) acc)))))
+
+(define (pad:ew-cut s sep)
+  (pad:ew-cut-at s sep 0 (string-length s) (list)))
+
 ;; "id=1 target=5 op=rebind sum=closer to goal author=42 ..." -> (1 5 "rebind" "closer to goal" 42)
 (define (pad:ew-rec s)
-  (let ((ts (string-split s " ")))
+  (let ((ts (pad:ew-cut s " ")))
     (list (pad:ew-num (pad:ew-field ts "id=")) (pad:ew-num (pad:ew-field ts "target="))
           (pad:ew-field ts "op=") (string-join (pad:ew-sum ts #f (list)) " ")
           (pad:ew-num (pad:ew-field ts "author=")))))

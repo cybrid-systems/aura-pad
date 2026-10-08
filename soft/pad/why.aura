@@ -195,7 +195,21 @@
      (pad:why-diag-msgs (cdr lines) (cons (pad:why-diag-msg (car lines)) acc)))
     (#t (pad:why-diag-msgs (cdr lines) acc))))
 ;; typecheck-incremental text -> real diagnostic messages
+;; view.aura lines 17-18 say the std cuts hang. docs/ISSUES.md
+;; lines 29, 56, and 73 do not list #4372 in the 18b48dc still-broken
+;; table. The trim hang is recorded on a newer commit. This step does
+;; not measure a return on 18b48dc.
+(define (pad:why-cut-at s sep i n acc)
+  (let ((j (if (< i n) (string-index s sep i) -1)))
+    (if (< j 0)
+        (reverse (cons (substring s i n) acc))
+        (pad:why-cut-at s sep (+ j (string-length sep)) n
+                        (cons (substring s i j) acc)))))
+
+(define (pad:why-cut s sep)
+  (pad:why-cut-at s sep 0 (string-length s) (list)))
+
 (define (pad:why-diags tc)
-  (if (string? tc) (pad:why-diag-msgs (string-split tc "\n") (list)) (list)))
+  (if (string? tc) (pad:why-diag-msgs (pad:why-cut tc "\n") (list)) (list)))
 (define (pad:why-tc-now)
   (try (pad:why-diags (typecheck-incremental)) (catch (e) (list))))

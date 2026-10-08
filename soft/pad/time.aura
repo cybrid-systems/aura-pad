@@ -280,6 +280,20 @@
               (list "SAVE" "the book is saved, with its story")
               (list "NOSAVE" "the book could not be saved"))))))
 
+;; view.aura lines 17-18 say the std cuts hang. docs/ISSUES.md
+;; lines 29, 56, and 73 do not list #4372 in the 18b48dc still-broken
+;; table. The trim hang is recorded on a newer commit. This step does
+;; not measure a return on 18b48dc.
+(define (pad:time-cut-at s sep i n acc)
+  (let ((j (if (< i n) (string-index s sep i) -1)))
+    (if (< j 0)
+        (reverse (cons (substring s i n) acc))
+        (pad:time-cut-at s sep (+ j (string-length sep)) n
+                         (cons (substring s i j) acc)))))
+
+(define (pad:time-cut s sep)
+  (pad:time-cut-at s sep 0 (string-length s) (list)))
+
 (define (pad:time-nums xs)
   (if (null? xs) (list) (cons (string->number (car xs)) (pad:time-nums (cdr xs)))))
 (define (pad:time-rest xs n)
@@ -288,7 +302,7 @@
   (cond
     ((null? lines) (list))
     ((string-prefix? (car lines) "ROW")
-     (cons (pad:time-nums (cdr (string-split (car lines) " "))) (pad:time-read-rows (cdr lines))))
+     (cons (pad:time-nums (cdr (pad:time-cut (car lines) " "))) (pad:time-read-rows (cdr lines))))
     (#t (pad:time-read-rows (cdr lines)))))
 (define (pad:time-put xs i v)
   (cond
@@ -299,7 +313,7 @@
   (cond
     ((null? lines) S)
     ((string-prefix? (car lines) "STAMP ")
-     (let ((f (string-split (car lines) " ")))
+     (let ((f (pad:time-cut (car lines) " ")))
        (pad:time-read-stamps (cdr lines)
                              (pad:time-put S (string->number (cadr f))
                                            (list (caddr f) (string-join (pad:time-rest f 4) " ")
@@ -309,9 +323,9 @@
   (cond
     ((null? lines) (list))
     ((string-prefix? (car lines) "STEP ")
-     (let ((f (string-split (car lines) " ")))
+     (let ((f (pad:time-cut (car lines) " ")))
        (cons (list (cadr f) (string-join (pad:time-rest f 3) " ")
-                   (if (string=? (caddr f) "-") (list) (string-split (caddr f) ".")))
+                   (if (string=? (caddr f) "-") (list) (pad:time-cut (caddr f) ".")))
              (pad:time-read-story (cdr lines)))))
     (#t (pad:time-read-story (cdr lines)))))
 
@@ -319,7 +333,7 @@
 ;; set-code), the page and stamps from the sidecar. Returns (tag say).
 (define (pad:time-open! base)
   (let* ((side (try (read-file (string-append base ".pad")) (catch (e) #f)))
-         (lines (if (string? side) (string-split side "\n") (list))))
+         (lines (if (string? side) (pad:time-cut side "\n") (list))))
     (if (not (and (pair? lines) (string=? (car lines) "PADBOOK 1")))
         (list "NOOPEN" "that book has no pad story")
         (let ((d (try (deserialize-workspace (string-append base ".aw")) (catch (e) #f))))

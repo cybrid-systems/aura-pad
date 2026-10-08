@@ -1,0 +1,77 @@
+;; Step 24. The who / time cutters keep empty pieces.
+;; Load view first so string-join is the recursive copy.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+
+(define (pad:unbound-msg? e)
+  (and (string? e) (string-contains? e "unbound variable")))
+
+(define (pad:nth xs i) (list-ref xs i))
+
+(load (string-append *pad-home* "/soft/pad/eng_who.aura"))
+(load (string-append *pad-home* "/soft/pad/who_pen.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/time.aura"))
+
+(define *sp-fail* 0)
+
+(define (sp-same? a b)
+  (cond
+    ((and (null? a) (null? b)) #t)
+    ((and (number? a) (number? b)) (= a b))
+    ((and (string? a) (string? b)) (string=? a b))
+    ((and (pair? a) (pair? b))
+     (and (sp-same? (car a) (car b)) (sp-same? (cdr a) (cdr b))))
+    (#t #f)))
+
+(define (sp-check tag got want)
+  (set! *sp-fail* (if (sp-same? got want) *sp-fail* (+ *sp-fail* 1)))
+  (display "CHECK ")
+  (display tag)
+  (display "=")
+  (display (if (sp-same? got want) "ok" "fail"))
+  (newline)
+  (if (sp-same? got want)
+      0
+      (begin
+        (display "GOT ")
+        (display got)
+        (newline)
+        (display "WANT ")
+        (display want)
+        (newline))))
+
+(sp-check "ew-rec"
+          (pad:ew-rec "id=1 target=5 op=rebind sum=closer to goal author=42")
+          (list 1 5 "rebind" "closer to goal" 42))
+(sp-check "ew-empty" (pad:ew-cut "" " ") (list ""))
+(sp-check "ew-gap" (pad:ew-cut "a  b" " ") (list "a" "" "b"))
+(sp-check "csv" (pad:who-csv-nums "1,2,3") (list 1 2 3))
+(sp-check "csv-tail" (pad:who-cut "1,2," ",") (list "1" "2" ""))
+(sp-check "dirty-all" (pad:who-frame-dirty "TITLE\nbody\n" 3) (list 0 1 2))
+(sp-check "dirty-rows" (pad:who-frame-dirty "DIRTY lines=1,4\nbody\n" 9) (list 1 4))
+(sp-check "why"
+          (pad:why-diags
+           (string-append "note\n  [3] 1:18: unbound variable: pet\n  [9] hello\n"))
+          (list "unbound variable: pet" "hello"))
+(sp-check "why-skip" (pad:why-diags 0) (list))
+(sp-check "rows"
+          (pad:time-read-rows (pad:time-cut "ROW 10 20\nNOPE\nROW 3\n" "\n"))
+          (list (list 10 20) (list 3)))
+(sp-check "story"
+          (pad:time-read-story
+           (pad:time-cut "STEP ada - hello there\nSTEP bee pet.dog a note\n" "\n"))
+          (list (list "ada" "hello there" (list))
+                (list "bee" "a note" (list "pet" "dog"))))
+(sp-check "stamp"
+          (pad:time-read-stamps (list "STAMP 0 helper 7 closer to goal") (list #f))
+          (list (list "helper" "closer to goal" 7)))
+(sp-check "nl" (pad:time-cut "a\nb\n" "\n") (list "a" "b" ""))
+(sp-check "dots" (pad:time-cut "a..b." ".") (list "a" "" "b" ""))
+
+(display (if (= *sp-fail* 0) "SPLIT_UNIT_OK" "SPLIT_UNIT_FAIL"))
+(newline)
