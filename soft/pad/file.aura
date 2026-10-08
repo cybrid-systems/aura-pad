@@ -153,7 +153,11 @@
       (let* ((src (pad:play-src))
              (clean (string=? src *pf-saved*))
              ;; A clean page writes the bytes captured at open.
-             (text (if clean *pf-saved* src))
+             ;; A changed page writes the scalar encoding. Display
+             ;; cells stay on the frame and are not the file.
+             (text (if clean
+                       *pf-saved*
+                       (pad:utf-encode (pad:es-L *pl-st*))))
              (body (cond
                      ((and *pf-new* (string=? src "")) "")
                      (*pf-nl* (string-append text "\n"))
@@ -161,7 +165,7 @@
              (r (write-file *pf-path* body)))
         (if (equal? r 1)
             (begin
-              (if clean 0 (set! *pf-saved* src))
+              (if clean 0 (set! *pf-saved* text))
               (set! *pl-say* (string-append "saved " *pf-name* " ("
                                             (pad:pf-lines (length (car *pl-st*))) ")"))
               "saved")

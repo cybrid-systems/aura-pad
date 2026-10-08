@@ -1,0 +1,72 @@
+;; Step 18. A dirty save writes scalar bytes. The em dash stays UTF-8.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/lc.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/file.aura"))
+
+(define (pad:em-other-dirty) "")
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define *dirty-dash* (list->string (list 226 128 148)))
+
+(define (dirty:code-at ln i)
+  (if (or (null? ln) (< i 0))
+      -1
+      (if (= i 0)
+          (car ln)
+          (dirty:code-at (cdr ln) (- i 1)))))
+
+(define (dirty:set-code ln i to)
+  (if (null? ln)
+      (list)
+      (if (= i 0)
+          (cons to (cdr ln))
+          (cons (car ln) (dirty:set-code (cdr ln) (- i 1) to)))))
+
+(define (dirty:set-line L n i to)
+  (if (null? L)
+      (list)
+      (if (= n 0)
+          (cons (dirty:set-code (car L) i to) (cdr L))
+          (cons (car L) (dirty:set-line (cdr L) (- n 1) i to)))))
+
+(define (dirty:mark!)
+  (let* ((L (pad:es-L *pl-st*))
+         (was (dirty:code-at (pad:nth L 1) 9))
+         (L2 (dirty:set-line L 1 9 110)))
+    (set! *pl-st* (pad:es-at L2 1 9))
+    was))
+
+(let ((r (pad:pf-open! (getenv "PAD_SAVE_DIRTY"))))
+  (say (string-append "DIRTY open=" r
+                      " ro=" (if *pf-ro* "true" "false")
+                      " nl=" (if *pf-nl* "true" "false")
+                      " encode=" (if (string=? (pad:utf-encode (pad:es-L *pl-st*)) *pf-saved*)
+                                     "saved" "diff"))))
+(let ((was (dirty:mark!)))
+  (say (string-append "DIRTY was=" (number->string was)
+                      " now=" (number->string (dirty:code-at (pad:nth (pad:es-L *pl-st*) 1) 9))
+                      " cmp=" (if (string=? (pad:play-src) *pf-saved*) "clean" "diff")
+                      " fold=" (if (string=? (pad:play-src) (pad:utf-encode (pad:es-L *pl-st*)))
+                                   "same" "diff"))))
+(say (string-append "DIRTY save=" (pad:pf-save!)))
+(say (string-append "DIRTY stored="
+                    (if (string=? *pf-saved* (pad:utf-encode (pad:es-L *pl-st*)))
+                        "encode" "other")
+                    " dash=" (if (>= (string-index *pf-saved* *dirty-dash* 0) 0)
+                                 "bytes" "folded")))
+(say "SAVE_DIRTY_UNIT_OK")
