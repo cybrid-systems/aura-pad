@@ -1,0 +1,84 @@
+;; Step 27. A kept define is spliced back into the projection.
+;; The comment above a multi-line define stays byte for byte.
+;; A form longer than 120 still lands. A missing name leaves the page.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/tx.aura"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define (pad:nth xs i) (list-ref xs i))
+
+(define *play-max-col* 4096)
+
+(define (sp-grow s need)
+  (if (<= need 0)
+      s
+      (let ((n (string-length s)))
+        (if (or (= n 0) (> (+ n n) need))
+            (sp-grow (string-append s "x") (- need 1))
+            (sp-grow (string-append s s) (- need n))))))
+
+(define (sp-xs n)
+  (if (<= n 0) "" (sp-grow "x" (- n 1))))
+
+(define prefix ";; keep this\n\n")
+(define tail "\n(define (main) (hello 3))\n")
+(define src
+  (string-append prefix
+    (string-append "(define (hello x)\n  \"a)b\")"
+      tail)))
+(define lam (string-append "(lambda () " (string-append (sp-xs 200) ")")))
+(define form (string-append "(define hello " (string-append lam ")")))
+(define code0 (pad:q-code))
+(define out (pad:proj-splice! src "hello" lam))
+(define missed (pad:proj-splice! src "nobody" lam))
+(define L (pad:v-lines src))
+(define pr (pad:pen-project L "hello" lam))
+
+(define (sp-head? s n)
+  (and (>= (string-length s) n)
+       (string=? (substring s 0 n) (substring src 0 n))))
+
+(say (if (string=? (substring out 0 (string-length prefix)) prefix)
+         "CHECK comment=same"
+         "CHECK comment=changed"))
+(say (if (sp-head? out (string-length prefix))
+         "CHECK prefix=same"
+         "CHECK prefix=lost"))
+(say (if (and (> (string-length form) 120)
+              (string-contains? out form))
+         "CHECK long=landed"
+         "CHECK long=miss"))
+(say (string-append "CHECK form-n=" (number->string (string-length form))))
+(say (if (string=? (substring out
+                              (- (string-length out) (string-length tail))
+                              (string-length out))
+                   tail)
+         "CHECK tail=same"
+         "CHECK tail=changed"))
+(say (if (string=? missed src) "CHECK missing=same" "CHECK missing=changed"))
+(say (if (string=? (cadr pr) "multi-line")
+         "CHECK pen-path=multi-line"
+         "CHECK pen-path=other"))
+(say (if (string=? (pad:v-src (car pr)) src)
+         "CHECK pen-page=same"
+         "CHECK pen-page=changed"))
+(say (if (string=? (pad:q-code) code0) "CHECK root=same" "CHECK root=moved"))
+(say (if (pad:q-sane?) "CHECK sane=true" "CHECK sane=false"))
+(say "SPLICE_UNIT_OK")

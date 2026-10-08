@@ -44,3 +44,81 @@
     ((> (string-length lam) (pad:tx-limit form-len)) "too-long")
     ((not (eq? born? #t)) "no-def")
     (#t "ok")))
+
+;; Token fields from pad:hl-tokens: kind, start, end, text.
+(define (pad:tx-kind t) (car t))
+(define (pad:tx-a t) (cadr t))
+(define (pad:tx-b t) (caddr t))
+(define (pad:tx-txt t) (car (cdr (cdr (cdr t)))))
+
+;; The outer "(" of the define whose name token starts at hit.
+(define (pad:tx-def-open p3 p2 p1)
+  (cond
+    ((and p1 (string=? (pad:tx-kind p1) "K")
+          (string=? (pad:tx-txt p1) "define")
+          p2 (string=? (pad:tx-kind p2) "P"))
+     (pad:tx-a p2))
+    ((and p1 (string=? (pad:tx-kind p1) "P")
+          p2 (string=? (pad:tx-kind p2) "K")
+          (string=? (pad:tx-txt p2) "define")
+          p3 (string=? (pad:tx-kind p3) "P"))
+     (pad:tx-a p3))
+    (#t -1)))
+
+(define (pad:tx-open-walk toks hit p3 p2 p1)
+  (if (null? toks)
+      -1
+      (let ((t (car toks)))
+        (if (= (pad:tx-a t) hit)
+            (pad:tx-def-open p3 p2 p1)
+            (pad:tx-open-walk (cdr toks) hit p2 p1 t)))))
+
+(define (pad:tx-pend depth txt)
+  (cond
+    ((string=? txt "(") (+ depth 1))
+    ((string=? txt ")") (- depth 1))
+    (#t depth)))
+
+;; End offset of the form that opens at start. A paren inside a string
+;; or a comment is not a P token, so it does not change the depth.
+(define (pad:tx-end-walk toks start depth seen)
+  (if (null? toks)
+      -1
+      (let ((t (car toks)))
+        (if (< (pad:tx-a t) start)
+            (pad:tx-end-walk (cdr toks) start depth seen)
+            (if (not (string=? (pad:tx-kind t) "P"))
+                (pad:tx-end-walk (cdr toks) start depth seen)
+                (let ((d (pad:tx-pend depth (pad:tx-txt t))))
+                  (if (and seen (= d 0))
+                      (pad:tx-b t)
+                      (pad:tx-end-walk (cdr toks) start d #t))))))))
+
+(define (pad:tx-form name lam)
+  (string-append "(define "
+    (string-append name
+      (string-append " " (string-append lam ")")))))
+
+(define (pad:tx-replace src toks hit name lam)
+  (let ((a (pad:tx-open-walk toks hit #f #f #f)))
+    (if (< a 0)
+        src
+        (let ((b (pad:tx-end-walk toks a 0 #f)))
+          (if (< b a)
+              src
+              (string-append (substring src 0 a)
+                (string-append (pad:tx-form name lam)
+                  (substring src b (string-length src)))))))))
+
+;; Replace the define named name. Comments and blank lines outside that
+;; form stay. A missing name returns the same text. This does not read
+;; the workspace program and it does not call the one-line pen path.
+(define (pad:proj-splice! src name lam)
+  (if (or (not (string? src)) (not (string? name)) (not (string? lam))
+          (string=? name ""))
+      src
+      (let ((toks (pad:hl-tokens src)))
+        (let ((hits (pad:find-defs-in toks name)))
+          (if (null? hits)
+              src
+              (pad:tx-replace src toks (car hits) name lam))))))
