@@ -1,0 +1,39 @@
+;; Step 9. Buffer caps are 8000 lines and 4096 scalars. The window
+;; cap stays 400. No set-code. Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/lc.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/file.aura"))
+
+(define (ow:say s)
+  (display s)
+  (newline)
+  0)
+
+(define (ow:open! label path)
+  (let ((r (pad:pf-open! path)))
+    (ow:say (string-append label
+                           " open=" r
+                           " ro=" (if *pf-ro* "true" "false")
+                           " lines=" (number->string (length (car *pl-st*)))
+                           " len=" (number->string (length (car (car *pl-st*))))
+                           " max-col=" (number->string *max-col*)
+                           " say=" *pl-say*))))
+
+(ow:open! "ROWS" (getenv "PAD_ROWS_FILE"))
+(ow:say (string-append "SAVE600 " (pad:pf-save!)))
+(ow:open! "COLS500" (getenv "PAD_COLS500"))
+(ow:open! "COLS4096" (getenv "PAD_COLS4096"))
+(ow:open! "COLS4097" (getenv "PAD_COLS4097"))
+(ow:say (string-append "SAVE4097 " (pad:pf-save!)))
+(ow:open! "ROWS8001" (getenv "PAD_ROWS8001"))
+(ow:say "OPEN_WIDE_UNIT_OK")

@@ -44,11 +44,14 @@
 (define *pf-saved* "")    ; page text at open / last save
 (define *pf-cx* #f)       ; ctrl-x pressed, waiting for the second key
 (define *pf-quit* #f)     ; a quit key was refused once (unsaved)
-;; File page: the screen scrolls (screen.aura), so the hold is the
-;; whole buffer the pad will edit, not one terminal. Past this, or
-;; with a byte outside printable ASCII, the file stays look-only.
-(define *pf-max-col* 400)
-(define *pf-max-lines* 500)
+;; File page: the screen scrolls (screen.aura). This hold is the whole
+;; buffer, not the window. pad:vw-cap still stops at 400 columns.
+;; 8000 lines covers vi.aura (1469 lines in the sentence design, and
+;; longer now). 4096 scalars is the column cap. Past either one the
+;; page is look-only, too-long or too-wide, and is not cut to 400 and
+;; then opened as a success.
+(define *pf-max-col* 4096)
+(define *pf-max-lines* 8000)
 ;; protocol lines the file keys arrive as (ctrl-x 24, ctrl-q 17,
 ;; ctrl-s 19, ctrl-c 3; a fast ctrl-x ctrl-s can come in one read)
 ;; "IN 5" is ctrl-e (end of line) and stays a normal key. Only the
@@ -126,6 +129,10 @@
           (cond
             (new (string-append "new page " name " - " *pf-help*))
             (bad (string-append name " is bad-utf8, so the pad only looks - ctrl-q quits"))
+            ((> wide *pf-max-col*)
+             (string-append name " is too-wide, so the pad only looks - ctrl-q quits"))
+            ((> (length L0) *pf-max-lines*)
+             (string-append name " is too-long, so the pad only looks - ctrl-q quits"))
             (ro (string-append name " is too big or has letters the pad cannot show,"
                                " so the pad only looks - ctrl-q quits"))
             (#t (string-append "opened " name " (" (pad:pf-lines (length L)) ") - " *pf-help*))))

@@ -8,6 +8,8 @@
 ;; pad:play-snap-m6, the perf "before" reference.
 
 ;; The viewport pad is roomier than the M3 kid race pad. Soft decides.
+;; No-file play page. Opening a file replaces this with *pf-max-col*
+;; (4096 scalars), not with the 400-column window.
 (define *play-max-col* 40)
 (define *play-max-lines* 12)
 
