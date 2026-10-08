@@ -911,6 +911,63 @@
                           (try (workspace:delete c) (catch (e) #f))
                           #f)))))))))
 
+;; Sidecar path. serialize-workspace acts on the current workspace and
+;; takes no id, so the caller is already the file child. The book
+;; opener is a different path and is not used here.
+(define (pad:read-aw-file)
+  (let ((p (try *pf-path* (catch (e) ""))))
+    (if (and (string? p) (> (string-length p) 0))
+        p
+        (let ((e (getenv "AURA_PAD_AW_FILE")))
+          (if (and (string? e) (> (string-length e) 0)) e "")))))
+
+(define (pad:read-aw-crc! path)
+  (if (not (try workspace-persist-info (catch (e) #f)))
+      (pad:read-show! "AW crc=unbound")
+      (let ((info (try (workspace-persist-info path) (catch (e) #f))))
+        (let ((crc (if info (try (hash-ref info "crc-ok") (catch (e) #f)) #f)))
+          (if (and (number? crc) (= crc 1))
+              (pad:read-show! "AW crc-ok")
+              (pad:read-show! "AW crc-bad"))
+          0))))
+
+;; The projection is the spliced page. It is not a notebook row define.
+(define (pad:read-aw-proj! file text)
+  (let ((ro (try *pf-ro* (catch (e) #f))))
+    (if (eq? ro #t)
+        (pad:read-show! "AW proj=ro")
+        (if (not (string? text))
+            (pad:read-show! "AW proj=skip")
+            (let ((r (try (write-file file text) (catch (e) #f))))
+              (if (equal? r 1)
+                  (pad:read-show! "AW proj=wrote")
+                  (pad:read-show! "AW proj=fail")))))
+    0))
+
+(define (pad:read-aw! child text)
+  (let ((here (pad:read-current)))
+    (pad:read-show! (string-append "AW workspace=" (number->string here)))
+    (pad:read-show!
+      (string-append "AW child="
+                     (number->string (if (number? child) child -1))))
+    (if (not (and (number? child) (= here child)))
+        (begin (pad:read-show! "AW same=no") #f)
+        (let ((file (pad:read-aw-file)))
+          (if (string=? file "")
+              (begin (pad:read-show! "AW skip=no-file") #f)
+              (let ((path (string-append file ".aw")))
+                (begin
+                  (pad:read-show! "AW same=yes")
+                  (pad:read-show! "AW before-delete=yes")
+                  (let ((ok (try (serialize-workspace path) (catch (e) #f))))
+                    (if (not (eq? ok #t))
+                        (begin (pad:read-show! "AW wrote=0") #f)
+                        (begin
+                          (pad:read-show! "AW wrote=1")
+                          (pad:read-aw-crc! path)
+                          (pad:read-aw-proj! file text)
+                          #t))))))))))
+
 (define (pad:read-check! L)
   (set! *read-report* "")
   (if (pad:read-guard? L)
@@ -941,4 +998,4 @@
                                 (pad:read-switched! c L n0 e0 code0 t0 plan))))))))))))
 
 (pad:read-show! "READ loaded")
-(set! *read-ready* #t)
+(try (set! *read-ready* #t) (catch (e) #f))

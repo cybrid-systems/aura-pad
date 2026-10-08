@@ -240,6 +240,16 @@
           (begin (set! *tx-ew* #t) #t)
           #f)))
 
+;; read.aura owns the sidecar write. Load it in a scratch so the file
+;; child's program stays the page. A later KEEP finds the function bound.
+(define (pad:tx-aw-ready!)
+  (if (try pad:read-aw! (catch (e) #f))
+      #t
+      (begin
+        (pad:tx-load-in! "tx-aw"
+                         (string-append (pad:tx-home) "/soft/pad/read.aura"))
+        (if (try pad:read-aw! (catch (e) #f)) #t #f))))
+
 (define (pad:tx-fp! who)
   (let ((ok (and (try pad:ew-set! (catch (e) #f)) (pad:ew-set! who))))
     (if ok
@@ -314,6 +324,7 @@
           #f))))
 
 (define (pad:tx-keep! name lam src)
+  (pad:tx-aw-ready!)
   (let ((c (try (workspace :create "apply") (catch (e) #f))))
     (if (not (number? c))
         (list "DROP" "aura cannot change this page yet")
@@ -397,6 +408,8 @@
                                                                         (pad:tx-leave! c)
                                                                         (list "DROP" "no-row"))
                                                                       (begin
+                                                                        (try (pad:read-aw! c out)
+                                                                             (catch (e) #f))
                                                                         (pad:tx-hold! c)
                                                                         (pad:tx-install! out)
                                                                         (pad:tx-show! "APPLY splice")

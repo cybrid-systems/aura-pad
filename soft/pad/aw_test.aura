@@ -1,0 +1,58 @@
+;; Step 31. KEEP writes the file child's sidecar before any delete.
+;; The projection file is the spliced page. Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define *pf-path*
+  (let ((e (getenv "AURA_PAD_AW_FILE")))
+    (if (and (string? e) (> (string-length e) 0))
+        e
+        "/tmp/aura-pad-aw-page.aura")))
+
+(define page
+  (string-append ";; keep this\n\n"
+    (string-append "(define (hello x)\n  (+ x 1))\n"
+      "(define (main) (hello 3))\n")))
+
+(set! *ux-lines* (pad:v-lines page))
+(define *read-proj* page)
+(set! *ux-line* "apply keep-hello")
+(say (string-append "CHECK say=" (pad:say-run!)))
+
+(define aw-path (string-append *pf-path* ".aw"))
+(define aw-bytes (try (read-file aw-path) (catch (e) #f)))
+(define proj (try (read-file *pf-path*) (catch (e) #f)))
+
+(say (if (and (string? aw-bytes) (> (string-length aw-bytes) 0))
+         "CHECK aw-bytes=some"
+         "CHECK aw-bytes=empty"))
+(say (if (and (string? proj)
+              (string-contains? proj "(define hello (lambda (x) (+ x 2)))")
+              (not (string-contains? proj "pad-nb-rows")))
+         "CHECK proj-tag=absent"
+         "CHECK proj-tag=present"))
+(say (if (and (string? aw-bytes)
+              (not (string-contains? aw-bytes "pad-nb-rows")))
+         "CHECK aw-tag=absent"
+         "CHECK aw-tag=present"))
+(say "AW_UNIT_OK")
