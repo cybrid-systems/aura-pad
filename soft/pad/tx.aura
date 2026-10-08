@@ -204,6 +204,96 @@
                     (if op (list (car op) (cadr op) human) #f))
                   #f)))))))
 
+;; A model reply is either ops plus checks, or one sentence.
+;; More than four ops, a repeated name, or a body that does not open
+;; with the lambda form is a gate refusal. This step does not run the form.
+;; The cap matches the robot op cap.
+(define *tx-max-ops* 4)
+
+(define (pad:tx-unr line)
+  (let ((n (string-length line)))
+    (if (and (> n 0) (= (string-ref line (- n 1)) 13))
+        (substring line 0 (- n 1))
+        line)))
+
+(define (pad:tx-take-line s i n)
+  (let ((nl (pad:tx-at s i n 10)))
+    (if (< nl 0)
+        (list (substring s i n) n)
+        (list (substring s i nl) (+ nl 1)))))
+
+;; Head and tail around the first space. Both sides must be non-empty.
+(define (pad:tx-field s)
+  (let ((n (string-length s)))
+    (let ((sp (pad:tx-at s 0 n 32)))
+      (if (or (< sp 1) (>= sp (- n 1)))
+          #f
+          (list (substring s 0 sp) (substring s (+ sp 1) n))))))
+
+(define (pad:tx-check-line line)
+  (let ((n (string-length line)))
+    (if (or (< n 7) (not (string=? (substring line 0 6) "check ")))
+        #f
+        (let ((name-rest (pad:tx-field (substring line 6 n))))
+          (if (not name-rest)
+              #f
+              (let ((lit-want (pad:tx-field (cadr name-rest))))
+                (if (not lit-want)
+                    #f
+                    (list (car name-rest) (car lit-want) (cadr lit-want)))))))))
+
+(define (pad:tx-bad-lam? line)
+  (let ((n (string-length line)))
+    (let ((eq (pad:tx-at line 0 n 61)))
+      (if (< eq 1)
+          #f
+          (not (string-prefix? (substring line (+ eq 1) n) "(lambda"))))))
+
+(define (pad:tx-names ops)
+  (if (null? ops)
+      (list)
+      (cons (car (car ops)) (pad:tx-names (cdr ops)))))
+
+(define (pad:tx-dup? xs)
+  (cond
+    ((null? xs) #f)
+    ((pad:tx-mem? (car xs) (cdr xs)) #t)
+    (#t (pad:tx-dup? (cdr xs)))))
+
+(define (pad:tx-finish text ops checks bad foreign)
+  (let ((ops2 (reverse ops))
+        (checks2 (reverse checks)))
+    (cond
+      ((eq? bad #t) (list "gate" "not-lambda"))
+      ((or (eq? foreign #t) (null? ops2)) (list "prose" text))
+      ((> (length ops2) *tx-max-ops*) (list "gate" "too-many"))
+      ((pad:tx-dup? (pad:tx-names ops2)) (list "gate" "twice"))
+      (#t (list "ops" ops2 checks2)))))
+
+(define (pad:tx-see s j n ops checks bad foreign line)
+  (if (pad:tx-blank? line 0 (string-length line))
+      (pad:tx-walk s j n ops checks bad foreign)
+      (let ((chk (pad:tx-check-line line)))
+        (if chk
+            (pad:tx-walk s j n ops (cons chk checks) bad foreign)
+            (let ((op (pad:tx-op-line line)))
+              (if op
+                  (pad:tx-walk s j n (cons op ops) checks bad foreign)
+                  (if (pad:tx-bad-lam? line)
+                      (pad:tx-walk s j n ops checks #t foreign)
+                      (pad:tx-walk s j n ops checks bad #t))))))))
+
+(define (pad:tx-walk s i n ops checks bad foreign)
+  (if (>= i n)
+      (pad:tx-finish s ops checks bad foreign)
+      (let ((got (pad:tx-take-line s i n)))
+        (pad:tx-see s (cadr got) n ops checks bad foreign (pad:tx-unr (car got))))))
+
+(define (pad:tx-parse text)
+  (if (not (string? text))
+      (list "prose" "")
+      (pad:tx-walk text 0 (string-length text) (list) (list) #f #f)))
+
 (define (pad:tx-read path)
   (let ((raw (try (read-file path) (catch (e) #f))))
     (if (string? raw) raw "")))

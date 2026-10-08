@@ -1,0 +1,136 @@
+;; Step 38. A model reply is ops plus checks, or one sentence.
+;; A bad shape is a gate refusal. Nothing here runs the form.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/tx.aura"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define (same? a b)
+  (eq? (try (equal? a b) (catch (e) #f)) #t))
+
+(define (slurp name)
+  (let ((p (string-append *pad-home*
+             (string-append "/soft/pad/fixtures/" name))))
+    (let ((raw (try (read-file p) (catch (e) #f))))
+      (if (string? raw) raw ""))))
+
+(define (snap-ok? s0 s1)
+  (and (number? s0) (number? s1) (= s1 (+ s0 1))))
+
+(define (tag+ tag rest)
+  (string-append "CHECK " (string-append tag (string-append " " rest))))
+
+(define (run! tag text)
+  (let ((code0 (pad:q-code)))
+    (let ((m0 (try (query:mutations-since 0) (catch (e) (list)))))
+      (let ((s0 (try (ast:snapshot "parse") (catch (e) #f))))
+        (let ((r (pad:tx-parse text)))
+          (let ((m1 (try (query:mutations-since 0) (catch (e) (list)))))
+            (let ((s1 (try (ast:snapshot "parse") (catch (e) #f))))
+              (say (tag+ tag (string-append "kind=" (car r))))
+              (say (tag+ tag (if (same? m0 m1) "rebind=0" "rebind=moved")))
+              (say (tag+ tag (if (snap-ok? s0 s1) "snap=0" "snap=moved")))
+              (say (tag+ tag (if (string=? (pad:q-code) code0) "code=same" "code=moved")))
+              r)))))))
+
+(define (ops-of r)
+  (if (and (pair? r) (string=? (car r) "ops") (pair? (cadr r)))
+      (cadr r)
+      (list)))
+
+(define (checks-of r)
+  (if (and (pair? r) (string=? (car r) "ops") (pair? (cddr r)))
+      (caddr r)
+      (list)))
+
+(define (first-name ops)
+  (if (pair? ops) (car (car ops)) ""))
+
+(define (first-lam ops)
+  (if (pair? ops) (cadr (car ops)) ""))
+
+(define (last-name ops)
+  (if (null? (cdr ops))
+      (car (car ops))
+      (last-name (cdr ops))))
+
+(define (check-s checks)
+  (if (pair? checks)
+      (string-append (car (car checks))
+        (string-append " "
+          (string-append (cadr (car checks))
+            (string-append " " (caddr (car checks))))))
+      ""))
+
+(define (why-of r)
+  (if (and (pair? r) (string=? (car r) "gate") (string? (cadr r)))
+      (cadr r)
+      ""))
+
+(define (op-line name)
+  (string-append name "=(lambda (x) x)\n"))
+
+(define (say-ops tag r)
+  (let ((ops (ops-of r)))
+    (say (tag+ tag (string-append "n=" (number->string (length ops)))))
+    (say (tag+ tag (string-append "name=" (first-name ops))))
+    (say (tag+ tag (string-append "lam=" (first-lam ops))))
+    (say (tag+ tag (string-append "checks=" (number->string (length (checks-of r))))))
+    (say (tag+ tag (string-append "check=" (check-s (checks-of r)))))
+    0))
+
+(define ok (run! "ok" (slurp "propose_ok.txt")))
+(say-ops "ok" ok)
+
+(define bad (run! "bad" (slurp "propose_bad_type.txt")))
+(say-ops "bad" bad)
+
+(define prose-text "the page already says hello\n")
+(define pr (run! "prose" prose-text))
+(say (tag+ "prose"
+       (if (and (string=? (car pr) "prose") (string=? (cadr pr) prose-text))
+           "text=same"
+           "text=moved")))
+
+(define four
+  (string-append (op-line "a")
+    (string-append (op-line "b")
+      (string-append (op-line "c") (op-line "d")))))
+(define four-r (run! "four" four))
+(say (tag+ "four" (string-append "n=" (number->string (length (ops-of four-r))))))
+(say (tag+ "four" (string-append "first=" (first-name (ops-of four-r)))))
+(say (tag+ "four"
+       (string-append "last="
+         (if (pair? (ops-of four-r)) (last-name (ops-of four-r)) ""))))
+
+(define five (string-append four (op-line "e")))
+(define five-r (run! "five" five))
+(say (tag+ "five" (string-append "why=" (why-of five-r))))
+
+(define twice-r
+  (run! "twice"
+    (string-append "hello=(lambda (x) 1)\n" "hello=(lambda (x) 2)\n")))
+(say (tag+ "twice" (string-append "why=" (why-of twice-r))))
+
+(define lam-r (run! "lam" "hello=(+ x 1)\n"))
+(say (tag+ "lam" (string-append "why=" (why-of lam-r))))
+
+(define empty-r (run! "empty" ""))
+(say (tag+ "empty" (string-append "kind2=" (car empty-r))))
+
+(say "PARSE_UNIT_OK")
