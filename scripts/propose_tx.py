@@ -7,6 +7,8 @@ flash is the default model, MiniMax is only an adapter. The key stays
 off stdout. Soft does not post.
 
 Stdout is one or more name=(lambda ...) lines and check lines.
+--two SENTENCE asks for exactly two ideas. Offline, that is
+propose_two.txt. A count other than 2 is refused.
 """
 from __future__ import annotations
 
@@ -17,6 +19,9 @@ from pathlib import Path
 DEFAULT_MODEL = "deepseek-flash"
 DEFAULT_URL = "https://api.deepseek.com/chat/completions"
 ADAPTERS = ("minimax",)
+TWO_COUNT = 2
+TWO_FIXTURE = "propose_two.txt"
+TWO_SEP = "---"
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "soft" / "pad" / "fixtures"
 
@@ -70,6 +75,13 @@ def live(adapter: str) -> int:
     return 2
 
 
+def emit_two(sentence: str) -> int:
+    if not sentence.strip():
+        print("PROPOSE_FAIL sentence", file=sys.stderr)
+        return 1
+    return emit_fixture(TWO_FIXTURE)
+
+
 def main(argv: list[str]) -> int:
     adapter = ""
     args = argv[1:]
@@ -79,6 +91,21 @@ def main(argv: list[str]) -> int:
             return 1
         adapter = args[1]
         args = args[2:]
+    if args and args[0] == "--two":
+        sentence = " ".join(args[1:]).strip()
+        if not live_requested():
+            return emit_two(sentence)
+        if not sentence:
+            print("PROPOSE_FAIL sentence", file=sys.stderr)
+            return 1
+        return live(adapter)
+    if args and args[0] == "--count":
+        if len(args) != 2 or args[1] != str(TWO_COUNT):
+            print("PROPOSE_FAIL count", file=sys.stderr)
+            return 1
+        if not live_requested():
+            return emit_fixture(TWO_FIXTURE)
+        return live(adapter)
     name = args[0] if args else "propose_ok.txt"
     if not live_requested():
         return emit_fixture(name)
