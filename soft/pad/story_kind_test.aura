@@ -1,0 +1,103 @@
+;; Step 53. The kinder fixture rewrites the last sentence.
+;; An unkind line in that fixture is refused. Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/std.aura"))
+(load (string-append *pad-home* "/soft/pad/buffer.aura"))
+(load (string-append *pad-home* "/soft/pad/lines.aura"))
+(load (string-append *pad-home* "/soft/pad/edit.aura"))
+(load (string-append *pad-home* "/soft/pad/hl.aura"))
+(load (string-append *pad-home* "/soft/pad/jump.aura"))
+(load (string-append *pad-home* "/soft/pad/view.aura"))
+(load (string-append *pad-home* "/soft/pad/lc.aura"))
+(load (string-append *pad-home* "/soft/pad/keys.aura"))
+(load (string-append *pad-home* "/soft/pad/card.aura"))
+(load (string-append *pad-home* "/soft/pad/who.aura"))
+(load (string-append *pad-home* "/soft/pad/play_in.aura"))
+(load (string-append *pad-home* "/soft/pad/query.aura"))
+(load (string-append *pad-home* "/soft/pad/ws.aura"))
+(load (string-append *pad-home* "/soft/pad/pen.aura"))
+(load (string-append *pad-home* "/soft/pad/why.aura"))
+(load (string-append *pad-home* "/soft/pad/ux.aura"))
+(load (string-append *pad-home* "/soft/pad/tx.aura"))
+
+(define (say s)
+  (display s)
+  (newline)
+  0)
+
+(define page
+  (string-append "the cat sat\n"
+    (string-append "the cat ran\n" "the cat slept")))
+
+(define head
+  (string-append "the cat sat\n" "the cat ran\n"))
+
+(define (src)
+  (pad:v-src *ux-lines*))
+
+(define (collect s i n acc)
+  (if (>= i n)
+      acc
+      (let ((got (pad:tx-take-line s i n)))
+        (let ((op (pad:tx-op-line (pad:tx-unr (car got)))))
+          (collect s (cadr got) n (if op (cons op acc) acc))))))
+
+(define (mean? lam)
+  (pad:tx-has? lam *pen-mean*))
+
+(define (find-mean ops)
+  (cond
+    ((null? ops) #f)
+    ((mean? (cadr (car ops))) (car ops))
+    (#t (find-mean (cdr ops)))))
+
+(define (find-kind ops)
+  (cond
+    ((null? ops) #f)
+    ((mean? (cadr (car ops))) (find-kind (cdr ops)))
+    (#t (car ops))))
+
+(define (count-ops ops)
+  (if (null? ops) 0 (+ 1 (count-ops (cdr ops)))))
+
+(pad:tx-story-ready!)
+(set! *ux-lines* (pad:v-lines page))
+(set! *pl-st* (pad:es-at *ux-lines* 0 0))
+(set! *tx-pair* #f)
+
+(let ((text (pad:tx-read
+              (string-append (pad:tx-home)
+                "/soft/pad/fixtures/story_kinder.txt"))))
+  (let ((ops (collect text 0 (string-length text) (list))))
+    (let ((mean (find-mean ops))
+          (kind (find-kind ops)))
+      (say (string-append "CHECK ops=" (number->string (count-ops ops))))
+      (let ((tag (pad:tx-gate "kid" "s3" (cadr mean) #t 0)))
+        (say (string-append "CHECK mean-tag=" tag))
+        (say (string-append "CHECK mean-say=" (pad:sp-say! "story" tag)))
+        (say (string-append "CHECK mean-bytes="
+              (if (string=? (src) page) "same" "moved"))))
+      (set! *tx-card-ops* (list kind))
+      (set! *tx-better* #t)
+      (set! *tx-blast-ok* #t)
+      (set! *tx-card* 0)
+      (pad:tx-card-act!)
+      (say (string-append "CHECK keep-say=" *pl-say*))
+      (say (string-append "CHECK head="
+            (if (string-prefix? (src) head) "same" "moved")))
+      (say (string-append "CHECK last="
+            (if (string=? (pad:utf-line-str (pad:sp-nth *ux-lines* 2))
+                          (pad:sp-sentence-of (cadr kind)))
+                "kinder"
+                "other")))
+      (say (string-append "CHECK old-last="
+            (if (string=? (src) page) "same" "moved")))
+      (say (string-append "CHECK shown="
+            (if (or (string-contains? (src) "(define")
+                    (string-contains? (src) "lambda"))
+                "code"
+                "sentences")))
+      0)))

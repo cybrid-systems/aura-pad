@@ -8,7 +8,8 @@ off stdout. Soft does not post.
 
 Stdout is one or more name=(lambda ...) lines and check lines.
 --two SENTENCE asks for exactly two ideas. Offline, that is
-propose_two.txt. A count other than 2 is refused.
+propose_two.txt. The sentence "make the last line kinder" selects
+story_kinder.txt instead. A count other than 2 is refused.
 """
 from __future__ import annotations
 
@@ -21,6 +22,8 @@ DEFAULT_URL = "https://api.deepseek.com/chat/completions"
 ADAPTERS = ("minimax",)
 TWO_COUNT = 2
 TWO_FIXTURE = "propose_two.txt"
+STORY_SENTENCE = "make the last line kinder"
+STORY_FIXTURE = "story_kinder.txt"
 TWO_SEP = "---"
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "soft" / "pad" / "fixtures"
@@ -75,11 +78,17 @@ def live(adapter: str) -> int:
     return 2
 
 
+def fixture_for_sentence(sentence: str) -> str:
+    if sentence.strip() == STORY_SENTENCE:
+        return STORY_FIXTURE
+    return TWO_FIXTURE
+
+
 def emit_two(sentence: str) -> int:
     if not sentence.strip():
         print("PROPOSE_FAIL sentence", file=sys.stderr)
         return 1
-    return emit_fixture(TWO_FIXTURE)
+    return emit_fixture(fixture_for_sentence(sentence))
 
 
 def main(argv: list[str]) -> int:

@@ -1,0 +1,2 @@
+s3=(lambda () "the cat dreamed")
+s3=(lambda () "the stupid cat")
