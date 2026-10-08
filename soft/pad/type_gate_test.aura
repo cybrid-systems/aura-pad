@@ -1,0 +1,12 @@
+;; Step 10 driver. The smoke calls pad:type-gate-probe!.
+;; Soft reserved: never bind quote.
+(define *pad-home*
+  (let ((h (getenv "AURA_PAD_HOME")))
+    (if (and (string? h) (> (string-length h) 0)) h "/workspace/aura-pad")))
+
+(load (string-append *pad-home* "/soft/pad/type_gate.aura"))
+
+(define *tg-ok* (pad:type-gate-probe!))
+(display "PROBE ")
+(display (if *tg-ok* "hard" "other"))
+(newline)

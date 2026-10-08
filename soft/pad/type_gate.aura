@@ -1,0 +1,12 @@
+;; Step 10. Report a mutate type gate that is not exactly hard.
+;; Proposals arrive later. play.aura does not load this file.
+;; Soft reserved: never bind quote.
+
+(define (pad:type-gate-probe!)
+  (let ((v (getenv "AURA_MUTATE_TYPE_GATE")))
+    (if (and (string? v) (string=? v "hard"))
+        #t
+        (begin
+          (display "GAPS type-gate")
+          (newline)
+          #f))))

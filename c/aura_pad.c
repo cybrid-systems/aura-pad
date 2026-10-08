@@ -264,6 +264,16 @@ static const char *vi_flag(void) {
     return "1";
 }
 
+/* Mutate type gate. An external value, including soft, is kept.
+ * Empty or unset becomes hard. Callers only pass the string on.
+ * They do not compare it. */
+static const char *type_gate(void) {
+    const char *v = getenv("AURA_MUTATE_TYPE_GATE");
+    if (v && *v)
+        return v;
+    return "hard";
+}
+
 static void child_env(const Launch *L) {
     if (L->aura_path[0]) setenv("AURA_PATH", L->aura_path, 1);
     setenv("AURA_PIPELINE_STRICT", "0", 1);
@@ -271,6 +281,18 @@ static void child_env(const Launch *L) {
     setenv("AURA_BIN", L->soft, 1);
     setenv("AURA_PAD_HOME", L->home, 1);
     setenv("PAD_VI", vi_flag(), 1);
+    /* Copy first. setenv may rewrite the block getenv still points at.
+     * A failed copy leaves an external value alone. */
+    {
+        const char *g = type_gate();
+        size_t n = strlen(g);
+        char *gate = malloc(n + 1);
+        if (gate) {
+            memcpy(gate, g, n + 1);
+            setenv("AURA_MUTATE_TYPE_GATE", gate, 1);
+            free(gate);
+        }
+    }
     if (L->rows > 0) {
         char b[16];
         snprintf(b, sizeof b, "%d", L->rows);
@@ -317,6 +339,7 @@ static int build_argv(const Launch *L, char *argv[], int max, char st[][2 * PATH
     argv[a++] = "-e"; argv[a++] = "AURA_BIN=" BOX_AURA_SRC "/build/aura";
     argv[a++] = "-e"; fmt(st[s], sizeof(st[s]), "AURA_PAD_HOME=%s", L->home); argv[a++] = st[s++];
     argv[a++] = "-e"; fmt(st[s], sizeof(st[s]), "PAD_VI=%s", vi_flag()); argv[a++] = st[s++];
+    argv[a++] = "-e"; fmt(st[s], sizeof(st[s]), "AURA_MUTATE_TYPE_GATE=%s", type_gate()); argv[a++] = st[s++];
     if (L->rows > 0) {
         argv[a++] = "-e";
         fmt(st[s], sizeof(st[s]), "PAD_ROWS=%d", L->rows);
